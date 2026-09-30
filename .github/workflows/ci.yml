@@ -1,0 +1,68 @@
+name: CI
+# Three jobs, cheapest first. The point of the split is that a failure tells you
+# which layer broke: the contract (verify), the logic (tests), or reality
+# (compose-smoke).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No `npm ci`: this repository has no dependencies to install. Everything runs
+      # on Node's own modules, which is what lets CI (and a bare clone) work without
+      # a registry round-trip.
+      - name: Publish contract
+        run: node scripts/verify.mjs --verbose
+      - name: Rules of Hooks gate (browser halves)
+        run: node scripts/check-plugin-hooks.mjs
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.9.0', '22', '24']
+    name: tests (node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test packages/*/test/*.test.mjs
+
+  compose:
+    # The expensive, interesting one: installs each package into a throwaway
+    # profile with the real CLI, imports it, and asserts its config layer lands.
+    # Needs an actual harness installation, so it is a separate job (and can be
+    # skipped on forks that cannot install from the registry).
+    runs-on: ubuntu-latest
+    needs: [contract, tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install the harness
+        run: npm install --no-audit --no-fund --no-save @deepseek-ai/dsh@${{ vars.DSH_SMOKE_VERSION || 'latest' }}
+      - name: Composition smoke
+        run: node scripts/compose-smoke.mjs
+      - name: Leave the composed config behind on failure
+        if: failure()
+        run: |
+          for f in .lab/*/dump-config.txt; do [ -e "$f" ] && cp "$f" .; done || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: composed-configs
+          path: dump-config*.txt
+          if-no-files-found: ignore

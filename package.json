@@ -1,0 +1,16 @@
+{
+  "name": "dsh-plugins-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Public home of Chris Johnson's DeepSeek Harness plugins. Every package under packages/ is an independently installable DSH bundle: read its README, run 'node scripts/verify.mjs' to check the contract, 'node --test' to run the suites.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "verify": "node scripts/verify.mjs",
+    "test": "node --test packages/*/test/*.test.mjs",
+    "check": "node scripts/verify.mjs && node scripts/check-plugin-hooks.mjs && node --test packages/*/test/*.test.mjs"
+  }
+}

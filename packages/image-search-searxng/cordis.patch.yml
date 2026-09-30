@@ -1,0 +1,21 @@
+# Bundle layer for dsh-image-search-searxng.
+#
+# This file is what makes the package installable as a plugin: `dsh plugin
+# --profile web add dsh-image-search-searxng` appends the package to
+# `dsh.profile.bundles`, and dsh applies this layer on top of the bundles before
+# it. The row loads the package by name (never a path) and carries NO
+# configuration on purpose.
+#
+# Configuration lives in the plugin and resolves in this order:
+#
+#   config key  ->  $SEARXNG_BASE_URL / $SEARXNG_API_KEY  ->  documented default
+#
+# so `dsh plugin add` is genuinely zero-config for a SearXNG on the default
+# port, and an operator overrides with either an environment variable or their
+# own profile patch. It stays out of this file because a patch layer replaces a
+# row's ENTIRE `config` object rather than deep-merging: every key a user
+# restates silently drops the ones they did not mention, so the smaller this
+# block is, the less surprising their override is.
+- insert:
+    - id: image-search-searxng
+      name: dsh-image-search-searxng

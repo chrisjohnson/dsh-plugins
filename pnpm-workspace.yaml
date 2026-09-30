@@ -1,0 +1,16 @@
+# This repo is a pnpm workspace, but nothing in it needs installing to test.
+#
+# Every plugin is plain ESM with no build step (that is deliberate - see
+# docs/authoring.md "No build"), every test runs on the Node standard library
+# (`node --test`), and the verify gate below is a dependency-free script. `git
+# clone && npm test` therefore works before any package manager is involved.
+#
+# pnpm is only needed for the two things it is genuinely better at:
+#   pnpm -r link      -> not a thing; see scripts/lab.mjs for the dev loop
+#   pnpm publish -r   -> releases (see docs/releasing.md)
+#
+# `link:` and `git+...#path:` installs of a single subpackage are both supported,
+# which is what lets one repository publish many plugins. Verified against a real
+# dsh profile, not inferred: see docs/testing.md "Install shapes".
+packages:
+  - 'packages/*'

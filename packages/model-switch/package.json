@@ -1,0 +1,53 @@
+{
+  "name": "dsh-model-switch",
+  "version": "0.1.0",
+  "description": "Mid-session model switching for DeepSeek Harness with a context-window fit guard: the agent can move its own session between routes, and neither the agent nor a human in the composer can strand a conversation on a model too small to read it.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "model-switching",
+    "context-window",
+    "compaction",
+    "litellm",
+    "cost-control"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/model-switch"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/model-switch#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

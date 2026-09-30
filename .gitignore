@@ -1,0 +1,16 @@
+# Dependencies. Nothing here needs an install to test; see the note in
+# pnpm-workspace.yaml.
+node_modules/
+.pnpm-store/
+
+# The lab profile (scripts/lab.mjs) keeps its own DSH_HOME here so a plugin
+# experiment can never touch a real profile's sessions or settings.
+.lab/
+
+# Publish/release scratch.
+*.tgz
+.changeset/pre.json
+
+# Editor and OS noise.
+.DS_Store
+*.swp

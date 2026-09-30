@@ -1,0 +1,32 @@
+# Bundle layer for dsh-model-switch.
+#
+# `dsh plugin --profile web add dsh-model-switch` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose — see packages/image-search-searxng's
+# patch file for the general reason (a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key
+# the user then has to restate). Defaults and the meaning of an unset value live
+# in src/config.mjs, and are documented in README.md.
+#
+# The two that matter most are a deployment's answer, not this package's, so
+# nothing is guessed for them:
+#
+#   - id: model-switch
+#     name: dsh-model-switch
+#     config:
+#       # Where switch_model_escalate hands the session. Unset = tool not offered.
+#       escalationProvider: your-provider
+#       escalationModel: your-escalation-model
+#       # A route whose window can READ the whole conversation; the interactive
+#       # repair moves there before compacting a stranded session.
+#       readerProvider: your-provider
+#       readerModel: your-big-window-model
+#       fitRatio: 0.8
+#       autoCompact: true
+#       preferredRoutes:
+#         - your-provider/your-big-window-model
+- insert:
+    - id: model-switch
+      name: dsh-model-switch

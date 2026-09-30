@@ -1,0 +1,46 @@
+{
+  "name": "dsh-image-search-searxng",
+  "version": "0.1.0",
+  "description": "A model-facing image_search tool for DeepSeek Harness backed by your own self-hosted SearXNG instance. Results come back as markdown image links the Web GUI renders inline, with automatic degradation to alt text when a host blocks hotlinking.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "searxng",
+    "image-search",
+    "self-hosted",
+    "tools"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/image-search-searxng"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/image-search-searxng#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
