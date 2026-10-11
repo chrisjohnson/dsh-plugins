@@ -3,6 +3,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- The repair panel is collapsed by default. Past the auto-compact line nothing
+  fails and nothing is stranded — the next request compacts on the route that can
+  still read it — so the paragraph no longer takes composer height until it is
+  asked for. The context badge beside the model picker is now the handle: click or
+  Enter opens it and re-measures on the way in, and the panel has its own dismiss
+  and re-check buttons. Past the route's own window the panel still opens itself,
+  once per session and route, and a manual close after that is respected until the
+  pressure clears.
+
 ## 0.1.0
 
 First public release. Extracted from a running dsh deployment (since 2026-09-28)
