@@ -54,6 +54,17 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Install the harness
         run: npm install --no-audit --no-fund --no-save @deepseek-ai/dsh@${{ vars.DSH_SMOKE_VERSION || 'latest' }}
+      # `dsh plugin add` shells out to pnpm - npm's resolver backtracks
+      # exponentially on the harness's cyclic peer dependencies - and
+      # actions/setup-node does not put pnpm on PATH, so without this every
+      # package fails the smoke with "pnpm was not found" (exit 127) no matter
+      # what changed. Pinned exactly on purpose: this repository has no
+      # dependencies of its own to lock, so the package manager version is the
+      # one variable CI cannot read back out of a lockfile.
+      - name: Provide pnpm for the plugin CLI
+        run: |
+          npm install --global --no-audit --no-fund pnpm@12.9.0
+          pnpm --version
       - name: Composition smoke
         run: node scripts/compose-smoke.mjs
       - name: Leave the composed config behind on failure

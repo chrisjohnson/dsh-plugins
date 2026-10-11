@@ -8,8 +8,8 @@ Two tools and two interface surfaces for [DeepSeek Harness](https://github.com/d
 | --- | --- | --- |
 | `switch_model` tool | agent | Moves this session to `provider/model` and sends it a self-contained handoff message. Full history carries over. |
 | `switch_model_escalate` tool | agent | "I'm stuck" escape hatch to a route **you** designate. The model does not choose the destination — deployment policy does. |
-| Context pill | human | A quiet `ctx 421k` beside the composer's model picker that turns amber with `421k / 262k` the moment the routed model cannot hold the session. Tooltip lists the routes that still fit. |
-| Repair banner | human | When the window is exceeded, one click: move to a route that can read the transcript, compact there, return. |
+| Context badge | human | Appears beside the composer's model picker the moment the routed model cannot hold the session — amber `210k / 262.1k — compacts at 209.7k`, or red `300k > 262.1k — won't fit`. Its tooltip lists the routes that still fit, and clicking it is how you open the repair panel below. |
+| Repair panel | human | Collapsed by default, because past the auto-compact line nothing fails: the next request compacts on the route that can still read it. Click the badge for one-click repair — move to a route that can read the transcript, compact there, return. The one case that cannot wait for a click (past the route's own window, where the next request 400s and overflow recovery summarises with the route that just overflowed) opens itself once. |
 
 The guard applies to the agent's tools **and** the human's picker. It has to be in both places, for a reason that is not obvious: the composer calls `sessionController.selectModel` directly and cannot be intercepted, so the interactive path is warned-and-repaired rather than blocked.
 
