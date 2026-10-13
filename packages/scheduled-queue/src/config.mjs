@@ -6,6 +6,14 @@ export const DEFAULT_CONFIG = {
   // How often due items are looked for. A scheduled message is minutes away, so
   // a few seconds of slack is invisible; the floor stops a typo from spinning.
   scanIntervalMs: 5000,
+  // How long one delivery may take before it counts as failed and is retried. A
+  // hung delivery would otherwise hold up every item behind it.
+  deliveryTimeoutMs: 60000,
+}
+
+const BOUNDS = {
+  scanIntervalMs: [1000, 60000],
+  deliveryTimeoutMs: [1000, 600000],
 }
 
 /**
@@ -24,9 +32,6 @@ export function resolveQueueFile(env, osHome, sep = '/') {
   return `${home.replace(/[\\/]+$/, '')}${sep}storages${sep}scheduled-queue.json`
 }
 
-export const MIN_SCAN_INTERVAL_MS = 1000
-export const MAX_SCAN_INTERVAL_MS = 60000
-
 /**
  * @returns `{ settings, warnings }`. A bad value never throws; it falls back to
  *   the default and says which key it was.
@@ -40,15 +45,16 @@ export function resolveSettings(config) {
     if (!(key in DEFAULT_CONFIG)) warnings.push(`ignoring unknown config key "${key}" (known: ${Object.keys(DEFAULT_CONFIG).join(', ')})`)
   }
 
-  if (raw.scanIntervalMs !== undefined) {
-    const n = Number(raw.scanIntervalMs)
+  for (const [key, [min, max]] of Object.entries(BOUNDS)) {
+    if (raw[key] === undefined) continue
+    const n = Number(raw[key])
     if (!Number.isFinite(n)) {
-      warnings.push(`scanIntervalMs must be a number of milliseconds; using ${DEFAULT_CONFIG.scanIntervalMs}`)
-    } else {
-      const clamped = Math.min(MAX_SCAN_INTERVAL_MS, Math.max(MIN_SCAN_INTERVAL_MS, Math.round(n)))
-      if (clamped !== n) warnings.push(`scanIntervalMs ${n} is outside ${MIN_SCAN_INTERVAL_MS}..${MAX_SCAN_INTERVAL_MS}; using ${clamped}`)
-      settings.scanIntervalMs = clamped
+      warnings.push(`${key} must be a number of milliseconds; using ${DEFAULT_CONFIG[key]}`)
+      continue
     }
+    const clamped = Math.min(max, Math.max(min, Math.round(n)))
+    if (clamped !== n) warnings.push(`${key} ${n} is outside ${min}..${max}; using ${clamped}`)
+    settings[key] = clamped
   }
 
   return { settings, warnings }

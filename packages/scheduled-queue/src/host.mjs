@@ -17,7 +17,8 @@
 //   POST /api/scheduledQueue/schedule | list | remove | sendNow | edit
 //
 // Every endpoint that returns the queue returns it for the one session the
-// request names; no endpoint returns another session's items.
+// request names, and every endpoint requires that session; none returns or acts
+// on another session's items.
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -29,7 +30,9 @@ import {
   createItem,
   dueItems,
   editItem,
+  excerpt,
   isPermanentFailure,
+  isSessionGone,
   isSessionId,
   ownedBy,
   parsePersisted,
@@ -41,9 +44,13 @@ import {
 const PLUGIN_NAME = 'dsh-scheduled-queue'
 const API_BASE = '/api/scheduledQueue'
 const ENDPOINTS = ['schedule', 'list', 'remove', 'sendNow', 'edit']
+// `session/not-found` is also raised transiently (an agent disposed while a prompt
+// is being admitted), so a delivery that gets it asks once more after this pause.
+const SESSION_RECHECK_MS = 2000
 
 const message = (error) => (error && error.message ? error.message : String(error))
 const fail = (code, text) => ({ ok: false, error: { code, message: text, details: {} } })
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export default function scheduledQueue(ctx, config = {}) {
   const log = ctx.logger(PLUGIN_NAME)
@@ -54,6 +61,11 @@ export default function scheduledQueue(ctx, config = {}) {
     const connection = scope.connection
     const sessionController = scope.sessionController
 
+    if (connection === undefined || connection === null || sessionController === undefined || sessionController === null) {
+      log.error('connection or sessionController service is missing; scheduled messages stay off')
+      return
+    }
+
     const FILE = resolveQueueFile(process.env, homedir(), sep)
 
     let queue = []
@@ -61,11 +73,18 @@ export default function scheduledQueue(ctx, config = {}) {
     const attempts = new Map()
     const inflight = new Set()
     let scanning = false
+    // True while the queue file exists but could not be read. Nothing is written
+    // over it until a later read succeeds.
+    let readFailed = false
 
     // --- persistence -------------------------------------------------------
 
     let writes = Promise.resolve()
     function persist() {
+      if (readFailed) {
+        log.error('not writing %s: it could not be read, and writing would replace it', FILE)
+        return writes
+      }
       const snapshot = JSON.stringify(queue, null, 2)
       writes = writes.then(async () => {
         try {
@@ -80,18 +99,19 @@ export default function scheduledQueue(ctx, config = {}) {
       return writes
     }
 
-    // Requests and the scanner wait for the restore, so a call that arrives
-    // before the file has been read cannot overwrite it with an empty queue.
-    const ready = (async () => {
+    /** Read the queue file into memory. Items already in memory win over restored ones. */
+    async function load() {
       let text
       try {
         text = await readFile(FILE, 'utf8')
       } catch (error) {
         if (error && error.code === 'ENOENT') {
+          readFailed = false
           log.info('queue file %s does not exist yet', FILE)
           return
         }
-        log.error('could not read %s, starting with an empty in-memory queue: %s', FILE, message(error))
+        readFailed = true
+        log.error('could not read %s; it will not be overwritten, and the read is retried each scan: %s', FILE, message(error))
         return
       }
       const { items, corrupt } = parsePersisted(text)
@@ -99,15 +119,25 @@ export default function scheduledQueue(ctx, config = {}) {
         const aside = `${FILE}.corrupt-${Date.now()}`
         try {
           await rename(FILE, aside)
+          readFailed = false
           log.error('%s was not a JSON array; moved to %s and starting empty', FILE, aside)
         } catch (error) {
+          readFailed = true
           log.error('%s was not a JSON array and could not be set aside: %s', FILE, message(error))
         }
         return
       }
-      queue = items
+      const known = new Set(queue.map((it) => it.id))
+      const wasFailed = readFailed
+      readFailed = false
+      queue = [...queue, ...items.filter((it) => !known.has(it.id))]
       log.info('queue file ready: %s (%d item(s) restored)', FILE, items.length)
-    })().catch((error) => log.error('queue restore failed: %s', message(error)))
+      if (wasFailed) await persist()
+    }
+
+    // Requests and the scanner wait for the first read, so a call that arrives
+    // before the file has been read cannot overwrite it with an empty queue.
+    const ready = load().catch((error) => log.error('queue restore failed: %s', message(error)))
 
     // --- delivery ----------------------------------------------------------
 
@@ -117,27 +147,61 @@ export default function scheduledQueue(ctx, config = {}) {
       attempts.delete(item.id)
     }
 
+    /** One `prompt` call that is given up on, and aborted, after the delivery timeout. */
+    async function promptWithTimeout(item) {
+      const controller = new AbortController()
+      let timer
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`no answer from the session within ${settings.deliveryTimeoutMs} ms`)
+          controller.abort(error)
+          reject(error)
+        }, settings.deliveryTimeoutMs)
+      })
+      try {
+        return await Promise.race([sessionController.prompt(promptRequest(item), controller.signal), timeout])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
     /** @returns whether the item was handed to its session (and so left the queue). */
     async function deliver(item) {
       if (inflight.has(item.id)) return false
       inflight.add(item.id)
       try {
-        await sessionController.prompt(promptRequest(item), new AbortController().signal)
+        try {
+          await promptWithTimeout(item)
+        } catch (error) {
+          if (!isSessionGone(error)) throw error
+          await sleep(SESSION_RECHECK_MS)
+          await promptWithTimeout(item)
+        }
         drop(item)
         await persist()
         return true
       } catch (error) {
-        if (isPermanentFailure(error)) {
-          log.warn('dropping scheduled message %s: session %s no longer exists', item.id, item.sessionId)
+        if (isSessionGone(error)) {
+          log.warn('dropping scheduled message %s: session %s no longer exists. Text: %s', item.id, item.sessionId, excerpt(item.text))
           drop(item)
           await persist()
           return false
         }
-        const n = (attempts.get(item.id) ?? 0) + 1
-        attempts.set(item.id, n)
-        const delay = retryDelayMs(n)
-        retryAt.set(item.id, Date.now() + delay)
-        log.warn('delivery of %s to session %s failed (attempt %d, retry in %ds): %s', item.id, item.sessionId, n, Math.round(delay / 1000), message(error))
+        if (isPermanentFailure(error)) {
+          log.warn('dropping scheduled message %s: the harness rejected it (%s). Text: %s', item.id, message(error), excerpt(item.text))
+          drop(item)
+          await persist()
+          return false
+        }
+        // The item may have been removed while it was being sent; only a queued
+        // item gets a retry time.
+        if (queue.some((it) => it.id === item.id)) {
+          const n = (attempts.get(item.id) ?? 0) + 1
+          attempts.set(item.id, n)
+          const delay = retryDelayMs(n)
+          retryAt.set(item.id, Date.now() + delay)
+          log.warn('delivery of %s to session %s failed (attempt %d, retry in %ds): %s', item.id, item.sessionId, n, Math.round(delay / 1000), message(error))
+        }
         return false
       } finally {
         inflight.delete(item.id)
@@ -149,6 +213,7 @@ export default function scheduledQueue(ctx, config = {}) {
       scanning = true
       try {
         await ready
+        if (readFailed) await load()
         for (const item of dueItems(queue, Date.now(), retryAt)) await deliver(item)
       } catch (error) {
         log.error('scan failed: %s', message(error))
@@ -159,44 +224,53 @@ export default function scheduledQueue(ctx, config = {}) {
 
     // --- endpoints ---------------------------------------------------------
 
+    const beingSent = () => fail('being-sent', 'that message is being sent right now')
+
     const handler = async (endpoint, payload) => {
       try {
         await ready
         const p = payload !== null && typeof payload === 'object' ? payload : {}
         const sessionId = typeof p.sessionId === 'string' && p.sessionId !== '' ? p.sessionId : undefined
-        const view = (id) => publicQueue(queue, id)
+        if (endpoint !== 'schedule' && ENDPOINTS.includes(endpoint) && !isSessionId(sessionId)) {
+          return fail('bad-request', `${endpoint} needs the sessionId whose scheduled messages it concerns`)
+        }
+        const view = () => publicQueue(queue, sessionId)
         switch (endpoint) {
           case 'schedule': {
             const { item, error } = createItem(p, Date.now(), { id: randomUUID(), messageId: randomUUID() })
             if (error !== undefined) return fail('bad-request', error)
             queue.push(item)
             await persist()
-            return { ok: true, value: { id: item.id, dueAt: item.dueAt, queue: view(item.sessionId) } }
+            return { ok: true, value: { id: item.id, dueAt: item.dueAt, queue: publicQueue(queue, item.sessionId) } }
           }
           case 'list':
-            if (!isSessionId(sessionId)) return fail('bad-request', 'list needs the sessionId whose scheduled messages to return')
-            return { ok: true, value: { queue: view(sessionId) } }
+            return { ok: true, value: { queue: view() } }
           case 'remove': {
             const item = queue.find((it) => it.id === p.id)
-            if (item === undefined || !ownedBy(item, sessionId)) return { ok: true, value: { removed: false, queue: view(sessionId) } }
+            if (item === undefined || !ownedBy(item, sessionId)) return { ok: true, value: { removed: false, queue: view() } }
+            if (inflight.has(item.id)) return beingSent()
             drop(item)
             await persist()
-            return { ok: true, value: { removed: true, queue: view(sessionId ?? item.sessionId) } }
+            return { ok: true, value: { removed: true, queue: view() } }
           }
           case 'sendNow': {
             const item = queue.find((it) => it.id === p.id)
             if (item === undefined || !ownedBy(item, sessionId)) return fail('not-found', 'no scheduled message with that id')
+            if (inflight.has(item.id)) return beingSent()
             const delivered = await deliver(item)
-            return { ok: true, value: { delivered, queue: view(sessionId ?? item.sessionId) } }
+            return { ok: true, value: { delivered, queue: view() } }
           }
           case 'edit': {
             const index = queue.findIndex((it) => it.id === p.id)
             if (index === -1 || !ownedBy(queue[index], sessionId)) return fail('not-found', 'no scheduled message with that id')
-            queue[index] = editItem(queue[index], p, Date.now())
-            retryAt.delete(queue[index].id)
-            attempts.delete(queue[index].id)
+            if (inflight.has(queue[index].id)) return beingSent()
+            const { item, error } = editItem(queue[index], p, Date.now())
+            if (error !== undefined) return fail('bad-request', error)
+            queue[index] = item
+            retryAt.delete(item.id)
+            attempts.delete(item.id)
             await persist()
-            return { ok: true, value: { queue: view(sessionId ?? queue[index].sessionId) } }
+            return { ok: true, value: { queue: view() } }
           }
           default:
             return fail('unknown-endpoint', `unknown endpoint ${String(endpoint)}`)
@@ -221,11 +295,6 @@ export default function scheduledQueue(ctx, config = {}) {
       const result = await handler(endpoint, envelope ? envelope.payload : body)
       const response = envelope ? { type: 'server-response', rpcId: envelope.rpcId, result } : result
       return Response.json(response, { headers: { 'cache-control': 'no-store' } })
-    }
-
-    if (connection === undefined || connection === null || sessionController === undefined || sessionController === null) {
-      log.error('connection or sessionController service is missing; scheduled messages stay off')
-      return
     }
 
     // `fetch.register` is itself a context-owned effect: the route is removed when

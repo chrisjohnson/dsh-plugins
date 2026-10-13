@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-## 0.1.0
+## 0.1.0 - 2026-10-13
 
 First public release, extracted from a running dsh deployment where it was
 disabled because of the defect fixed below.
@@ -21,9 +21,11 @@ disabled because of the defect fixed below.
   that belongs to another session.
 - **Delivery goes through `sessionController.prompt`.** Items are sent the way the
   composer's Send button sends them: a live session takes a follow-up (or steering,
-  for a force-steer item) and a stopped session is resumed first. Previously a
-  normal item was only appended to the inbox, which parks the message without
-  waking an idle session.
+  for a force-steer item) and a stopped session is resumed first. The in-tree copy
+  delivered a normal item with `agent.inbox.append('next-turn', ...)`, which queues
+  the message but does not wake an idle agent, and did nothing for a session with
+  no live agent. Its header comment described `followup()` and a
+  `sessionController.prompt` fallback that the code did not contain.
 
 ### Changed
 
@@ -31,8 +33,18 @@ disabled because of the defect fixed below.
   `conversation.input.right` and `conversation.input.dock` slots.
 - Installed from a git tag (`dsh-scheduled-queue-v<version>`), not the npm registry.
 - A delivery that fails is retried with a back-off (5 s doubling to 5 min) instead
-  of every scan; an item whose session no longer exists is dropped with a warning.
-  A queue file that is not a JSON array is set aside instead of overwritten.
+  of every scan, and is aborted if it gets no answer within `deliveryTimeoutMs`.
+  An item whose session is still not found after a second try two seconds later,
+  or that the harness rejects as a bad request, is dropped with a warning that
+  includes its text. Due items are delivered oldest-due first.
+- `remove`, `edit` and `sendNow` require a `sessionId` (as `list` does) and answer
+  `being-sent` for an item whose delivery is in flight. An edit cannot leave the
+  text empty.
+- A queue file that is not a JSON array is set aside instead of overwritten; one
+  that exists but cannot be read is never written over, and is re-read each scan.
+- The browser's time zone is stored on new items and sent as `clientTimeZone`. The
+  field is optional, so older queue files read unchanged.
+- The dock reports a failed send-now or rejected edit instead of ignoring it.
 - The queue file is written to a temporary file and renamed into place, and
   requests wait until the file has been read, so an early request cannot replace
   it with an empty queue.
@@ -41,7 +53,7 @@ disabled because of the defect fixed below.
 
 ### Added
 
-- `scanIntervalMs` config key (default 5000).
+- `scanIntervalMs` (default 5000) and `deliveryTimeoutMs` (default 60000) config keys.
 - Pure decision modules `src/queue.mjs` and `src/config.mjs` with tests, and a
   host-wiring test against a stand-in harness.
 
@@ -49,4 +61,4 @@ disabled because of the defect fixed below.
 
 - The queue file location and item format (`<dsh home>/storages/scheduled-queue.json`,
   a JSON array of `{ id, messageId, sessionId, text, minutes, forceSteer, dueAt,
-  createdAt }`), so items already queued survive.
+  createdAt }`), so items already queued survive. `timeZone` is an optional addition.

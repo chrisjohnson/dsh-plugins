@@ -74,43 +74,67 @@ export function createItem(payload, now, ids) {
       forceSteer: p.forceSteer === true || p.forceSteer === 'true',
       dueAt: now + minutes * 60000,
       createdAt: now,
+      // Optional; items written by earlier versions have none.
+      ...(validTimeZone(p.timeZone) === undefined ? {} : { timeZone: p.timeZone }),
     },
   }
 }
 
 /**
- * Apply an `edit` payload to an item, returning the edited copy. Editing restarts
- * the countdown from `now`, as the dock's countdown implies.
+ * Apply an `edit` payload to an item. Editing restarts the countdown from `now`,
+ * as the dock's countdown implies. The text rule is `createItem`'s: an edit may
+ * not leave the message empty.
+ * @returns `{ item }`, or `{ error }` when the edit is not acceptable.
  */
 export function editItem(item, payload, now) {
   const p = payload !== null && typeof payload === 'object' ? payload : {}
   const minutes = p.minutes !== undefined ? clampMinutes(p.minutes, item.minutes) : item.minutes
   const text = p.text !== undefined ? String(p.text) : item.text
+  if (text.trim().length === 0) return { error: 'a scheduled message cannot be empty' }
   return {
-    ...item,
-    text,
-    minutes,
-    forceSteer: p.forceSteer !== undefined ? p.forceSteer === true || p.forceSteer === 'true' : item.forceSteer,
-    dueAt: now + minutes * 60000,
+    item: {
+      ...item,
+      text,
+      minutes,
+      forceSteer: p.forceSteer !== undefined ? p.forceSteer === true || p.forceSteer === 'true' : item.forceSteer,
+      dueAt: now + minutes * 60000,
+    },
   }
 }
 
 /**
- * Whether an item addressed with `sessionId` by a client may be acted on. A client
- * that names its session may only touch that session's items; a call that names no
- * session (a shell probe) keeps the item's own id as the only key.
+ * Whether an item belongs to the session a client names. The client must name
+ * one: a call without a session id may act on nothing.
  */
 export function ownedBy(item, sessionId) {
-  if (sessionId === undefined || sessionId === null || sessionId === '') return true
-  return item.sessionId === sessionId
+  return isSessionId(sessionId) && item.sessionId === sessionId
+}
+
+/** At most `max` characters of `text`, for log lines that must show what was lost. */
+export function excerpt(text, max = 500) {
+  const s = String(text ?? '')
+  return s.length > max ? `${s.slice(0, max)}...` : s
+}
+
+/** A time zone name Intl accepts, else undefined. */
+export function validTimeZone(value) {
+  if (typeof value !== 'string' || value === '' || value.length > 100) return undefined
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+    return value
+  } catch {
+    return undefined
+  }
 }
 
 /**
- * Items to deliver now: due, and not waiting out a retry back-off.
+ * Items to deliver now, oldest due first: due, and not waiting out a retry back-off.
  * @param retryAt Map of item id -> earliest next attempt (epoch ms).
  */
 export function dueItems(items, now, retryAt = new Map()) {
-  return items.filter((item) => item.dueAt <= now && (retryAt.get(item.id) ?? 0) <= now)
+  return items
+    .filter((item) => item.dueAt <= now && (retryAt.get(item.id) ?? 0) <= now)
+    .sort((a, b) => a.dueAt - b.dueAt)
 }
 
 /** Back-off after the nth consecutive failed delivery (n >= 1), capped. */
@@ -127,17 +151,29 @@ export function retryDelayMs(attempts) {
  * half-failed admission cannot deliver twice.
  */
 export function promptRequest(item) {
+  const timeZone = validTimeZone(item.timeZone)
   return {
     requestId: item.messageId,
     sessionId: item.sessionId,
     mode: item.forceSteer ? 'steer' : 'queue',
     content: [{ type: 'text', text: item.text }],
+    ...(timeZone === undefined ? {} : { clientTimeZone: timeZone }),
   }
 }
 
-/** A delivery failure that no retry will fix: the session is gone. */
+const errorCode = (error) => (error !== null && typeof error === 'object' ? error.code : undefined)
+
+/**
+ * The session is not there. Also reported transiently (an agent disposed while a
+ * prompt was being admitted), so the host asks once more before giving up.
+ */
+export function isSessionGone(error) {
+  return errorCode(error) === 'session/not-found'
+}
+
+/** A delivery failure that no retry will fix: the harness rejects the request itself. */
 export function isPermanentFailure(error) {
-  return error !== null && typeof error === 'object' && error.code === 'session/not-found'
+  return errorCode(error) === 'gateway/bad-request'
 }
 
 /**

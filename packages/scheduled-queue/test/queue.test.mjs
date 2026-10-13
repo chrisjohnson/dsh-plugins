@@ -9,7 +9,10 @@ import {
   createItem,
   dueItems,
   editItem,
+  excerpt,
   isPermanentFailure,
+  isSessionGone,
+  validTimeZone,
   itemsForSession,
   ownedBy,
   parsePersisted,
@@ -60,7 +63,9 @@ test('publicQueue: scoped to the session and without host-only fields', () => {
 test("ownedBy: a client naming a session cannot touch another session's item", () => {
   assert.equal(ownedBy(item({ sessionId: 'A' }), 'A'), true)
   assert.equal(ownedBy(item({ sessionId: 'A' }), 'B'), false)
-  assert.equal(ownedBy(item({ sessionId: 'A' }), undefined), true)
+  for (const missing of [undefined, null, '', 0]) {
+    assert.equal(ownedBy(item({ sessionId: 'A' }), missing), false, `sessionId ${JSON.stringify(missing)} owns nothing`)
+  }
 })
 
 test('createItem: validates, clamps minutes, computes the due time', () => {
@@ -90,7 +95,7 @@ test('clampMinutes: falls back for non-numbers, floors at one minute', () => {
 })
 
 test('editItem: restarts the countdown and keeps identity and session', () => {
-  const edited = editItem(item({ minutes: 5, dueAt: 1 }), { text: 'new', minutes: '10', forceSteer: true }, 50_000)
+  const { item: edited } = editItem(item({ minutes: 5, dueAt: 1 }), { text: 'new', minutes: '10', forceSteer: true }, 50_000)
   assert.equal(edited.text, 'new')
   assert.equal(edited.minutes, 10)
   assert.equal(edited.forceSteer, true)
@@ -99,10 +104,20 @@ test('editItem: restarts the countdown and keeps identity and session', () => {
   assert.equal(edited.sessionId, 'A')
   assert.equal(edited.messageId, 'm1')
 
-  const partial = editItem(item({ minutes: 5 }), { text: 'only text' }, 0)
+  const { item: partial } = editItem(item({ minutes: 5 }), { text: 'only text' }, 0)
   assert.equal(partial.minutes, 5)
   assert.equal(partial.forceSteer, false)
-  assert.equal(editItem(item({ minutes: 5 }), { minutes: 'x' }, 0).minutes, 5)
+  assert.equal(editItem(item({ minutes: 5 }), { minutes: 'x' }, 0).item.minutes, 5)
+})
+
+test('editItem: an empty or whitespace text is rejected, the same rule as scheduling', () => {
+  for (const text of ['', '   ', '\n\t']) assert.ok(editItem(item(), { text }, 0).error, JSON.stringify(text))
+  assert.equal(editItem(item({ text: 'keep' }), { minutes: 3 }, 0).item.text, 'keep')
+})
+
+test('dueItems: oldest due first', () => {
+  const queue = [item({ id: 'late', dueAt: 300 }), item({ id: 'early', dueAt: 100 }), item({ id: 'mid', dueAt: 200 })]
+  assert.deepEqual(dueItems(queue, 500).map((i) => i.id), ['early', 'mid', 'late'])
 })
 
 test('dueItems: due items only, and not while backing off', () => {
@@ -110,7 +125,7 @@ test('dueItems: due items only, and not while backing off', () => {
   const retryAt = new Map([['backoff', 600]])
   assert.deepEqual(dueItems(queue, 500, retryAt).map((i) => i.id), ['due'])
   assert.deepEqual(dueItems(queue, 600, retryAt).map((i) => i.id), ['due', 'backoff'])
-  assert.deepEqual(dueItems(queue, 950).map((i) => i.id), ['due', 'later', 'backoff'])
+  assert.deepEqual(dueItems(queue, 950).map((i) => i.id), ['due', 'backoff', 'later'])
 })
 
 test('retryDelayMs: doubles from five seconds and is capped', () => {
@@ -131,11 +146,33 @@ test("promptRequest: the composer's send call, keyed by the item's messageId", (
   assert.equal(promptRequest(item({ forceSteer: true })).mode, 'steer')
 })
 
-test('isPermanentFailure: only a vanished session', () => {
-  assert.equal(isPermanentFailure({ code: 'session/not-found' }), true)
-  assert.equal(isPermanentFailure({ code: 'session/agent-busy' }), false)
-  assert.equal(isPermanentFailure(new Error('boom')), false)
-  assert.equal(isPermanentFailure(null), false)
+test('failure classes: a vanished session is rechecked, a rejected request is final, the rest retry', () => {
+  assert.equal(isSessionGone({ code: 'session/not-found' }), true)
+  assert.equal(isPermanentFailure({ code: 'session/not-found' }), false)
+  assert.equal(isPermanentFailure({ code: 'gateway/bad-request' }), true)
+  for (const retryable of [{ code: 'session/agent-busy' }, new Error('boom'), null]) {
+    assert.equal(isPermanentFailure(retryable), false)
+    assert.equal(isSessionGone(retryable), false)
+  }
+})
+
+test('excerpt: bounds what a log line carries', () => {
+  assert.equal(excerpt('short'), 'short')
+  assert.equal(excerpt('x'.repeat(600)).length, 503)
+  assert.equal(excerpt(undefined), '')
+})
+
+test('time zone: stored when valid, passed to prompt as clientTimeZone, absent for older items', () => {
+  const ids = { id: 'i', messageId: 'm' }
+  assert.equal(validTimeZone('Europe/Berlin'), 'Europe/Berlin')
+  assert.equal(validTimeZone('Not/AZone'), undefined)
+  assert.equal(validTimeZone(5), undefined)
+  const { item: made } = createItem({ sessionId: 'A', text: 'x', timeZone: 'Europe/Berlin' }, 0, ids)
+  assert.equal(made.timeZone, 'Europe/Berlin')
+  assert.equal(promptRequest(made).clientTimeZone, 'Europe/Berlin')
+  assert.equal('timeZone' in createItem({ sessionId: 'A', text: 'x', timeZone: 'bogus' }, 0, ids).item, false)
+  assert.equal('clientTimeZone' in promptRequest(item()), false)
+  assert.equal(parsePersisted(JSON.stringify([{ ...made }])).items[0].timeZone, 'Europe/Berlin')
 })
 
 test('parsePersisted: reads the format earlier versions wrote', () => {

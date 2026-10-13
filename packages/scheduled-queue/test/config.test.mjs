@@ -20,6 +20,15 @@ test('scanIntervalMs: accepted, clamped, or rejected with a named warning', () =
   assert.match(bad.warnings[0], /scanIntervalMs/)
 })
 
+test('deliveryTimeoutMs: default, clamped, rejected', () => {
+  assert.equal(resolveSettings({}).settings.deliveryTimeoutMs, 60000)
+  assert.equal(resolveSettings({ deliveryTimeoutMs: 5000 }).settings.deliveryTimeoutMs, 5000)
+  assert.equal(resolveSettings({ deliveryTimeoutMs: 1 }).settings.deliveryTimeoutMs, 1000)
+  const bad = resolveSettings({ deliveryTimeoutMs: 'x' })
+  assert.equal(bad.settings.deliveryTimeoutMs, 60000)
+  assert.match(bad.warnings[0], /deliveryTimeoutMs/)
+})
+
 test('unknown keys warn once each', () => {
   const { warnings } = resolveSettings({ scanIntervalMS: 1, other: 2 })
   assert.equal(warnings.length, 2)

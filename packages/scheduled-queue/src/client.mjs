@@ -90,6 +90,12 @@ window.__ModuleLoader__.load({
 			return connection.rpc.call("/api", "scheduledQueue/" + endpoint, payload || {});
 		}
 
+		// The browser's zone, sent so a scheduled send reaches the session with the
+		// same time-zone context a composer send would carry.
+		function browserTimeZone() {
+			try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch (e) { return undefined; }
+		}
+
 		function fmtCountdown(dueAt) {
 			var ms = Math.max(0, dueAt - Date.now());
 			var m = Math.floor(ms / 60000);
@@ -235,7 +241,8 @@ window.__ModuleLoader__.load({
 					sessionId: sessionId,
 					text: input.draft,
 					minutes: minutesState[0],
-					forceSteer: steerState[0]
+					forceSteer: steerState[0],
+					timeZone: browserTimeZone()
 				}).then(function (res) {
 					savingState[1](false);
 					if (res && res.ok) close();
@@ -280,6 +287,7 @@ window.__ModuleLoader__.load({
 				editingState[1](true);
 			}
 			function saveEdit() {
+				if (textState[0].trim().length === 0) return;
 				editingState[1](false);
 				var minutes = parseInt(minutesState[0], 10);
 				onEdit(item.id, {
@@ -313,7 +321,7 @@ window.__ModuleLoader__.load({
 				}) : null,
 				React.createElement("span", { className: "sq-countdown" }, fmtCountdown(item.dueAt)),
 				React.createElement("span", { className: "sq-actions" },
-					editingState[0] ? React.createElement("button", { type: "button", className: "sq-act", title: "Save", disabled: busy, onClick: saveEdit }, CheckIcon()) : null,
+					editingState[0] ? React.createElement("button", { type: "button", className: "sq-act", title: "Save", disabled: busy || textState[0].trim().length === 0, onClick: saveEdit }, CheckIcon()) : null,
 					editingState[0] ? React.createElement("button", { type: "button", className: "sq-act", title: "Cancel", disabled: busy, onClick: function () { editingState[1](false); } }, CloseIcon()) : null,
 					editingState[0] ? null : React.createElement("button", { type: "button", className: "sq-act", title: "Edit", disabled: busy, onClick: startEdit }, EditIcon()),
 					editingState[0] ? null : React.createElement("button", { type: "button", className: "sq-act", title: "Remove", disabled: busy, onClick: function () { onRemove(item.id); } }, TrashIcon()),
@@ -326,16 +334,25 @@ window.__ModuleLoader__.load({
 			var sessionId = props.sessionId;
 			var q = useQueue(sessionId);
 			var busyState = React.useState(null);
+			var noticeState = React.useState(null);
 
 			function applyQueue(res) {
 				if (res && res.ok && res.value && Array.isArray(res.value.queue)) q.setItems(res.value.queue);
 			}
 			function call(method, id, extra) {
 				busyState[1](id);
+				noticeState[1](null);
 				var args = Object.assign({ id: id, sessionId: sessionId }, extra || {});
 				rpcCall(method, args).then(
-					applyQueue,
-					function () {}
+					function (res) {
+						applyQueue(res);
+						if (res && !res.ok) {
+							noticeState[1](res.error && res.error.message ? res.error.message : "That did not work.");
+						} else if (method === "sendNow" && res && res.value && res.value.delivered === false) {
+							noticeState[1]("Could not send now; it stays queued and is retried automatically.");
+						}
+					},
+					function () { noticeState[1]("Could not reach the host."); }
 				).then(function () { busyState[1](null); });
 			}
 
@@ -348,6 +365,7 @@ window.__ModuleLoader__.load({
 					React.createElement("span", null, items.length === 1 ? "1 scheduled message" : items.length + " scheduled messages"),
 					React.createElement("span", { className: "sq-countdown" }, "next in " + fmtCountdown(next.dueAt))
 				),
+				noticeState[0] ? React.createElement("div", { className: "sq-header", role: "alert" }, noticeState[0]) : null,
 				React.createElement("ul", { className: "sq-list" },
 					items.map(function (item) {
 						return React.createElement(QueueRow, {
