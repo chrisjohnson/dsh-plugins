@@ -92,6 +92,7 @@ import {
   stillTooLargeReason
 } from './fit.mjs'
 import { resolveSettings } from './config.mjs'
+import { noticeSource } from './notice.mjs'
 
 const PLUGIN_NAME = 'model-switch'
 
@@ -421,12 +422,7 @@ async function switchAgentModel(ctx, log, config, agent, provider, model, text, 
   agent.steer(
     createUserMessage({
       content: [{ type: 'text', text: fitNote.length > 0 ? `${fitNote} ${text}` : text }],
-      source: {
-        kind: 'plugin',
-        plugin: PLUGIN_NAME,
-        form: 'notice',
-        summary: noticeSummary
-      }
+      source: noticeSource(noticeSummary)
     }),
   )
 
@@ -559,9 +555,11 @@ function routeCapacities(ctx, log) {
 async function currentState(ctx, sessionId, intended, config, log) {
   const agents = resolveService(ctx, undefined, 'agents').service
   const agent = agents !== undefined && sessionId !== undefined ? agents.get(sessionId) : undefined
-  const sessions = resolveService(ctx, undefined, 'sessions').service
-  const session =
-    agent?.session ?? (sessions !== undefined && sessionId !== undefined ? sessions.get(sessionId) : undefined)
+  // Only a live agent is reported on. The session controller resolves every
+  // session id a client can name to a live agent before serving it, so a session
+  // that is in the store without one is mid-publication or owned by a subagent,
+  // and has no route to describe.
+  const session = agent?.session
   if (session === undefined) return { available: false, reason: 'no live session for this id' }
 
   const routed = session.requestHeader()?.config
@@ -825,7 +823,7 @@ export default function modelSwitch(ctx, config = {}) {
               model: {
                 type: 'string',
                 required: true,
-                description: 'Exact model id under that provider, e.g. "medium-moe".'
+                description: 'Exact model id under that provider, the same id the UI model picker shows.'
               },
               message: {
                 type: 'string',
@@ -888,22 +886,17 @@ export default function modelSwitch(ctx, config = {}) {
     )
   })
 
-  // --- the Client half's two endpoints, over the same authenticated /api fence
-  // the profile's other local plugins use. `state` is a read-only reading of the
-  // current session; `fix` performs the repair. Both reuse the tools' own
-  // helpers, so the interactive and the agent path can never disagree.
   // --- the Client half's endpoints, over a PLUGIN-OWNED route.
   //
-  // NOT `connection.rpc.handle` / the `/api` fence, and the difference is load
-  // bearing. That helper reads `owner.webServer` on the Connection service's own
-  // context, which this deployment never injects (the service mounts /api from a
-  // CHILD scope instead), so every channel registered through it answers 405.
-  // That is precisely how the first version of this failed: the pill rendered
-  // from the local projection while its host call never arrived, so the badge
-  // could not know any route's capacity except the one in the last request.
-  // ../dsh-better-git-worktree/host-main.mjs documents the same finding and is
-  // the pattern copied here: register a prefix route through `webServer` and
-  // reuse the connection trust fence through its public `requestRejection`.
+  // `state` is a read-only reading of the current session; `fix` performs the
+  // repair. Both reuse the tools' own helpers, so the interactive and the agent
+  // path can never disagree.
+  //
+  // The route is a prefix registered on `webServer`, with the Connection trust
+  // fence applied through its public `requestRejection`, rather than a channel on
+  // `connection.rpc`: a channel registered there is mounted by the Connection
+  // service from a child scope and was observed answering 405 here, which left
+  // the badge unable to learn any route's capacity but the last request's.
   const RPC_PATH = '/modelSwitch'
 
   const readJsonBody = (req) =>
@@ -985,12 +978,11 @@ export default function modelSwitch(ctx, config = {}) {
     )
   })
 
+  const routeText = (route) => (route === undefined ? 'unset' : `${route.provider}/${route.model}`)
   log.info(
-    'model-switch active (escalation=%s/%s reader=%s/%s fitRatio=%s autoCompact=%s)',
-    escalation.provider,
-    escalation.model,
-    reader.provider,
-    reader.model,
+    'model-switch active (escalation=%s reader=%s fitRatio=%s autoCompact=%s)',
+    routeText(escalation),
+    routeText(settings.reader),
     settings.fitRatio,
     settings.autoCompact,
   )

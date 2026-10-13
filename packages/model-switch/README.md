@@ -103,6 +103,14 @@ One subtlety that cost a bug each way: the *fit* margin (0.8) decides whether to
 
 Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`. dsh checks these ranges itself, counting prereleases, so it accepts every harness build from 0.2.0-rc.2 on; on a harness outside them `dsh plugin add` refuses the install, and a profile that already has it skips the bundle with a log line. pnpm's own peer check is narrower: it admits only `0.2.0-rc.*` and `0.3.0-*` prereleases (plus every stable release from 0.2.0), so on other prereleases it reports a peer mismatch that dsh does not.
 
+## Session format
+
+The handoff message this plugin steers into a session after a switch carries
+`source: { kind: 'plugin:model-switch', form: 'notice', summary }`. dsh 0.2.0
+sessions (format V4) reject the shared `'plugin'` kind on read, so the producer name
+lives in `kind`. Sessions written by dsh 0.1.x with the old kind are rewritten to
+this same value by dsh's own migrator.
+
 ## Troubleshooting
 
 **"switch_model_escalate" is not offered.** Expected until `escalationProvider`/`escalationModel` are set. The boot log says so.
@@ -124,7 +132,7 @@ node scripts/compose-smoke.mjs model-switch          # real dsh composition
 node scripts/check-plugin-hooks.mjs                  # React hook-order gate for the client half
 ```
 
-`src/fit.mjs` and `src/config.mjs` hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
+`src/fit.mjs`, `src/config.mjs` and `src/notice.mjs` hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
 
 ## License
 

@@ -5,6 +5,26 @@
 
 ## Unreleased
 
+## 0.2.0
+
+### Fixed
+
+- Switch notices are written with `source.kind: 'plugin:model-switch'` instead of
+  the shared `'plugin'` kind. Session format V4 (dsh 0.2.0) refuses a message with
+  `kind: 'plugin'` when the log is read back, so a session that had switched model
+  could not be reopened after a restart. The notice's one-line summary is now also
+  bounded to the host's 120-character limit.
+- Boot no longer throws when `escalationProvider`/`escalationModel` or the reader
+  route is unset: the final "model-switch active" log line dereferenced routes that
+  are legitimately absent. It now prints `unset` for each.
+
+### Removed
+
+- The context badge's fall back to the session store (`sessions.get`) when no live
+  agent exists for the id. The session controller resolves every id a client can
+  name to a live agent first, so the branch only described a session that is
+  mid-publication or subagent-owned; the badge now reports unavailable for it.
+
 ### Changed
 
 - Requires dsh 0.2.0-rc.2 or later: `engines.dsh` and the `@deepseek-ai/dsh-tools`

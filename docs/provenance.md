@@ -26,7 +26,7 @@ layout is `packages/<name>` only.
 
 | Package | Extracted from | Notes |
 | --- | --- | --- |
-| `dsh-model-switch` | `plugins/model-switch/` | Behaviour changes at extraction are listed in its `CHANGELOG.md` under 0.1.0 (notably: no built-in escalation/reader routes). |
+| `dsh-model-switch` | `plugins/model-switch/` | Behaviour changes at extraction are listed in its `CHANGELOG.md` under 0.1.0 (notably: no built-in escalation/reader routes); the dsh 0.2.0 port (V4 `plugin:model-switch` source kind) is under 0.2.0. The in-tree copy was pre-refactor and carried nothing the package lacks. |
 | `dsh-image-search-searxng` | `plugins/image-search-searxng.mjs` | Split into a pure `src/searxng.mjs` plus wiring; tool output is byte-compatible with the original. |
 | `dsh-continue-kicker` | `plugins/continue-kicker.mjs` | Not yet packaged. |
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker*.mjs` | Not yet packaged. Needs the deployment's paths and `watchdog-mode.json` replaced with configuration first. |

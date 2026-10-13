@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-switch",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mid-session model switching for DeepSeek Harness with a context-window fit guard: the agent can move its own session between routes, and neither the agent nor a human in the composer can strand a conversation on a model too small to read it.",
   "type": "module",
   "license": "MIT",
