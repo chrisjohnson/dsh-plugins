@@ -93,7 +93,7 @@ Example, on a deployment with a cloud big-window route and a local workhorse:
 | --- | --- |
 | No measurement, or the destination declares no window | **allow** with a note. The guard never blocks a switch it cannot evaluate. |
 | Fits under the margin | **allow** |
-| Doesn't fit, and the current route cannot read the transcript | **refuse**, with token counts and the delegate-to-subagent alternative |
+| Doesn't fit, and the current route cannot compact it (transcript over `fitRatio` of its window) | **refuse**, with token counts and the delegate-to-subagent alternative |
 | Doesn't fit, `autoCompact: false` | **refuse**, with the `/compact` instruction |
 | Doesn't fit but is compactable here | **compact first**, re-measure, then allow — reporting how much was freed |
 
@@ -132,7 +132,7 @@ node scripts/compose-smoke.mjs model-switch          # real dsh composition
 node scripts/check-plugin-hooks.mjs                  # React hook-order gate for the client half
 ```
 
-`src/fit.mjs`, `src/config.mjs` and `src/notice.mjs` hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
+`src/fit.mjs`, `src/config.mjs`, `src/notice.mjs` and `src/guard.mjs` (services injected) hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
 
 ## License
 
