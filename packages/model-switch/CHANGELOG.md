@@ -14,9 +14,11 @@
   `kind: 'plugin'` when the log is read back, so a session that had switched model
   could not be reopened after a restart. The notice's one-line summary is now also
   bounded to the host's 120-character limit.
-- Boot no longer throws when `escalationProvider`/`escalationModel` or the reader
-  route is unset: the final "model-switch active" log line dereferenced routes that
-  are legitimately absent. It now prints `unset` for each.
+- Boot no longer throws for every configuration: the final "model-switch active"
+  log line referenced a `reader` variable that was never declared in the plugin's
+  scope, so loading the plugin raised a ReferenceError even with a full config. It
+  also dereferenced an escalation route that is legitimately absent when unset.
+  The line now prints each route, or `unset`.
 
 ### Removed
 
