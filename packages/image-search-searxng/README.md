@@ -90,9 +90,11 @@ This is the same shape `dsh-web-search-searxng` chose.
 
 ## Compatibility
 
-Declared in `package.json` under `engines.dsh`. Tested against the `0.1.5-rc.x`
-line; the range is written with an explicit prerelease branch so installs under
-prerelease harness builds do not hit an `ERESOLVE`.
+Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh`
+and on the `@deepseek-ai/dsh-tools` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`;
+the prerelease tags are what let installs under `-rc` harness builds avoid an
+`ERESOLVE`. dsh checks the peer range itself at boot, and on a harness outside it
+skips the bundle with a log line rather than loading it.
 
 ## Development
 

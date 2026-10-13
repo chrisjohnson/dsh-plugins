@@ -16,8 +16,8 @@ A plugin is an npm package that declares a configuration layer:
   "exports": { ".": "./index.mjs", "./client": "./src/client.mjs", "./package.json": "./package.json" },
   "files": ["index.mjs", "src", "cordis.patch.yml", "README.md", "LICENSE", "CHANGELOG.md"],
   "keywords": ["dsh-plugin"],
-  "engines": { "node": ">=20.9.0", "dsh": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0" },
-  "peerDependencies": { "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0" },
+  "engines": { "node": ">=20.9.0", "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0" },
+  "peerDependencies": { "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0" },
   "repository": { "type": "git", "url": "git+https://github.com/<you>/<repo>.git", "directory": "packages/<name>" },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web" } }
 }

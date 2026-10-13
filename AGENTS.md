@@ -74,10 +74,14 @@ a 404 for the user.
 **Declare official packages as peers, with a prerelease branch.**
 `@deepseek-ai/dsh-*` belongs in `peerDependencies`, not `dependencies` — the host
 supplies the single instance, and a second copy splits entry and context identity at
-runtime. And write ranges as `>=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0`: node-semver only
-admits a prerelease when some comparator carries a prerelease tag on the same tuple,
-so an innocuous-looking `>=0.1.0 <0.2.0` excludes every `-rc` build of the harness
-and the user gets an `ERESOLVE`.
+runtime. Every `@deepseek-ai/dsh*` peer, and `engines.dsh`, is exactly
+`>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0` — one range repository-wide, enforced by
+`verify.mjs`. The prerelease tags matter: node-semver only admits a prerelease when
+some comparator carries a prerelease tag on the same tuple, so an innocuous-looking
+`>=0.2.0 <0.3.0` excludes every `-rc` build of the harness and the user gets an
+`ERESOLVE`. dsh itself checks these ranges at install and again at boot, and skips a
+bundle whose range misses the runtime with one log line — so a wrong range is a
+plugin that silently stops loading, not just an install warning.
 
 **Never declare the bare `cordis` package** in any dependency field — the harness
 supplies `@deepseek-ai/cordis`, and the Desktop community market rejects the bare

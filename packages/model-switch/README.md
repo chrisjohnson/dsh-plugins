@@ -91,7 +91,7 @@ One subtlety that cost a bug each way: the *fit* margin (0.8) decides whether to
 
 ## Compatibility
 
-Declared in `package.json` under `engines.dsh`, with the explicit prerelease branch (`>=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0`) — without that branch, node-semver quietly excludes every `-rc` build of the harness and users hit an `ERESOLVE` at install.
+Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0` — the prerelease tags are what let node-semver admit `-rc` builds of the harness; without them users hit an `ERESOLVE` at install. dsh checks the peer ranges itself at boot, and on a harness outside them it skips the bundle with a log line rather than loading it.
 
 ## Troubleshooting
 

@@ -90,6 +90,22 @@ function sourceFiles(dir) {
  * it looks enormous, and the user finds out with an ERESOLVE at install time.
  * The fix is an explicit branch that puts a prerelease tag on the tuple.
  */
+/**
+ * The one range every `@deepseek-ai/dsh*` peer (and `engines.dsh`) declares.
+ *
+ * The first branch admits the 0.2.x line from its first supported release
+ * candidate, prereleases included; the second admits 0.3 and later, prereleases
+ * included. dsh >= 0.2 evaluates these ranges itself at install and at boot and
+ * skips a bundle whose range misses the runtime, so drift between packages is
+ * a plugin that silently stops loading on one harness version. Change it here,
+ * then in every package.json, in one commit.
+ */
+const DSH_PEER_RANGE = '>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0';
+
+function isHarnessPackage(dep) {
+  return dep === '@deepseek-ai/dsh' || dep.startsWith('@deepseek-ai/dsh-');
+}
+
 function admitsPrereleases(range) {
   if (range === '*' || range === 'latest' || range === '') return true;
   return range.split('||').some((clause) => /-\d*[A-Za-z][0-9A-Za-z.-]*|-\d+(?=[\s<>)|]|$)/.test(clause.trim()));
@@ -157,9 +173,16 @@ function verifyPackage(dir, manifest, rootReadme) {
     }
   }
   for (const [dep, range] of Object.entries(manifest.peerDependencies ?? {})) {
-    if (!admitsPrereleases(String(range))) {
-      at('peer-prerelease', `peerDependencies["${dep}"] = "${range}" silently excludes every prerelease build of the harness; add an explicit branch, e.g. ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0"`);
+    if (isHarnessPackage(dep)) {
+      if (range !== DSH_PEER_RANGE) {
+        at('peer-range', `peerDependencies["${dep}"] = "${range}"; every @deepseek-ai/dsh* peer in this repository uses exactly "${DSH_PEER_RANGE}" (dsh checks these at boot and skips a bundle whose range misses the runtime)`);
+      }
+    } else if (!admitsPrereleases(String(range))) {
+      at('peer-prerelease', `peerDependencies["${dep}"] = "${range}" silently excludes every prerelease build of the harness; add an explicit branch, e.g. "${DSH_PEER_RANGE}"`);
     }
+  }
+  if (manifest.engines?.dsh !== undefined && manifest.engines.dsh !== DSH_PEER_RANGE) {
+    at('peer-range', `engines.dsh = "${manifest.engines.dsh}"; keep it equal to the peer range "${DSH_PEER_RANGE}" so storefronts offer the plugin to the same harnesses it installs on`);
   }
 
   // ---- published contents -------------------------------------------------
