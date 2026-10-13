@@ -5,12 +5,12 @@
 # (`node --test`), and the verify gate below is a dependency-free script. `git
 # clone && npm test` therefore works before any package manager is involved.
 #
-# pnpm is only needed for the two things it is genuinely better at:
-#   pnpm -r link      -> not a thing; see scripts/lab.mjs for the dev loop
-#   pnpm publish -r   -> releases (see docs/releasing.md)
-#
-# `link:` and `git+...#path:` installs of a single subpackage are both supported,
-# which is what lets one repository publish many plugins. Verified against a real
-# dsh profile, not inferred: see docs/testing.md "Install shapes".
+# Nothing is published from here, to npm or anywhere else. A release is a
+# `<package>-v<version>` git tag, and a consumer installs one subpackage with
+#   git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>
+# (pnpm's `&path:` selector is what lets one repository carry many plugins).
+# See docs/releasing.md. For the local dev loop, see scripts/lab.mjs; the
+# composition smoke (scripts/compose-smoke.mjs) installs each package into a
+# real dsh profile.
 packages:
   - 'packages/*'

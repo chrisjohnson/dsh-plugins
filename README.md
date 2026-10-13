@@ -33,8 +33,8 @@ Each package's README is the contract: what it does, every configuration key and
 
 ## Releases
 
-1. A change merges to `main` through a pull request, after CI passes.
-2. A release commit on `main` bumps one package's version and changelog; that commit is tagged `<package>-v<version>` and the tag is pushed.
+1. A release is a normal pull request that bumps one package's version and moves its CHANGELOG `Unreleased` entry under that version.
+2. After it merges, the tag `<package>-v<version>` is cut on that merge commit and pushed. Nothing is committed directly to `main`.
 3. Consumers pin the tag with the install spec above. A tag is never moved or rewritten once pushed.
 
 Details: [docs/releasing.md](./docs/releasing.md).
@@ -51,11 +51,11 @@ Details: [docs/releasing.md](./docs/releasing.md).
 
 ```sh
 npm run check          # verify + hook gate + all tests, no install needed
-node scripts/verify.mjs            # the publish contract (see below)
+node scripts/verify.mjs            # the release contract (see below)
 node scripts/compose-smoke.mjs     # install into a throwaway profile, import, compose
 ```
 
-`scripts/verify.mjs` is the interesting one: it enforces the rules that make a plugin installable and trustworthy — `dsh.bundle.patch` present and loading the package by name, `dsh.client` matched by an `./client` export, one harness peer range across every package (`>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`, which admits prerelease builds), every shipped file inside the `files` allowlist, a git-tag install line (and no bare-name one) in every package README, every config key documented in its README, every package listed in the index above, and no deployment leakage. It runs on CI for every push and it runs on a bare clone.
+`scripts/verify.mjs` is the interesting one: it enforces the rules that make a plugin installable and trustworthy — `dsh.bundle.patch` present and loading the package by name, `dsh.client` matched by an `./client` export, one harness peer range across every package (`>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`; dsh checks it with prereleases included, while plain node-semver/pnpm admit only `0.2.0-rc.*` and `0.3.0-*` prereleases from it), every shipped file inside the `files` allowlist (all a git-tag install ships), a git-tag install line (and no bare-name one) in every package README, every config key documented in its README, every package listed in the index above, and no deployment leakage. It runs on CI for every push and it runs on a bare clone.
 
 ## Contributing
 

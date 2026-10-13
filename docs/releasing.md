@@ -1,8 +1,8 @@
 # Releasing a plugin
 
 **Releases are git tags. Nothing from this repository is published to the npm
-registry.** A release is a `<package>-v<version>` tag on `main`, and consumers install
-that tag plus the package's subdirectory:
+registry.** Consumers install a `<package>-v<version>` tag plus the package's
+subdirectory:
 
 ```sh
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>"
@@ -10,10 +10,11 @@ dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.gi
 
 The flow, end to end:
 
-1. A change merges to `main` through a pull request, after CI passes.
-2. A release commit on `main` bumps one package's version and changelog.
-3. That commit is tagged `<package>-v<version>` and the tag is pushed.
-4. Consumers pin the tag.
+1. A release is a normal pull request that bumps one package's version and moves its
+   CHANGELOG `Unreleased` entry under that version.
+2. After it merges, the tag `<package>-v<version>` is cut on that merge commit and
+   pushed. Nothing is committed directly to `main`.
+3. Consumers pin the tag.
 
 Everything below exists because a pushed tag is permanent: it is what someone's install
 spec points at forever, and what their deployment rolls back to.
@@ -23,16 +24,16 @@ spec points at forever, and what their deployment rolls back to.
 > and is not this plugin. Any unscoped `dsh-*` name can end up like that. Install
 > instructions here always use the git-tag spec.
 
-## Before you release
+## Before you open the release pull request
 
-1. CI is green on `main` for the commit you are about to tag. Never tag a commit CI
-   has not passed.
+1. Everything going into the release has already merged to `main` through its own
+   pull request, with its CHANGELOG entry under `Unreleased`.
 2. `npm run check` locally (verify + hooks gate + tests).
 3. `node scripts/compose-smoke.mjs` — the package installs and imports in a real
    profile, with the harness checking its peer ranges.
-4. `npm pack --pack-destination /tmp -w <pkg>` then `tar -tzf` the tarball: read the
-   list. A git install honours the same `files` allowlist, so this is exactly what a
-   consumer gets. Is every runtime file in it? Is any test, script, or local note in it
+4. `npm pack --dry-run -w <pkg>` and read the file list. Nothing is published; this
+   is just the quickest way to see what the `files` allowlist selects, which is
+   exactly what a git-tag install ships. Is every runtime file in it? Is any test, script, or local note in it
    that should not be? (`verify.mjs` checks the first half of this; only a human
    notices the second.)
 5. The package's `README.md` and `CHANGELOG.md` describe the version you are about to
@@ -49,15 +50,20 @@ Semantic versioning, per package, from the user's point of view:
 - **patch** — a bug fix nobody has to configure anything for.
 
 Tag as `<package name>-v<version>` (`dsh-model-switch-v0.2.0`) so several packages can
-release from this repository without colliding. One package per tag; a release commit
-touches exactly one `package.json` and its changelog.
+release from this repository without colliding. One package per release pull request
+and per tag: the pull request touches exactly one `package.json` and its changelog.
 
 ```sh
+# on a branch, then open a pull request like any other change:
 npm version <major|minor|patch> -w <pkg> --no-git-tag-version   # rewrites package.json
+# move the CHANGELOG "Unreleased" entry under a "## <version>" heading, then:
 git add packages/<dir>/package.json packages/<dir>/CHANGELOG.md
 git commit -m "release(dsh-model-switch): 0.2.0"
-# after that commit is on main and CI is green there:
-git tag dsh-model-switch-v0.2.0 <release-commit> && git push origin dsh-model-switch-v0.2.0
+
+# after the pull request merges, tag its merge commit (CI green there):
+git fetch origin
+git tag dsh-model-switch-v0.2.0 "$(gh pr view <number> --json mergeCommit --jq .mergeCommit.oid)"
+git push origin dsh-model-switch-v0.2.0
 ```
 
 Never move, delete or re-push a tag that has been pushed. If a release is bad, cut a
@@ -66,12 +72,11 @@ tag keeps resolving it.
 
 ## Why not npm
 
-`verify.mjs` still calls itself the "publish contract", and it still checks the things
-an npm tarball would need (`files`, `exports`, `repository.directory`, a LICENSE).
-Those checks are kept on purpose: a git install reads the same `package.json` and the
-same `files` allowlist and `exports` as a tarball would. But tags are the release
-channel: there is no `npm publish` step, workflow or token anywhere in the release
-flow.
+Tags are the release channel: there is no `npm publish` step, workflow or token
+anywhere in the release flow. `verify.mjs` (the release contract) still checks
+packaging — `files`, `exports`, `repository.directory`, a LICENSE in the package
+directory — because a git-tag install reads the package's own `package.json` and ships
+only what its `files` allowlist selects.
 
 ## Listing it
 

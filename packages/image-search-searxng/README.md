@@ -101,10 +101,13 @@ This is the same shape `dsh-web-search-searxng` chose.
 ## Compatibility
 
 Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh`
-and on the `@deepseek-ai/dsh-tools` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`;
-the prerelease tags are what let installs under `-rc` harness builds avoid an
-`ERESOLVE`. dsh checks the peer range itself at boot, and on a harness outside it
-skips the bundle with a log line rather than loading it.
+and on the `@deepseek-ai/dsh-tools` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`.
+dsh checks the range itself, counting prereleases, so it accepts every harness build
+from 0.2.0-rc.2 on; on a harness outside it `dsh plugin add` refuses the install, and a
+profile that already has it skips the bundle with a log line. pnpm's own peer check is
+narrower: it admits only `0.2.0-rc.*` and `0.3.0-*` prereleases (plus every stable
+release from 0.2.0), so on other prereleases it reports a peer mismatch that dsh does
+not.
 
 ## Development
 
@@ -112,7 +115,7 @@ The plugin is plain ESM with no build step.
 
 ```sh
 node --test packages/image-search-searxng/test/*.test.mjs   # logic, no dsh needed
-node scripts/verify.mjs --package dsh-image-search-searxng  # publish contract
+node scripts/verify.mjs --package dsh-image-search-searxng  # release contract
 node scripts/compose-smoke.mjs image-search-searxng         # real dsh composition
 ```
 

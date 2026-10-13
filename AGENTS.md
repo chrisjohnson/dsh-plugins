@@ -10,8 +10,10 @@ installable package and a dsh **bundle** (a package that ships a configuration
 layer). This repository is the source of truth for plugin code; the deployment that
 consumes them (`dsh-deploy`) pins released tags and owns none of this code.
 
-**Releases are git tags, not npm.** A release is a `<package>-v<version>` tag on
-`main` (e.g. `dsh-model-switch-v0.2.0`); consumers install
+**Releases are git tags, not npm.** A release is a normal pull request that bumps one
+package's version and moves its CHANGELOG `Unreleased` entry under that version.
+After it merges, the tag `<package>-v<version>` (e.g. `dsh-model-switch-v0.2.0`) is
+cut on that merge commit. Nothing is committed directly to `main`. Consumers install
 `git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>`.
 Nothing is published to the npm registry, and some unscoped `dsh-*` names there
 belong to other people — the npm package `dsh-model-switch` is an unrelated author's,
@@ -45,7 +47,7 @@ packages/<name>/
 | --- | --- |
 | `npm run check` | Everything below, in one go. |
 | `node scripts/verify.mjs` | The release contract: installability, git-tag install line in each README, docs parity, no deployment leakage, the one harness peer range. |
-| `node --test packages/*/test/*.test.mjs` | Unit tests. No dsh, no install, no network. |
+| `node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs` | Unit tests (plugins, and the repository's own checks). No dsh, no install, no network. |
 | `node scripts/check-plugin-hooks.mjs` | React Rules-of-Hooks gate over every browser half. |
 | `node scripts/compose-smoke.mjs` | Installs each package into a throwaway profile under `.lab/`, imports it for real, and asserts the layer lands in a composed config. Needs a dsh installation (`DSH_BIN`, or `DSH_DEPLOY_DIR` pointing at a checkout that has one). |
 
@@ -74,20 +76,26 @@ that imports nothing from `@deepseek-ai/*`, plus tests against it. The Cordis wi
 in `src/host.mjs` should be thin enough that reading it is enough.
 
 **Ship a `files` allowlist, and keep it honest.** `verify.mjs` fails when a source
-file is not covered by it, because a git install honours `files` exactly like an npm
-tarball would, and a released package missing a file it imports is a 404 for the user.
+file is not covered by it, because a git-tag install ships only what `files` lists,
+and a released package missing a file it imports is a 404 for the user.
 
 **Declare official packages as peers, with a prerelease branch.**
 `@deepseek-ai/dsh-*` belongs in `peerDependencies`, not `dependencies` — the host
 supplies the single instance, and a second copy splits entry and context identity at
 runtime. Every `@deepseek-ai/dsh*` peer, and `engines.dsh`, is exactly
 `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0` — one range repository-wide, enforced by
-`verify.mjs`. The prerelease tags matter: node-semver only admits a prerelease when
-some comparator carries a prerelease tag on the same tuple, so an innocuous-looking
-`>=0.2.0 <0.3.0` excludes every `-rc` build of the harness and the user gets an
-`ERESOLVE`. dsh itself checks these ranges at install and again at boot, and skips a
-bundle whose range misses the runtime with one log line — so a wrong range is a
-plugin that silently stops loading, not just an install warning.
+`verify.mjs`. Two evaluators read it, and they disagree about prereleases:
+
+- **dsh itself** checks these ranges with `includePrerelease: true` — at
+  `plugin add`, where a miss rejects the install, and again when it loads a profile,
+  where a miss skips the bundle with one log line. To dsh the range admits every
+  build from 0.2.0-rc.2 on.
+- **pnpm/npm** use node-semver's default, which only admits a prerelease when some
+  comparator carries a prerelease tag on the same major.minor.patch tuple. To them
+  the range admits `0.2.0-rc.*` (from rc.2), `0.3.0-*`, and every stable release from
+  0.2.0 on — but not, say, `0.2.1-rc.1` or `0.4.0-rc.1`. That is why the prerelease
+  tags are there at all: a plain `>=0.2.0 <0.3.0` would exclude every `0.2.0-rc`
+  build of the harness and give the user an `ERESOLVE`.
 
 **Never declare the bare `cordis` package** in any dependency field — the harness
 supplies `@deepseek-ai/cordis`, and the Desktop community market rejects the bare
@@ -138,14 +146,15 @@ ship a query string.
   merged once CI has passed and it has been reviewed. That is a convention, not a
   GitHub setting: `main` has no branch protection, so nothing stops a direct push
   or an unreviewed merge except you following it.
-- Update the package's `CHANGELOG.md` in the same commit as the change; bump the
-  version only in a release commit.
+- Update the package's `CHANGELOG.md` (under `Unreleased`) in the same commit as the
+  change; bump the version only in a release pull request.
 - A user-visible behaviour change gets a test, or a README paragraph explaining why
   a test would be worse than the docs.
 - Never edit `node_modules` to fix another plugin, including your own released one.
   Pin, reproduce, report, release a fix.
-- Never tag a commit CI has not passed on `main`; never move, delete or re-push a
-  pushed tag. Tags are `<package>-v<version>` and are the only release channel.
+- Tag only the merge commit of a release pull request, and only once CI has passed
+  on it; never move, delete or re-push a pushed tag. Tags are `<package>-v<version>`
+  and are the only release channel.
 
 ## Adding a plugin
 

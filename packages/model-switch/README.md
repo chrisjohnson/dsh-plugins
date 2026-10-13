@@ -101,7 +101,7 @@ One subtlety that cost a bug each way: the *fit* margin (0.8) decides whether to
 
 ## Compatibility
 
-Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0` — the prerelease tags are what let node-semver admit `-rc` builds of the harness; without them users hit an `ERESOLVE` at install. dsh checks the peer ranges itself at boot, and on a harness outside them it skips the bundle with a log line rather than loading it.
+Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`. dsh checks these ranges itself, counting prereleases, so it accepts every harness build from 0.2.0-rc.2 on; on a harness outside them `dsh plugin add` refuses the install, and a profile that already has it skips the bundle with a log line. pnpm's own peer check is narrower: it admits only `0.2.0-rc.*` and `0.3.0-*` prereleases (plus every stable release from 0.2.0), so on other prereleases it reports a peer mismatch that dsh does not.
 
 ## Troubleshooting
 
@@ -119,7 +119,7 @@ Plain ESM, no build step:
 
 ```sh
 node --test packages/model-switch/test/*.test.mjs    # fit guard + config resolution
-node scripts/verify.mjs --package dsh-model-switch   # publish contract
+node scripts/verify.mjs --package dsh-model-switch   # release contract
 node scripts/compose-smoke.mjs model-switch          # real dsh composition
 node scripts/check-plugin-hooks.mjs                  # React hook-order gate for the client half
 ```

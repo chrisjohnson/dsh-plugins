@@ -7,25 +7,28 @@ what it cannot catch.
 ## Tier 0 — static gates (no install, no dsh, no network)
 
 ```sh
-node scripts/verify.mjs                     # the publish contract
+node scripts/verify.mjs                     # the release contract
 node scripts/check-plugin-hooks.mjs         # Rules of Hooks over every client half
 ```
 
-`verify.mjs` is not a linter; it checks the things that make an install *work* —
-that the bundle patch exists and loads the package by name rather than by path, that
-`dsh.client` has a matching `./client` export, that the peer ranges admit prerelease
-harness builds, that every file the package imports is inside its `files` allowlist,
+`verify.mjs` is not a linter; it checks the things that make a git-tag install
+*work* — that the bundle patch exists and loads the package by name rather than by
+path, that `dsh.client` has a matching `./client` export, that every
+`@deepseek-ai/dsh*` peer and `engines.dsh` use the repository's one harness range,
+that every file the package imports is inside its `files` allowlist (all a git-tag
+install ships), that the README shows the git-tag install line and no bare-name one,
 that every `config.*` key is documented, that the package is in the README index, and
 that no author-local path, provider id, or credential pattern shipped.
 
 ## Tier 1 — unit tests
 
 ```sh
-node --test packages/*/test/*.test.mjs      # or npm test
+node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs   # or npm test
 ```
 
 These run against the pure modules (`src/fit.mjs`, `src/config.mjs`,
-`src/searxng.mjs`) — which is why those files import nothing from `@deepseek-ai/*`.
+`src/searxng.mjs`, plus `scripts/lib/` for the repository's own checks) — which is
+why those files import nothing from `@deepseek-ai/*`.
 If a decision cannot be tested this way, that is a signal it is tangled with the host
 and should be pulled out.
 

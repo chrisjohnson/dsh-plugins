@@ -22,9 +22,10 @@ the process, not a GitHub rule — `main` has no branch protection.
 
 ## Releases
 
-Releases are git tags, never npm. After a pull request merges, a release commit on
-`main` bumps one package's version and changelog, and that commit is tagged
-`<package>-v<version>` (e.g. `dsh-model-switch-v0.2.0`). Consumers pin the tag:
+Releases are git tags, never npm. A release is a normal pull request that bumps one
+package's version and moves its CHANGELOG `Unreleased` entry under that version. After
+it merges, the tag `<package>-v<version>` (e.g. `dsh-model-switch-v0.2.0`) is cut on
+that merge commit. Nothing is committed directly to `main`. Consumers pin the tag:
 
 ```sh
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>"
