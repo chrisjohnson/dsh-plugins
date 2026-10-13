@@ -37,9 +37,19 @@ Every number in the refusal messages is deliberate. A model told "cannot switch"
 
 ## Install
 
+Installed from a git tag of this repository — it is not published to npm. Replace `<version>` with a released version (tags are named `dsh-model-switch-v<version>`; see [the tag list](https://github.com/chrisjohnson/dsh-plugins/tags)):
+
 ```sh
-dsh plugin --profile web add dsh-model-switch
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v<version>&path:/packages/model-switch"
 ```
+
+That installs the package into the profile and enables its bundle. If you manage the profile's `package.json` yourself, the pnpm equivalent is below — then also add `dsh-model-switch` to the profile's `dsh.profile.bundles`, because `pnpm add` alone installs the plugin without enabling it:
+
+```sh
+pnpm add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v<version>&path:/packages/model-switch"
+```
+
+> **Warning:** never `pnpm add dsh-model-switch` (or `dsh plugin add dsh-model-switch`) by bare name. That resolves from the npm registry, where the package called `dsh-model-switch` belongs to an unrelated author and is **not** this plugin.
 
 Restart dsh. With no configuration you get `switch_model`, the fit guard, the pill and the banner. `switch_model_escalate` is **not** offered until you designate the escalation route — see below.
 

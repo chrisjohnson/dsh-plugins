@@ -6,7 +6,8 @@ you wrote, [testing.md](./testing.md).
 
 ## The package is the feature
 
-A plugin is an npm package that declares a configuration layer:
+A plugin is a package (installed from a git tag, not the npm registry) that declares a
+configuration layer:
 
 ```json
 {
@@ -26,11 +27,13 @@ A plugin is an npm package that declares a configuration layer:
 `dsh.client` only for plugins with a browser half; without it, drop the `./client`
 export too (the host throws on the mismatch, in both directions).
 
-**Unscoped `dsh-*` names.** Anyone can claim one, which is why these plugins use them
-(npm refuses unclaimed unscoped names only if you are not the owner). It also means
-name-squatting is possible in this ecosystem: check a name is what you expect before
-installing it, and if you publish, keep the npm package's `repository` pointing at the
-source so catalogs can verify it.
+**Unscoped `dsh-*` names, released as git tags.** The `name` is unscoped and is also
+the tag prefix: `dsh-model-switch` releases as `dsh-model-switch-v<version>`, installed
+with `git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v<version>&path:/packages/model-switch`.
+Nothing here is published to npm, and the npm registry's unscoped names are first-come:
+`dsh-model-switch` there is an unrelated author's package, not this plugin. So a README
+in this repository never shows a bare-name install, and `verify.mjs` fails one that does.
+Keep `repository` pointing at the source so catalogs can map the package back to it.
 
 ## The patch file
 

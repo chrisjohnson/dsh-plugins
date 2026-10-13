@@ -30,9 +30,9 @@ layout is `packages/<name>` only.
 | `dsh-image-search-searxng` | `plugins/image-search-searxng.mjs` | Split into a pure `src/searxng.mjs` plus wiring; tool output is byte-compatible with the original. |
 | `dsh-continue-kicker` | `plugins/continue-kicker.mjs` | Not yet packaged. |
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker*.mjs` | Not yet packaged. Needs the deployment's paths and `watchdog-mode.json` replaced with configuration first. |
-| `dsh-git-worktree` | `plugins/dsh-better-git-worktree/` | Not yet packaged. Its `client.js` is *generated* by inlining an official package via string seams and it disables a core row; publishing it means either upstreaming or rebuilding that half. See the `NOTICE` file in the old directory. |
+| `dsh-better-git-worktree` | `plugins/dsh-better-git-worktree/` | Not yet packaged. Its `client.js` is *generated* by inlining an official package via string seams and it disables a core row; releasing it means either upstreaming or rebuilding that half. See the `NOTICE` file in the old directory. |
 | `dsh-semantic-loop-evals` | `plugins/semantic-loop-evals/` | Not yet packaged. Hard-`inject`s another plugin's client module, which has to become an optional integration. |
-| — | `plugins/scheduled-queue/` | Not published. Disabled upstream and has no per-session scoping. |
+| `dsh-scheduled-queue` | `plugins/scheduled-queue/` | Not yet packaged. Disabled upstream and has no per-session scoping. |
 
 ## Why some of them are still waiting
 
@@ -42,4 +42,4 @@ string matching. Those are not cosmetic. A plugin that assumes your filesystem i
 plugin that installs and then does nothing, which is worse than one that is absent.
 Each one gets a real pass: defaults become configuration, the coupling becomes an
 optional integration that says what it needs, and the README gets written before the
-package is published.
+package is tagged for release.

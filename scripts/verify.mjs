@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 // The repository's publish gate.
 //
+// "Publish" here means "cut a release tag". Nothing from this repository goes
+// to the npm registry: a release is a `<package>-v<version>` git tag on main,
+// and consumers install that tag plus `&path:/packages/<dir>`. The checks
+// below are unchanged by that - a git install reads the same package.json,
+// `files` and `exports` an npm tarball would - and `npm publish` is simply not
+// part of the release flow (see docs/releasing.md).
+//
 // WHY THIS EXISTS
 // ---------------
 // A DSH plugin has a lot of ways to be *almost* right. `dsh.client` without
@@ -219,7 +226,19 @@ function verifyPackage(dir, manifest, rootReadme) {
   else {
     const readme = readFileSync(readmePath, 'utf8');
     if (!/^#\s+\S+/m.test(readme)) at('readme', 'package README has no top-level heading');
-    if (!/dsh\s+plugin[^\n]*\badd\b\s+dsh-/.test(readme)) at('readme', 'package README shows no install command (expected e.g. dsh plugin --profile <name> add <package> on its own line)');
+    // Releases are git tags, never npm: the install line must pin this
+    // package's tag and subdirectory. A bare-name install resolves from the
+    // registry, where an unscoped dsh-* name may belong to somebody else.
+    const spec = `git+https://github.com/chrisjohnson/dsh-plugins.git#${name}-v`;
+    const pathPart = `&path:/packages/${relative(PACKAGES, dir).split(/[\\/]/).join(posix.sep)}`;
+    const installLine = readme.split('\n').some((l) => /dsh\s+plugin[^\n]*\badd\b/.test(l) && l.includes(spec) && l.includes(pathPart));
+    if (!installLine) {
+      at('readme', `package README shows no git-tag install command (expected: dsh plugin --profile <name> add "${spec}<version>${pathPart}")`);
+    }
+    const bareInstall = readme.split('\n').find((l) => /^\s*(?:pnpm\s+add|npm\s+(?:install|i)|dsh\s+plugin\b[^\n]*\badd)\s+dsh-[\w-]+\s*$/.test(l));
+    if (bareInstall !== undefined) {
+      at('readme', `package README installs by bare name ("${bareInstall.trim()}"), which resolves from the npm registry; nothing here is published there - use the git-tag spec`);
+    }
     if (!/^##\s+.*Config/im.test(readme)) at('readme', 'package README has no Configuration section', WARN);
     if (!rootReadme.includes(name)) at('index', `${name} is not listed in the root README index`);
     const docOptOut = /verify-allow:\s*(config-documented|\*)/.test(readme);

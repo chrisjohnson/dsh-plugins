@@ -12,9 +12,19 @@ GUI:   renders them as real inline pictures
 
 ## Install
 
+Installed from a git tag of this repository — it is not published to npm. Replace `<version>` with a released version (tags are named `dsh-image-search-searxng-v<version>`; see [the tag list](https://github.com/chrisjohnson/dsh-plugins/tags)):
+
 ```sh
-dsh plugin --profile web add dsh-image-search-searxng
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-search-searxng-v<version>&path:/packages/image-search-searxng"
 ```
+
+That installs the package into the profile and enables its bundle. If you manage the profile's `package.json` yourself, the pnpm equivalent is below — then also add `dsh-image-search-searxng` to the profile's `dsh.profile.bundles`, because `pnpm add` alone installs the plugin without enabling it:
+
+```sh
+pnpm add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-search-searxng-v<version>&path:/packages/image-search-searxng"
+```
+
+> **Warning:** never install this plugin by bare name from the npm registry. Nothing from this repository is published there, so whatever a bare `pnpm add dsh-image-search-searxng` resolves to — now or later — is not this plugin. (The sibling name `dsh-model-switch` is already taken on npm by an unrelated author.)
 
 Restart dsh. The tool is then available to every agent preset — the bundle's
 patch layer mounts the plugin at the profile level, so no per-preset
