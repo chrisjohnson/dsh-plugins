@@ -26,6 +26,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | --- | --- | --- |
 | **[dsh-model-switch](./packages/model-switch/)** | Let the agent switch its own model mid-session, with a context-window fit guard so neither it nor a human in the composer can strand a conversation on a model too small to read it. | `packages/model-switch` |
 | **[dsh-image-search-searxng](./packages/image-search-searxng/)** | A model-facing `image_search` tool over your own SearXNG, rendered inline in the Web GUI. | `packages/image-search-searxng` |
+| **[dsh-continue-kicker](./packages/continue-kicker/)** | Automatically send "continue" when a turn halts on the output-token limit (or after a crash, or on a reasoning-only empty stop), with a runaway guard that stops after repeated kicks with no progress. | `packages/continue-kicker` |
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.
 
