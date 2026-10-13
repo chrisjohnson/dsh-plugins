@@ -133,6 +133,11 @@ for (const dir of packages) {
   const composed = run(['--profile', 'web', '--dump-config'], 'dump-config');
   if (composed === null) continue;
 
+  // 0. the harness did not skip the bundle. dsh >= 0.2 checks every bundle's
+  //    @deepseek-ai/dsh* peer ranges when it loads a profile and drops a
+  //    mismatched one with a single stderr line, so a peer range that drifted
+  //    out of the runtime's line shows up here rather than as an install error.
+  const notSkipped = !composed.includes(`skipping profile bundle ${JSON.stringify(name)}`);
   // 1. the bundle became a layer of its own, attributed to this package
   const layer = new RegExp(`^# == ${name}$`, 'm').test(composed);
   // 2. its row is present with the id its patch declares
@@ -147,12 +152,12 @@ for (const dir of packages) {
   // 4. a package with a client half must resolve it, or the host throws at boot
   const clientOk = manifest.dsh?.client === undefined || composed.length > 0;
 
-  if (layer && rowsPresent && wired && clientOk) {
-    console.log(`ok    ${name}  (imports, layer + ${ids.length} row(s), profile wiring)`);
+  if (notSkipped && layer && rowsPresent && wired && clientOk) {
+    console.log(`ok    ${name}  (imports, not skipped, layer + ${ids.length} row(s), profile wiring)`);
   } else {
     failures += 1;
     console.error(
-      `FAIL  ${name}  layer=${layer} rows=${rowsPresent} wired=${wired} client=${clientOk}` +
+      `FAIL  ${name}  notSkipped=${notSkipped} layer=${layer} rows=${rowsPresent} wired=${wired} client=${clientOk}` +
         (keep ? '' : `  (rerun with --keep; home left at ${home})`),
     );
     if (keep) console.error(`      composed config left at ${join(home, 'dump-config.txt')}`);

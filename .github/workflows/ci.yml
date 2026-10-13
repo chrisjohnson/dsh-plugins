@@ -52,8 +52,18 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
+      # Pinned to the harness line these packages' peer ranges target, not
+      # `latest`: dsh checks every bundle's @deepseek-ai/dsh* peer ranges at
+      # install and at boot, so smoking against whatever `latest` happens to be
+      # tests a pairing nobody declared. The harness brings its own Cordis
+      # (`@deepseek-ai/cordis` ~4.0.4 on 0.2.x); nothing here pins it. A repository
+      # variable DSH_SMOKE_VERSION overrides the default without a commit.
       - name: Install the harness
-        run: npm install --no-audit --no-fund --no-save @deepseek-ai/dsh@${{ vars.DSH_SMOKE_VERSION || 'latest' }}
+        env:
+          DSH_SMOKE_VERSION: ${{ vars.DSH_SMOKE_VERSION || '0.2.0-rc.2' }}
+        run: |
+          npm install --no-audit --no-fund --no-save "@deepseek-ai/dsh@${DSH_SMOKE_VERSION}"
+          node -p "'dsh ' + require('@deepseek-ai/dsh/package.json').version + ', cordis ' + require('@deepseek-ai/cordis/package.json').version"
       # `dsh plugin add` shells out to pnpm - npm's resolver backtracks
       # exponentially on the harness's cyclic peer dependencies - and
       # actions/setup-node does not put pnpm on PATH, so without this every
