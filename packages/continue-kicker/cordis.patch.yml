@@ -1,0 +1,21 @@
+# Bundle layer for dsh-continue-kicker.
+#
+# `dsh plugin --profile web add dsh-continue-kicker` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin
+# row (host half via the package's `main`).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key
+# the user would then have to restate to change any other. Defaults live in
+# src/config.mjs and are documented in README.md. To tune it, add a
+# profile-level row that lists every key you want:
+#
+#   - id: continue-kicker
+#     name: dsh-continue-kicker
+#     config:
+#       cooldownMs: 60000
+#       liveKickDelayMs: 3000
+#       maxConsecutiveKicks: 5
+- insert:
+    - id: continue-kicker
+      name: dsh-continue-kicker
