@@ -59,6 +59,18 @@ export function canRead(tokens, window) {
 }
 
 /**
+ * Can the route being left compact this conversation for a switch? The tool path
+ * keeps the fit margin here: between fitRatio and 1.0 of the current window the
+ * summary call itself has no headroom, so the switch is refused with the
+ * delegate-to-subagent advice rather than attempted. The interactive repair uses
+ * {@link canRead} (the full window) instead.
+ */
+export function canCompactFrom(tokens, window, fitRatio) {
+  const budget = budgetFor(window, fitRatio);
+  return budget !== undefined && tokens <= budget;
+}
+
+/**
  * Classify one measurement against one route.
  *
  * `fits === false` hides two states that must never be described the same way:
@@ -125,20 +137,25 @@ export function pickSuggestion(routes, tokens, config, exclude) {
  * @param {object} input
  * @param {number|undefined} input.tokens        measured request-and-response pressure
  * @param {number} input.fitRatio                configured headroom fraction
- * @param {number|undefined} input.destWindow    declared window of the route being moved to
- * @param {number|undefined} input.currentWindow declared window of the route being left
+ * @param {() => (number|undefined|Promise<number|undefined>)} input.destWindow
+ *        resolves the declared window of the route being moved to; not called
+ *        when there is no measurement to judge
+ * @param {() => (number|undefined|Promise<number|undefined>)} input.currentWindow
+ *        resolves the declared window of the route being left; called only when
+ *        the destination does not fit, so a plain allow costs no extra lookup
  * @param {boolean} input.autoCompact            may the guard compact before switching?
  * @param {{provider: string, model: string}} input.dest
  * @param {string} input.routedLabel             `provider/model` currently routed
- * @returns {{action: 'allow', note?: string, tokens?: number, window?: number}
+ * @returns {Promise<{action: 'allow', note?: string, tokens?: number, window?: number}
  *          | {action: 'compact', budget: number, tokens: number, window: number}
- *          | {action: 'refuse', reason: string, tokens: number, window: number}}
+ *          | {action: 'refuse', reason: string, tokens: number, window: number}>}
  */
-export function decideFit({ tokens, fitRatio, destWindow, currentWindow, autoCompact, dest, routedLabel }) {
+export async function decideFit({ tokens, fitRatio, destWindow, currentWindow, autoCompact, dest, routedLabel }) {
   if (typeof tokens !== 'number') {
     return { action: 'allow', note: 'no token measurement available; the fit check was skipped' };
   }
-  const window = budgetFor(destWindow, fitRatio) === undefined ? undefined : destWindow;
+  const resolvedDest = await destWindow();
+  const window = budgetFor(resolvedDest, fitRatio) === undefined ? undefined : resolvedDest;
   if (window === undefined) {
     return { action: 'allow', note: `no declared context window for ${routeLabel(dest)}; the fit check was skipped`, tokens };
   }
@@ -147,10 +164,9 @@ export function decideFit({ tokens, fitRatio, destWindow, currentWindow, autoCom
 
   // Can the route we are on even READ the transcript? If not, no amount of
   // retrying will compact it, and switching only moves the failure. Say so with
-  // numbers instead of switching. Note this is the route's OWN window, not the
-  // fit margin — refusing a switch that the current route could have compacted
-  // is its own bug (see canRead).
-  if (!canRead(tokens, currentWindow)) {
+  // numbers instead of switching. The margin applies here (see canCompactFrom).
+  const current = await currentWindow();
+  if (!canCompactFrom(tokens, current, fitRatio)) {
     return {
       action: 'refuse',
       tokens,
@@ -158,7 +174,7 @@ export function decideFit({ tokens, fitRatio, destWindow, currentWindow, autoCom
       reason:
         `context is ~${tokens} tokens and ${routeLabel(dest)} has a ${window}-token window. ` +
         `It cannot be compacted from the current route (${routedLabel}, ` +
-        `${currentWindow === undefined ? 'no declared window' : `${currentWindow} tokens`}) because a model must read a ` +
+        `${current === undefined ? 'no declared window' : `${current} tokens`}) because a model must read a ` +
         `conversation in order to summarize it. Delegate this work to a local subagent instead ` +
         `(the \`subagent\` tool accepts provider/model), or switch to a route with a larger window.`,
     };

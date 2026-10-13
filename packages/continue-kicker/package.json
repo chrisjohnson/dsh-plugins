@@ -1,0 +1,46 @@
+{
+  "name": "dsh-continue-kicker",
+  "version": "0.1.0",
+  "description": "Automatically resumes a DeepSeek Harness session whose turn halted on the output-token limit (or after a crash, or on a reasoning-only empty stop), with a per-session runaway guard so a task too big for its budget surfaces instead of burning GPU-hours.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "max-tokens",
+    "auto-continue",
+    "session-recovery"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/continue-kicker"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/continue-kicker#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

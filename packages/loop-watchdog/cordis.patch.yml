@@ -1,0 +1,26 @@
+# Bundle layer for dsh-loop-watchdog.
+#
+# `dsh plugin --profile web add dsh-loop-watchdog` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, the evals panel via the package's `dsh.client`
+# declaration).
+#
+# The row carries NO config on purpose — see packages/image-search-searxng's
+# patch file for the general reason (a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key
+# the user then has to restate). Defaults and the meaning of an unset value live
+# in src/config.mjs, and are documented in README.md.
+#
+# Nothing is guessed for the model the watchdog uses to adjudicate ambiguous
+# windows; that is a deployment's answer. Set it on your own row:
+#
+#   - id: loop-watchdog
+#     name: dsh-loop-watchdog
+#     config:
+#       llmBaseUrl: http://127.0.0.1:4000/v1   # OpenAI-compatible; /chat/completions is appended
+#       llmModel: your-small-model
+#       llmApiKeyEnv: YOUR_API_KEY_ENV_VAR     # the NAME of the variable, never the key
+#       interventionEnabled: false             # log-only until you opt in
+- insert:
+    - id: loop-watchdog
+      name: dsh-loop-watchdog

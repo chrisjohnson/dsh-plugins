@@ -65,8 +65,8 @@ Set these on the row in your own profile patch (`config:` block), or via your de
 | `fitRatio` | `0.8` | Fraction of a destination window treated as usable. It is dsh-compaction-basic's own default compaction point, so the guard agrees with what the harness would do anyway. |
 | `summaryReserveTokens` | `10000` | Room left for the summary checkpoint compaction writes. |
 | `autoCompact` | `true` | When `false`, the guard never compacts on its own: a too-big switch is refused with the `/compact` instruction instead. |
-| `maxRegionAttempts` | `8` | Bounded retries when a chosen compaction boundary is rejected by the service. Rarely worth changing. |
-| `maxCompactionAttempts` | `3` | Outer attempts: if one compaction did not free enough, shrink the retained tail and try again. Rarely worth changing. |
+
+Compaction retries are fixed internal limits, not configuration (`maxRegionAttempts` is 8 and `maxCompactionAttempts` is 3; setting either in the row is ignored with an unknown-key warning).
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). It is stricter than most plugins on purpose: a misspelled key, a YAML `"0.8"`, or an escalation provider with no model each print one warning at boot, because a misconfiguration you see once is worth much less debugging than one you discover at the first switch.
 
@@ -93,7 +93,7 @@ Example, on a deployment with a cloud big-window route and a local workhorse:
 | --- | --- |
 | No measurement, or the destination declares no window | **allow** with a note. The guard never blocks a switch it cannot evaluate. |
 | Fits under the margin | **allow** |
-| Doesn't fit, and the current route cannot read the transcript | **refuse**, with token counts and the delegate-to-subagent alternative |
+| Doesn't fit, and the current route cannot compact it (transcript over `fitRatio` of its window) | **refuse**, with token counts and the delegate-to-subagent alternative |
 | Doesn't fit, `autoCompact: false` | **refuse**, with the `/compact` instruction |
 | Doesn't fit but is compactable here | **compact first**, re-measure, then allow — reporting how much was freed |
 
@@ -102,6 +102,14 @@ One subtlety that cost a bug each way: the *fit* margin (0.8) decides whether to
 ## Compatibility
 
 Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`. dsh checks these ranges itself, counting prereleases, so it accepts every harness build from 0.2.0-rc.2 on; on a harness outside them `dsh plugin add` refuses the install, and a profile that already has it skips the bundle with a log line. pnpm's own peer check is narrower: it admits only `0.2.0-rc.*` and `0.3.0-*` prereleases (plus every stable release from 0.2.0), so on other prereleases it reports a peer mismatch that dsh does not.
+
+## Session format
+
+The handoff message this plugin steers into a session after a switch carries
+`source: { kind: 'plugin:model-switch', form: 'notice', summary }`. dsh 0.2.0
+sessions (format V4) reject the shared `'plugin'` kind on read, so the producer name
+lives in `kind`. Sessions written by dsh 0.1.x with the old kind are rewritten to
+this same value by dsh's own migrator.
 
 ## Troubleshooting
 
@@ -124,7 +132,7 @@ node scripts/compose-smoke.mjs model-switch          # real dsh composition
 node scripts/check-plugin-hooks.mjs                  # React hook-order gate for the client half
 ```
 
-`src/fit.mjs` and `src/config.mjs` hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
+`src/fit.mjs`, `src/config.mjs`, `src/notice.mjs` and `src/guard.mjs` (services injected) hold every decision worth testing and import nothing from dsh, which is what lets the suites run on a bare `git clone`. `src/host.mjs` is the Cordis wiring; `src/client.mjs` is the browser half. See [`../../docs/authoring.md`](../../docs/authoring.md).
 
 ## License
 

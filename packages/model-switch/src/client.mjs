@@ -4,8 +4,8 @@
 // the AGENT path (the `switch_model` tool); the composer's own model picker calls
 // sessionController.selectModel directly and cannot be intercepted, so a human
 // switch can still land the session on a route too small for its history. The
-// real incident (2026-09-28) was exactly that: deepseek-flash at 421k tokens
-// switched to big-moe (262k), and the next request died with
+// real incident was exactly that: a session at 421k tokens on a 1M-window
+// cloud route switched to a 262k-window local route, and the next request died with
 // ContextWindowExceededError after an automatic recovery that could not work
 // either - because the summarizer was the same 262k model the request overflowed.
 //
@@ -34,7 +34,7 @@
 // itself once per session+route, and stays closed if the operator closes it.
 //
 // All authority stays in the Host half: the browser renders what
-// /api/modelSwitch/state reports and asks /api/modelSwitch/fix to act, so the
+// /modelSwitch/state reports and asks /modelSwitch/fix to act, so the
 // interactive path and the agent path can never disagree about the numbers.
 // Nothing here computes its own token estimate.
 
@@ -90,17 +90,14 @@ window.__ModuleLoader__.load({
 		// ================================================================
 
 		/**
-		 * Every endpoint lives behind the same authenticated /api fence the
-		 * profile's other local plugins use (see ../semantic-loop-evals). The
-		 * browser never talks to the model catalog or the token meter itself.
+		 * Every endpoint is the Host half's plugin-owned /modelSwitch route, which
+		 * applies the Connection trust fence. The browser never talks to the model
+		 * catalog or the token meter itself.
 		 */
 		function api(endpoint, payload) {
 			// A plain same-origin fetch against the Host half's own `webServer`
-			// prefix route. NOT connection.rpc.call("/api", ...): that path
-			// answers 405 on this deployment (the /api fence is mounted from a
-			// child scope, so the rpc helper has no webServer to reach) - which is
-			// why the host call never arrived and the badge could not learn any
-			// route's capacity beyond the one in the last request.
+			// prefix route; the Host half explains why it is not a connection.rpc
+			// channel.
 			return fetch("/modelSwitch/" + encodeURIComponent(endpoint), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
@@ -115,8 +112,8 @@ window.__ModuleLoader__.load({
 		/** 421337 -> "421k", 1048576 -> "1M". */
 		/**
 		 * A route id that stays readable when two providers ship the same model id -
-		 * on this deployment three providers all expose "deepseek-flash", and picking
-		 * the wrong one silently changes the provider behind the user's back.
+		 * providers can expose the same model id, and picking the wrong one silently
+		 * changes the provider behind the user's back.
 		 */
 		function routeName(route, all) {
 			if (!route || typeof route.model !== "string") return "?";
@@ -140,8 +137,8 @@ window.__ModuleLoader__.load({
 		 *   "hard" - past the route's own window. The request 400s and the automatic
 		 *     rescue summarises with the route that just overflowed, so it 400s too.
 		 *
-		 * An earlier build printed "210520 tokens does not fit big-moe (262.1k)" -
-		 * arithmetically self-refuting, and it called the harmless case a failure.
+		 * Calling the warn case a failure would print a self-refuting sentence
+		 * ("210520 tokens does not fit a 262.1k window"), so the two never share one.
 		 */
 		function severity(state) {
 			if (!state || state.available !== true || state.fits !== false) return null;

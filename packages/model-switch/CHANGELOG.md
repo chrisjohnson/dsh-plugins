@@ -5,8 +5,48 @@
 
 ## Unreleased
 
+## 0.2.0
+
+### Fixed
+
+- Switch notices are written with `source.kind: 'plugin:model-switch'` instead of
+  the shared `'plugin'` kind. Session format V4 (dsh 0.2.0) refuses a message with
+  `kind: 'plugin'` when the log is read back, so a session that had switched model
+  could not be reopened after a restart. The notice's one-line summary is now also
+  bounded to the host's 120-character limit.
+- Boot no longer throws for every configuration: the final "model-switch active"
+  log line referenced a `reader` variable that was never declared in the plugin's
+  scope, so loading the plugin raised a ReferenceError even with a full config. It
+  also dereferenced an escalation route that is legitimately absent when unset.
+  The line now prints each route, or `unset`.
+
+### Removed
+
+- The context badge's fall back to the session store (`sessions.get`) when no live
+  agent exists for the id. The session controller resolves every id a client can
+  name to a live agent first, so the branch only described a session that is
+  mid-publication or subagent-owned; the badge now reports unavailable for it.
+
 ### Changed
 
+- **Fixed a regression in the 0.1.0 switch guard wiring**: the guard returned
+  decideFit's verdict unchanged while the switch sequence read `allowed`, so every
+  non-compacting case was refused ("model switch refused: undefined"), including
+  switches that fit. The guard path now lives in `src/guard.mjs` with its services
+  injected, and `test/guard.test.mjs` drives allow, refuse, compact, failed
+  compaction, no measurement and no declared window end to end.
+- The tool path's "can the current route compact this" test uses the fit margin
+  again (`tokens > floor(currentWindow * fitRatio)` refuses with the
+  delegate-to-subagent advice), as the in-tree plugin did. This reverses the 0.1.0
+  note below for the tool path; the interactive repair still uses the route's full
+  window.
+- Window lookups are lazy: with no token measurement none is made, and the current
+  route's window is resolved only when the destination does not fit, so a switch
+  that fits costs a single lookup.
+- The `switch_model` parameter descriptions are generic (no deployment-specific
+  provider or model ids in the example text).
+- The notice source no longer carries the old `plugin: 'model-switch'` field.
+- Unknown or invalid config keys now print a boot warning.
 - Requires dsh 0.2.0-rc.2 or later: `engines.dsh` and the `@deepseek-ai/dsh-tools`
   / `@deepseek-ai/dsh-llm` peers are now `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`.
   dsh 0.2 checks bundle peer ranges at boot, so the range now states the line this

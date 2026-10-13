@@ -51,6 +51,16 @@ patch, add the keys to the row this plugin inserts:
     maxResults: 5
 ```
 
+If the plugin is already mounted by its bundle, a config-only row keyed by `id`
+is enough, and `!!js` lets the row pass environment variables through. Unset
+variables arrive as `undefined` and fall back exactly as an absent key would:
+
+```yaml
+- id: image-search-searxng
+  config:
+    baseURL: !!js process.env.SEARXNG_BASE_URL
+```
+
 One caveat worth knowing about patch layers generally: a patch **replaces a
 row's entire `config` object**, it does not deep-merge. Restating `baseURL` in a
 later layer drops `apiKey` unless you restate that too — which is why this
@@ -66,6 +76,10 @@ Titles, source pages, resolutions, and one markdown image link per result:
    Source: https://example.com/receptacles
    Resolution: 1024x768
 ```
+
+The tool's canonical value is `{ results: [{ title?, imgSrc, sourceUrl, resolution? }] }`,
+and its model-facing result is that list rendered as a single `text` content block — no
+`image` blocks, no attachments. The plugin writes no session messages of its own.
 
 That link is not decoration. dsh's own `dsh-client-ui-primitives` renderer turns
 `![alt](url)` into a real `<img>` for any `http(s)` URL — there is no domain

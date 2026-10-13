@@ -80,18 +80,20 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import {
-  budgetFor,
-  canRead,
-  compactionFailureReason,
-  decideFit,
-  fitsWindow,
-  pickSuggestion,
-  routeLabel,
-  sameRoute,
-  stillTooLargeReason
-} from './fit.mjs'
+import { budgetFor, canRead, fitsWindow, pickSuggestion, routeLabel, sameRoute } from './fit.mjs'
 import { resolveSettings } from './config.mjs'
+import { switchAgentModel } from './guard.mjs'
+
+// The dsh services the guard needs, resolved the same way everything else here is.
+function guardDeps(ctx) {
+  return {
+    service: (agent, name) => resolveService(ctx, agent, name).service,
+    readPressure: (agent, session) => readPressure(ctx, agent, session),
+    resolveWindow: (agent, provider, model, signal) => resolveWindow(ctx, agent, provider, model, signal),
+    compactToFit: (agent, budget, config, signal, log) => compactToFit(ctx, agent, budget, config, signal, log),
+    createUserMessage
+  }
+}
 
 const PLUGIN_NAME = 'model-switch'
 
@@ -104,14 +106,6 @@ const COMPACTION_TIMEOUT_MS = 20 * 60 * 1000
 // ================================================================
 // SMALL HELPERS
 // ================================================================
-
-function catalogRouteList(catalog) {
-  const routes = []
-  for (const group of catalog?.groups ?? []) {
-    for (const model of group?.models ?? []) routes.push(`${group.id}/${model.id}`)
-  }
-  return routes
-}
 
 function asPositiveInt(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
@@ -305,151 +299,6 @@ async function compactToFit(ctx, agent, budget, config, signal, log) {
   return { ok: false, reason: `compaction did not free enough context (${lastReason})` }
 }
 
-// ================================================================
-// THE GUARD
-// ================================================================
-
-/**
- * Decide whether one route change is safe, and make it safe when it is not.
- *
- * @returns {Promise<{allowed: boolean, reason?: string, note?: string,
- *   tokens?: number, window?: number, compacted?: boolean, freed?: number}>}
- */
-async function guardRouteChange(ctx, agent, provider, model, config, signal, log) {
-  const routed = agent.session.requestHeader()?.config
-  const dest = { provider, model }
-  // Every judgement - allow, skip, refuse, or compact first - is made by the
-  // pure decideFit() in fit.mjs, where the branches have tests. This function
-  // only measures, acts on the verdict, and re-measures.
-  const decision = decideFit({
-    tokens: readPressure(ctx, agent, agent.session)?.totalTokens,
-    fitRatio: config.fitRatio,
-    destWindow: await resolveWindow(ctx, agent, provider, model, signal),
-    currentWindow: await resolveWindow(ctx, agent, routed?.provider, routed?.model, signal),
-    autoCompact: config.autoCompact,
-    dest,
-    routedLabel: routeLabel(routed)
-  })
-  if (decision.action !== 'compact') return decision
-
-  log?.info(
-    'fit-guard: %s -> %s needs ~%d tokens vs window %d; compacting first',
-    routeLabel(routed),
-    `${provider}/${model}`,
-    decision.tokens,
-    decision.window,
-  )
-  const result = await compactToFit(ctx, agent, decision.budget, config, signal, log)
-  if (!result.ok) {
-    return {
-      allowed: false,
-      tokens: decision.tokens,
-      window: decision.window,
-      reason: compactionFailureReason({ dest, window: decision.window, tokens: decision.tokens, detail: result.reason })
-    }
-  }
-
-  const after = readPressure(ctx, agent, agent.session)?.totalTokens
-  if (after !== undefined && !fitsWindow(after, decision.window, config)) {
-    return {
-      allowed: false,
-      tokens: after,
-      window: decision.window,
-      reason: stillTooLargeReason({ dest, window: decision.window, after, budget: decision.budget, freed: result.freed })
-    }
-  }
-
-  return {
-    allowed: true,
-    tokens: after ?? decision.tokens,
-    window: decision.window,
-    compacted: result.freed > 0,
-    freed: result.freed
-  }
-}
-
-// ================================================================
-// SWITCH
-// ================================================================
-
-/**
- * Validate + install a model selection for one agent, then queue the
- * agent-authored first message for the new model's next turn.
- * Returns { ok, from, to, alreadyOnRoute } or { ok: false, error }.
- */
-async function switchAgentModel(ctx, log, config, agent, provider, model, text, noticeSummary, signal) {
-  const controller = resolveService(ctx, agent, 'sessionController').service
-  if (controller === undefined) {
-    return {
-      ok: false,
-      error: 'model switching is unavailable in this profile (no sessionController service).'
-    }
-  }
-
-  const from = agent.session.requestHeader()?.config
-
-  let guard
-  try {
-    guard = await guardRouteChange(ctx, agent, provider, model, config, signal, log)
-  } catch (error) {
-    return { ok: false, error: `context fit check failed: ${message(error)}` }
-  }
-  if (!guard.allowed) {
-    log?.warn('switch to %s/%s refused by fit guard: %s', provider, model, guard.reason)
-    return { ok: false, error: `model switch refused: ${guard.reason}` }
-  }
-
-  let to
-  try {
-    to = (await controller.selectModel({ sessionId: agent.id, provider, model })).selected
-  } catch (error) {
-    let hint = ''
-    try {
-      const routes = catalogRouteList(await controller.modelCatalog())
-      if (routes.length > 0) hint = ` Available routes: ${routes.join(', ')}.`
-    } catch {
-      // catalog is a convenience; never mask the real error with it
-    }
-    log?.warn('switch to %s/%s failed: %s', provider, model, message(error))
-    return { ok: false, error: `model switch failed: ${message(error)}${hint}` }
-  }
-
-  const fitNote =
-    guard.compacted === true
-      ? ` The conversation was compacted first (~${guard.freed} tokens freed) so it fits ${provider}/${model};`
-      : ''
-  agent.steer(
-    createUserMessage({
-      content: [{ type: 'text', text: fitNote.length > 0 ? `${fitNote} ${text}` : text }],
-      source: {
-        kind: 'plugin',
-        plugin: PLUGIN_NAME,
-        form: 'notice',
-        summary: noticeSummary
-      }
-    }),
-  )
-
-  const alreadyOnRoute = sameRoute(from, to)
-  log?.info(
-    'session %s: model %s -> %s (%s)',
-    agent.id,
-    routeLabel(from),
-    routeLabel(to),
-    alreadyOnRoute ? 'already on route, message queued only' : 'switched',
-  )
-  return {
-    ok: true,
-    from: routeLabel(from),
-    to: routeLabel(to),
-    alreadyOnRoute,
-    compacted: guard.compacted === true,
-    freed: guard.freed,
-    tokens: guard.tokens,
-    window: guard.window
-  }
-}
-
 function noAgent() {
   return {
     ok: false,
@@ -559,9 +408,11 @@ function routeCapacities(ctx, log) {
 async function currentState(ctx, sessionId, intended, config, log) {
   const agents = resolveService(ctx, undefined, 'agents').service
   const agent = agents !== undefined && sessionId !== undefined ? agents.get(sessionId) : undefined
-  const sessions = resolveService(ctx, undefined, 'sessions').service
-  const session =
-    agent?.session ?? (sessions !== undefined && sessionId !== undefined ? sessions.get(sessionId) : undefined)
+  // Only a live agent is reported on. The session controller resolves every
+  // session id a client can name to a live agent before serving it, so a session
+  // that is in the store without one is mid-publication or owned by a subagent,
+  // and has no route to describe.
+  const session = agent?.session
   if (session === undefined) return { available: false, reason: 'no live session for this id' }
 
   const routed = session.requestHeader()?.config
@@ -825,7 +676,7 @@ export default function modelSwitch(ctx, config = {}) {
               model: {
                 type: 'string',
                 required: true,
-                description: 'Exact model id under that provider, e.g. "medium-moe".'
+                description: 'Exact model id under that provider, the same id the UI model picker shows.'
               },
               message: {
                 type: 'string',
@@ -839,7 +690,7 @@ export default function modelSwitch(ctx, config = {}) {
               const agent = exec.agent
               if (agent === undefined) return noAgent()
               return await switchAgentModel(
-                ctx,
+                guardDeps(ctx),
                 log,
                 settings,
                 agent,
@@ -871,7 +722,7 @@ export default function modelSwitch(ctx, config = {}) {
               if (agent === undefined) return noAgent()
               const text = `Switched to ${escalation.provider}/${escalation.model} (escalation route). Continuing with the current task.`
               return await switchAgentModel(
-                ctx,
+                guardDeps(ctx),
                 log,
                 settings,
                 agent,
@@ -888,22 +739,17 @@ export default function modelSwitch(ctx, config = {}) {
     )
   })
 
-  // --- the Client half's two endpoints, over the same authenticated /api fence
-  // the profile's other local plugins use. `state` is a read-only reading of the
-  // current session; `fix` performs the repair. Both reuse the tools' own
-  // helpers, so the interactive and the agent path can never disagree.
   // --- the Client half's endpoints, over a PLUGIN-OWNED route.
   //
-  // NOT `connection.rpc.handle` / the `/api` fence, and the difference is load
-  // bearing. That helper reads `owner.webServer` on the Connection service's own
-  // context, which this deployment never injects (the service mounts /api from a
-  // CHILD scope instead), so every channel registered through it answers 405.
-  // That is precisely how the first version of this failed: the pill rendered
-  // from the local projection while its host call never arrived, so the badge
-  // could not know any route's capacity except the one in the last request.
-  // ../dsh-better-git-worktree/host-main.mjs documents the same finding and is
-  // the pattern copied here: register a prefix route through `webServer` and
-  // reuse the connection trust fence through its public `requestRejection`.
+  // `state` is a read-only reading of the current session; `fix` performs the
+  // repair. Both reuse the tools' own helpers, so the interactive and the agent
+  // path can never disagree.
+  //
+  // The route is a prefix registered on `webServer`, with the Connection trust
+  // fence applied through its public `requestRejection`, rather than a channel on
+  // `connection.rpc`: a channel registered there is mounted by the Connection
+  // service from a child scope and was observed answering 405 here, which left
+  // the badge unable to learn any route's capacity but the last request's.
   const RPC_PATH = '/modelSwitch'
 
   const readJsonBody = (req) =>
@@ -985,12 +831,11 @@ export default function modelSwitch(ctx, config = {}) {
     )
   })
 
+  const routeText = (route) => (route === undefined ? 'unset' : `${route.provider}/${route.model}`)
   log.info(
-    'model-switch active (escalation=%s/%s reader=%s/%s fitRatio=%s autoCompact=%s)',
-    escalation.provider,
-    escalation.model,
-    reader.provider,
-    reader.model,
+    'model-switch active (escalation=%s reader=%s fitRatio=%s autoCompact=%s)',
+    routeText(escalation),
+    routeText(settings.reader),
     settings.fitRatio,
     settings.autoCompact,
   )
