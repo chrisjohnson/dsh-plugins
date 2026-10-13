@@ -24,17 +24,17 @@
 // Usage:
 //   node scripts/lab.mjs up                 # install (or refresh) + boot on :3099
 //   node scripts/lab.mjs up --port 3123     # different port
-//   node scripts/lab.mjs up --settings /path/to/settings.yaml
-//                                           # symlink a settings file in (read-only
-//                                           # by convention; it may contain keys, so
-//                                           # never commit it and never copy it into
-//                                           # a repository)
-//   node scripts/lab.mjs install            # install/refresh without booting
+//   node scripts/lab.mjs install           # install/refresh without booting
 //   node scripts/lab.mjs down               # nothing to stop; alias for reset-clean
 //   node scripts/lab.mjs clean              # delete .lab/install and .lab/home
+//
+// Providers and plugin config: dsh >= 0.2 has no settings.yaml. Configure the
+// lab by adding rows to .lab/home/profiles/web/cordis.patch.yml (it may hold
+// API keys, so never commit it or copy it into a repository).
+// DSH_VERSION picks the harness (default: the version CI smokes against).
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -45,10 +45,13 @@ const PORT = (() => {
   const i = process.argv.indexOf('--port');
   return i === -1 ? '3099' : process.argv[i + 1];
 })();
-const SETTINGS = (() => {
-  const i = process.argv.indexOf('--settings');
-  return i === -1 ? null : resolve(process.argv[i + 1]);
-})();
+if (process.argv.includes('--settings')) {
+  console.error(
+    'lab: --settings was removed: dsh >= 0.2 does not read settings.yaml.\n' +
+      `  Put providers and plugin config in rows of ${join(HOME, 'profiles', 'web', 'cordis.patch.yml')} instead.`,
+  );
+  process.exit(2);
+}
 const command = (process.argv[2] ?? 'up').replace(/^--$/, 'up');
 
 function packages() {
@@ -67,7 +70,7 @@ function ensureInstalled() {
   // dependencies as siblings of the Cordis loader that will import them.
   // `file:` for a directory is a symlink in npm >= 7, which is what makes edits
   // to packages/*/src visible on the next boot with no reinstall.
-  const version = process.env.DSH_VERSION ?? 'latest';
+  const version = process.env.DSH_VERSION ?? '0.2.0-rc.2';
   const specifiers = [`@deepseek-ai/dsh@${version}`, ...packages()];
   console.log(`installing into ${INSTALL}:\n  ${specifiers.join('\n  ')}`);
   const result = spawnSync('npm', ['install', '--no-audit', '--no-fund', ...specifiers], {
@@ -80,13 +83,6 @@ function ensureInstalled() {
 
 function ensureHome() {
   mkdirSync(HOME, { recursive: true });
-  if (SETTINGS !== null) {
-    if (!existsSync(SETTINGS)) throw new Error(`--settings ${SETTINGS} does not exist`);
-    const target = join(HOME, 'settings.yaml');
-    rmSync(target, { force: true });
-    symlinkSync(SETTINGS, target);
-    console.log(`linked settings.yaml -> ${SETTINGS}`);
-  }
   for (const dir of packages()) {
     const name = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name;
     console.log(`  + ${name}`);

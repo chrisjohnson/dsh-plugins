@@ -49,11 +49,12 @@ tier 3.
 ## Tier 3 — the lab profile
 
 ```sh
-node scripts/lab.mjs up --settings /path/to/settings.yaml     # http://127.0.0.1:3099
+node scripts/lab.mjs up          # http://127.0.0.1:3099
 node scripts/lab.mjs clean
 ```
 
-`.lab/install` gets its own dsh plus every local package; `.lab/home` is its own
+`.lab/install` gets its own dsh (`DSH_VERSION`, defaulting to `0.2.0-rc.2`, the same
+version CI smokes against) plus every local package; `.lab/home` is its own
 `DSH_HOME`. The production profile, its sessions, its settings and its service are
 never touched, so an agent can restart the thing it is testing as many times as it
 likes. `npm` installs a local `file:` dependency as a symlink, so edits under
@@ -65,7 +66,9 @@ likes. `npm` installs a local `file:` dependency as a symlink, so edits under
 > unrelated installation. A flat tree solves it; `npm` gives you one. (Measured here,
 > not inferred — this is the failure mode `compose-smoke` would not have shown.)
 
-> **`settings.yaml` may hold API keys.** The `--settings` flag symlinks it in; never
+> **Configuring the lab.** dsh 0.2 has no `settings.yaml`; providers and plugin config
+> are rows in `.lab/home/profiles/web/cordis.patch.yml`. The old `--settings` flag is
+> gone and now exits with an error that says this. That file may hold API keys: never
 > copy it into the repository, never print it, and remember that a lab session with
 > real credentials can spend real money.
 
