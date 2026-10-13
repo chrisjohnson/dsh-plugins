@@ -20,7 +20,7 @@ jobs:
       # No `npm ci`: this repository has no dependencies to install. Everything runs
       # on Node's own modules, which is what lets CI (and a bare clone) work without
       # a registry round-trip.
-      - name: Publish contract
+      - name: Release contract
         run: node scripts/verify.mjs --verbose
       - name: Rules of Hooks gate (browser halves)
         run: node scripts/check-plugin-hooks.mjs
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: node --test packages/*/test/*.test.mjs
+      - run: node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs
 
   compose:
     # The expensive, interesting one: installs each package into a throwaway

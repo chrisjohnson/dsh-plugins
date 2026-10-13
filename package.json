@@ -10,7 +10,7 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",
-    "test": "node --test packages/*/test/*.test.mjs",
-    "check": "node scripts/verify.mjs && node scripts/check-plugin-hooks.mjs && node --test packages/*/test/*.test.mjs"
+    "test": "node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs",
+    "check": "node scripts/verify.mjs && node scripts/check-plugin-hooks.mjs && node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs"
   }
 }

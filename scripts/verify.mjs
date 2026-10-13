@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// The repository's publish gate.
+// The repository's release contract.
 //
-// "Publish" here means "cut a release tag". Nothing from this repository goes
-// to the npm registry: a release is a `<package>-v<version>` git tag on main,
-// and consumers install that tag plus `&path:/packages/<dir>`. The checks
-// below are unchanged by that - a git install reads the same package.json,
-// `files` and `exports` an npm tarball would - and `npm publish` is simply not
-// part of the release flow (see docs/releasing.md).
+// Nothing from this repository goes to the npm registry: a release is a
+// `<package>-v<version>` git tag cut on the merge commit of a release PR, and
+// consumers install that tag plus `&path:/packages/<dir>`. A git install reads
+// the package's own package.json and ships exactly its `files` allowlist, so
+// the packaging checks below are about what that install receives (see
+// docs/releasing.md).
 //
 // WHY THIS EXISTS
 // ---------------
@@ -35,6 +35,7 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expectedSpec, findBareInstall, hasTagInstall } from './lib/install-lines.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PACKAGES = join(ROOT, 'packages');
@@ -55,7 +56,7 @@ const LEAK_PATTERNS = [
 ];
 
 // `entry-r7.mjs`-style files are a dev-time cache-busting trick for a specific
-// deployment (Node caches ES modules by URL). They must never be published:
+// deployment (Node caches ES modules by URL). They must never be released:
 // they pin nothing and confuse everything.
 const RELOAD_SHIM = /-r\d+\.m?js$/;
 
@@ -89,6 +90,31 @@ function sourceFiles(dir) {
 }
 
 /**
+ * The one range every `@deepseek-ai/dsh*` peer (and `engines.dsh`) declares.
+ *
+ * Which prereleases it admits depends on who evaluates it:
+ *
+ * - dsh itself (install and boot) checks with `includePrerelease: true`, so
+ *   every 0.2.x build from 0.2.0-rc.2 on is in, as is every 0.3.0+ build,
+ *   prerelease or not.
+ * - node-semver's default, which is what pnpm/npm use to resolve peers, only
+ *   lets a prerelease through when a comparator carries a prerelease tag on the
+ *   same major.minor.patch tuple. So here the range admits 0.2.0-rc.2 and
+ *   later 0.2.0 prereleases, 0.3.0-* prereleases, and every stable release
+ *   from 0.2.0 on - but not, say, 0.2.1-rc.1 or 0.4.0-rc.1. pnpm reports
+ *   those as peer mismatches even though dsh's own check accepts them.
+ *
+ * dsh skips (or refuses to install) a bundle whose range misses the runtime,
+ * so drift between packages is a plugin that stops loading on one harness
+ * version. Change it here, then in every package.json, in one commit.
+ */
+const DSH_PEER_RANGE = '>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0';
+
+function isHarnessPackage(dep) {
+  return dep === '@deepseek-ai/dsh' || dep.startsWith('@deepseek-ai/dsh-');
+}
+
+/**
  * Does a semver range admit the harness's prerelease builds?
  *
  * node-semver only lets a prerelease satisfy a range when some comparator in
@@ -97,22 +123,6 @@ function sourceFiles(dir) {
  * it looks enormous, and the user finds out with an ERESOLVE at install time.
  * The fix is an explicit branch that puts a prerelease tag on the tuple.
  */
-/**
- * The one range every `@deepseek-ai/dsh*` peer (and `engines.dsh`) declares.
- *
- * The first branch admits the 0.2.x line from its first supported release
- * candidate, prereleases included; the second admits 0.3 and later, prereleases
- * included. dsh >= 0.2 evaluates these ranges itself at install and at boot and
- * skips a bundle whose range misses the runtime, so drift between packages is
- * a plugin that silently stops loading on one harness version. Change it here,
- * then in every package.json, in one commit.
- */
-const DSH_PEER_RANGE = '>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0';
-
-function isHarnessPackage(dep) {
-  return dep === '@deepseek-ai/dsh' || dep.startsWith('@deepseek-ai/dsh-');
-}
-
 function admitsPrereleases(range) {
   if (range === '*' || range === 'latest' || range === '') return true;
   return range.split('||').some((clause) => /-\d*[A-Za-z][0-9A-Za-z.-]*|-\d+(?=[\s<>)|]|$)/.test(clause.trim()));
@@ -152,13 +162,13 @@ function verifyPackage(dir, manifest, rootReadme) {
   }
 
   // ---- package hygiene ----------------------------------------------------
-  if (manifest.private) at('not-private', 'private: true cannot be published');
+  if (manifest.private) at('not-private', 'private: true marks a package as not for release; every package here is released');
   if (!manifest.license) at('license', 'no license field');
   else if (manifest.license !== 'MIT') at('license', `license is ${manifest.license}; this repo is MIT throughout unless deliberately changed`);
-  if (!existsSync(join(dir, 'LICENSE'))) at('license-file', 'no LICENSE file (npm shows the registry copy; ship the real one)');
+  if (!existsSync(join(dir, 'LICENSE'))) at('license-file', 'no LICENSE file in the package directory - a git-tag install ships only this directory, so the repository root LICENSE never reaches the user');
   if (!manifest.repository) at('repository', 'no repository field');
   else if (manifest.repository.directory === undefined) {
-    at('repository-directory', 'repository.directory is unset - the marketplace cannot map this npm package back to its subdirectory');
+    at('repository-directory', 'repository.directory is unset - an installed copy (and the marketplace) cannot map this package back to its subdirectory, which is also the &path: in its install spec');
   }
   if (!manifest.description || manifest.description.length < 40) {
     at('description', 'description is missing or too short to be useful on a marketplace card', WARN);
@@ -192,19 +202,19 @@ function verifyPackage(dir, manifest, rootReadme) {
     at('peer-range', `engines.dsh = "${manifest.engines.dsh}"; keep it equal to the peer range "${DSH_PEER_RANGE}" so storefronts offer the plugin to the same harnesses it installs on`);
   }
 
-  // ---- published contents -------------------------------------------------
+  // ---- what a git-tag install ships ---------------------------------------
   const files = Array.isArray(manifest.files) ? manifest.files : [];
-  if (files.length === 0) at('files', 'no files allowlist - `npm publish` would ship the whole directory');
+  if (files.length === 0) at('files', 'no files allowlist - a git-tag install would ship the whole package directory, tests and notes included');
   if (!files.includes('package.json')) {
-    // npm always includes package.json; only note it under --verbose.
+    // package.json is always included; only note it under --verbose.
     void 0;
   }
   const shipped = sourceFiles(dir).filter((f) => !relative(dir, f).startsWith('test'));
   for (const file of shipped) {
     const rel = relative(dir, file).split(/[\\/]/).join(posix.sep);
-    if (RELOAD_SHIM.test(rel)) at('no-reload-shims', `${rel} is a dev-time module-cache shim; delete it before publishing`);
+    if (RELOAD_SHIM.test(rel)) at('no-reload-shims', `${rel} is a dev-time module-cache shim; delete it before releasing`);
     if (!files.some((glob) => matches(rel, glob))) {
-      at('files-covers-sources', `${rel} is not covered by the files allowlist and will be missing from the tarball`);
+      at('files-covers-sources', `${rel} is not covered by the files allowlist and will be missing from a git-tag install`);
     }
   }
   for (const file of shipped) {
@@ -229,15 +239,14 @@ function verifyPackage(dir, manifest, rootReadme) {
     // Releases are git tags, never npm: the install line must pin this
     // package's tag and subdirectory. A bare-name install resolves from the
     // registry, where an unscoped dsh-* name may belong to somebody else.
-    const spec = `git+https://github.com/chrisjohnson/dsh-plugins.git#${name}-v`;
-    const pathPart = `&path:/packages/${relative(PACKAGES, dir).split(/[\\/]/).join(posix.sep)}`;
-    const installLine = readme.split('\n').some((l) => /dsh\s+plugin[^\n]*\badd\b/.test(l) && l.includes(spec) && l.includes(pathPart));
-    if (!installLine) {
+    const pkgDir = relative(PACKAGES, dir).split(/[\\/]/).join(posix.sep);
+    if (!hasTagInstall(readme, name, pkgDir)) {
+      const { spec, pathPart } = expectedSpec(name, pkgDir);
       at('readme', `package README shows no git-tag install command (expected: dsh plugin --profile <name> add "${spec}<version>${pathPart}")`);
     }
-    const bareInstall = readme.split('\n').find((l) => /^\s*(?:pnpm\s+add|npm\s+(?:install|i)|dsh\s+plugin\b[^\n]*\badd)\s+dsh-[\w-]+\s*$/.test(l));
+    const bareInstall = findBareInstall(readme);
     if (bareInstall !== undefined) {
-      at('readme', `package README installs by bare name ("${bareInstall.trim()}"), which resolves from the npm registry; nothing here is published there - use the git-tag spec`);
+      at('readme', `package README installs by bare name ("${bareInstall.trim()}"), which resolves from the npm registry, not this repository - use the git-tag spec`);
     }
     if (!/^##\s+.*Config/im.test(readme)) at('readme', 'package README has no Configuration section', WARN);
     if (!rootReadme.includes(name)) at('index', `${name} is not listed in the root README index`);
