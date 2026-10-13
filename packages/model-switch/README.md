@@ -65,8 +65,8 @@ Set these on the row in your own profile patch (`config:` block), or via your de
 | `fitRatio` | `0.8` | Fraction of a destination window treated as usable. It is dsh-compaction-basic's own default compaction point, so the guard agrees with what the harness would do anyway. |
 | `summaryReserveTokens` | `10000` | Room left for the summary checkpoint compaction writes. |
 | `autoCompact` | `true` | When `false`, the guard never compacts on its own: a too-big switch is refused with the `/compact` instruction instead. |
-| `maxRegionAttempts` | `8` | Bounded retries when a chosen compaction boundary is rejected by the service. Rarely worth changing. |
-| `maxCompactionAttempts` | `3` | Outer attempts: if one compaction did not free enough, shrink the retained tail and try again. Rarely worth changing. |
+
+Compaction retries are fixed internal limits (8 boundary attempts, 3 outer attempts), not configuration.
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). It is stricter than most plugins on purpose: a misspelled key, a YAML `"0.8"`, or an escalation provider with no model each print one warning at boot, because a misconfiguration you see once is worth much less debugging than one you discover at the first switch.
 

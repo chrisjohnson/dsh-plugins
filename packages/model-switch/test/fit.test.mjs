@@ -55,24 +55,24 @@ test('classify: "does not fit" splits into advisory and hard failure', () => {
 })
 
 test('decideFit: no measurement or no declared window never blocks the switch', async () => {
-  const noTokens = await decideFit({ tokens: undefined, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  const noTokens = await decideFit({ tokens: undefined, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
   assert.equal(noTokens.action, 'allow')
   assert.match(noTokens.note, /skipped/)
 
-  const noWindow = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: undefined, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  const noWindow = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => undefined, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
   assert.equal(noWindow.action, 'allow')
   assert.match(noWindow.note, /no declared context window/)
 })
 
 test('decideFit: a route that can already hold the conversation is a plain allow', async () => {
-  const decision = await decideFit({ tokens: 50000, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  const decision = await decideFit({ tokens: 50000, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
   assert.deepEqual(decision, { action: 'allow', tokens: 50000, window: LOCAL })
 })
 
 test('decideFit: the incident case is refused with numbers and a way out', async () => {
   // 421k of conversation, currently on a 262k route, asked to move to another
   // small route. Nothing can compact it from here.
-  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => LOCAL, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'local/current' })
+  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => LOCAL, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'local/current' })
   assert.equal(decision.action, 'refuse')
   assert.match(decision.reason, /420948 tokens/)
   assert.match(decision.reason, /must read[\s\S]*summarize/)
@@ -80,13 +80,13 @@ test('decideFit: the incident case is refused with numbers and a way out', async
 })
 
 test('decideFit: an undeclared current window is treated as cannot-read', async () => {
-  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => undefined, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'unknown' })
+  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => undefined, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'unknown' })
   assert.equal(decision.action, 'refuse')
   assert.match(decision.reason, /no declared window/)
 })
 
 test('decideFit: a compactable move asks for compaction with the right budget', async () => {
-  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'cloud/big' })
+  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => BIG, autoCompact: true, dest: { provider: 'local', model: 'small' }, routedLabel: 'cloud/big' })
   assert.equal(decision.action, 'compact')
   assert.equal(decision.budget, budgetFor(LOCAL, 0.8))
   assert.ok(decision.budget < STRANDED, 'the budget must be below current pressure or compaction is a no-op')
@@ -96,25 +96,33 @@ test('decideFit: between the margin and the full current window the tool path re
   // The switch tool keeps the fit margin for "can the current route compact
   // this"; only the interactive repair uses the full window (canRead).
   const tokens = Math.floor(LOCAL * 0.85)
-  const decision = await decideFit({ tokens, fitRatio: 0.8, destWindow: 65536, currentWindow: () => LOCAL, autoCompact: true, dest: { provider: 'local', model: 'tiny' }, routedLabel: 'local/mid' })
+  const decision = await decideFit({ tokens, fitRatio: 0.8, destWindow: () => 65536, currentWindow: () => LOCAL, autoCompact: true, dest: { provider: 'local', model: 'tiny' }, routedLabel: 'local/mid' })
   assert.equal(decision.action, 'refuse')
   assert.match(decision.reason, /cannot be compacted from the current route/)
   assert.equal(canCompactFrom(tokens, LOCAL, 0.8), false)
   assert.equal(canCompactFrom(Math.floor(LOCAL * 0.79), LOCAL, 0.8), true)
 })
 
+test('decideFit: no measurement does no window lookup at all', async () => {
+  let lookups = 0
+  const count = () => { lookups += 1; return LOCAL }
+  const decision = await decideFit({ tokens: undefined, fitRatio: 0.8, destWindow: count, currentWindow: count, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  assert.equal(decision.action, 'allow')
+  assert.equal(lookups, 0)
+})
+
 test('decideFit: the current window is only looked up when the destination does not fit', async () => {
   let lookups = 0
   const current = () => { lookups += 1; return BIG }
-  await decideFit({ tokens: 50000, fitRatio: 0.8, destWindow: LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
-  await decideFit({ tokens: undefined, fitRatio: 0.8, destWindow: LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  await decideFit({ tokens: 50000, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  await decideFit({ tokens: undefined, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
   assert.equal(lookups, 0)
-  await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
+  await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: current, autoCompact: true, dest: { provider: 'p', model: 'm' }, routedLabel: 'p/old' })
   assert.equal(lookups, 1)
 })
 
 test('decideFit: autoCompact false turns compact into a refusal that names /compact', async () => {
-  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: LOCAL, currentWindow: () => BIG, autoCompact: false, dest: { provider: 'local', model: 'small' }, routedLabel: 'cloud/big' })
+  const decision = await decideFit({ tokens: STRANDED, fitRatio: 0.8, destWindow: () => LOCAL, currentWindow: () => BIG, autoCompact: false, dest: { provider: 'local', model: 'small' }, routedLabel: 'cloud/big' })
   assert.equal(decision.action, 'refuse')
   assert.match(decision.reason, /autoCompact: false/)
   assert.match(decision.reason, /compact with \/compact first/)

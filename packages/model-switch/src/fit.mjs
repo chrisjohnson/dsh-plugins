@@ -137,7 +137,9 @@ export function pickSuggestion(routes, tokens, config, exclude) {
  * @param {object} input
  * @param {number|undefined} input.tokens        measured request-and-response pressure
  * @param {number} input.fitRatio                configured headroom fraction
- * @param {number|undefined} input.destWindow    declared window of the route being moved to
+ * @param {() => (number|undefined|Promise<number|undefined>)} input.destWindow
+ *        resolves the declared window of the route being moved to; not called
+ *        when there is no measurement to judge
  * @param {() => (number|undefined|Promise<number|undefined>)} input.currentWindow
  *        resolves the declared window of the route being left; called only when
  *        the destination does not fit, so a plain allow costs no extra lookup
@@ -152,7 +154,8 @@ export async function decideFit({ tokens, fitRatio, destWindow, currentWindow, a
   if (typeof tokens !== 'number') {
     return { action: 'allow', note: 'no token measurement available; the fit check was skipped' };
   }
-  const window = budgetFor(destWindow, fitRatio) === undefined ? undefined : destWindow;
+  const resolvedDest = await destWindow();
+  const window = budgetFor(resolvedDest, fitRatio) === undefined ? undefined : resolvedDest;
   if (window === undefined) {
     return { action: 'allow', note: `no declared context window for ${routeLabel(dest)}; the fit check was skipped`, tokens };
   }

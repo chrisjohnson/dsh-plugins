@@ -139,3 +139,9 @@ test('a selectModel failure lists the available routes', async () => {
   assert.match(result.error, /model switch failed: unknown route/)
   assert.match(result.error, /Available routes: cloud\/big/)
 })
+
+test('no token measurement performs no window lookups', async () => {
+  const h = harness({ tokens: undefined, windows: WINDOWS })
+  await guardRouteChange(h.deps, h.agent, 'local', 'small', CONFIG)
+  assert.deepEqual(h.calls.windowLookups, [])
+})

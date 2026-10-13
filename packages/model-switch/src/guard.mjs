@@ -49,7 +49,7 @@ export async function guardRouteChange(deps, agent, provider, model, config, sig
   const decision = await decideFit({
     tokens: deps.readPressure(agent, agent.session)?.totalTokens,
     fitRatio: config.fitRatio,
-    destWindow: await deps.resolveWindow(agent, provider, model, signal),
+    destWindow: () => deps.resolveWindow(agent, provider, model, signal),
     currentWindow: () => deps.resolveWindow(agent, routed?.provider, routed?.model, signal),
     autoCompact: config.autoCompact,
     dest,
