@@ -42,7 +42,7 @@ Set these on the plugin's row in your own profile patch (`config:` block). **A t
 | --- | --- | --- |
 | `cooldownMs` | `60000` | Minimum time between kicks for the same session. |
 | `liveKickDelayMs` | `3000` | Delay between a live turn end and the tail re-analysis. Lets a fast manual recovery land first. |
-| `maxConsecutiveKicks` | `5` | Runaway guard: after this many kicks with no completed turn and no genuine user message in between, the plugin stops kicking that session and logs an error. `0` disables kicking entirely. |
+| `maxConsecutiveKicks` | `5` | Runaway guard: after this many kicks with no completed turn and no genuine user message in between, the plugin stops kicking that session and logs an error. `0` disables kicking entirely, quietly (the `kickOn*` flags are the finer-grained off switches). |
 | `kickOnInterrupted` | `true` | Kick crash-orphaned turns. |
 | `kickOnMaxTokens` | `true` | Kick output-token-limit halts. |
 | `kickOnEmptyCompletion` | `true` | Kick reasoning-only completed turns. |
@@ -53,6 +53,8 @@ Set these on the plugin's row in your own profile patch (`config:` block). **A t
 | `emptyCompletionKickText` | built in | Text sent for a reasoning-only empty stop. |
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). An unknown key, a string where a number belongs, or an empty text prints one warning at boot and falls back to the default.
+
+Example row (the default for `maxConsecutiveKicks` is 5; 3 here is just an example):
 
 ```yaml
 - id: continue-kicker

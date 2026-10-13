@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { analyzeTail, decide, PLUGIN_SOURCE_KIND } from '../src/decide.mjs'
+import { analyzeTail, boundSummary, decide, PLUGIN_SOURCE_KIND } from '../src/decide.mjs'
 import { DEFAULT_CONFIG } from '../src/config.mjs'
 
 const settings = { ...DEFAULT_CONFIG, cooldownMs: 0, maxConsecutiveKicks: 3 }
@@ -123,6 +123,21 @@ test('cooldown, per-kind switches and subagent scope are honoured', () => {
   assert.equal(decide({ ...base, events, settings: { ...settings, kickOnMaxTokens: false } }).action, 'skip')
   assert.equal(decide({ ...base, events, isSubagent: true }).action, 'skip')
   assert.equal(decide({ ...base, events, isSubagent: true, settings: { ...settings, includeSubagents: true } }).action, 'kick')
+})
+
+test('maxConsecutiveKicks 0 skips quietly instead of raising the runaway error', () => {
+  const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxConsecutiveKicks: 0 } })
+  assert.equal(d.action, 'skip')
+  assert.match(d.why, /disabled/)
+})
+
+test('summaries are bounded to 120 characters', () => {
+  assert.equal(boundSummary('short'), 'short')
+  const long = boundSummary('x'.repeat(300))
+  assert.equal(long.length, 120)
+  assert.ok(long.endsWith('…'))
+  const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxConsecutiveKicks: 10 ** 120 } })
+  assert.ok(d.summary.length <= 120)
 })
 
 test('a configured kick text replaces the built-in one', () => {

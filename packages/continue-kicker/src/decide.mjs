@@ -126,9 +126,16 @@ function kickText(flavor, settings) {
   return settings.interruptedKickText
 }
 
+/** Longest one-line notice summary V4 accepts without ellipsizing. */
+export const SUMMARY_MAX_CHARS = 120
+
+export function boundSummary(summary) {
+  return summary.length > SUMMARY_MAX_CHARS ? `${summary.slice(0, SUMMARY_MAX_CHARS - 1)}…` : summary
+}
+
 function kickSummary(flavor, count, max) {
-  if (flavor === 'max-tokens') return `Auto-resumed after a max-tokens halt (${count}/${max})`
-  if (flavor === 'empty-completion') return `Auto-resumed after a reasoning-only completion with no answer (${count}/${max})`
+  if (flavor === 'max-tokens') return boundSummary(`Auto-resumed after a max-tokens halt (${count}/${max})`)
+  if (flavor === 'empty-completion') return boundSummary(`Auto-resumed after a reasoning-only completion with no answer (${count}/${max})`)
   return 'Auto-resumed after an interrupted turn'
 }
 
@@ -159,6 +166,9 @@ export function decide({ events, settings, consecutive, lastKickAt, now, isSubag
   if (verdict.action !== 'kick') return { action: 'skip', why: verdict.why, consecutive: count }
 
   const { flavor } = verdict
+  if (settings.maxConsecutiveKicks === 0) {
+    return { action: 'skip', why: 'kicking disabled (maxConsecutiveKicks=0)', consecutive: count }
+  }
   if (count >= settings.maxConsecutiveKicks) {
     return {
       action: 'stop',
