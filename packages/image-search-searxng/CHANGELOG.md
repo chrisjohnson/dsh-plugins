@@ -6,13 +6,24 @@ All notable changes to this plugin are documented here. The format follows
 
 ## Unreleased
 
+## 0.2.0
+
 ### Changed
 
 - Requires dsh 0.2.0-rc.2 or later: `engines.dsh` and the `@deepseek-ai/dsh-tools`
   peer are now `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`. dsh 0.2 checks bundle peer
   ranges at boot, so the range now states the line this is actually tested against.
+  No code change was needed for 0.2: the tool definition, its output schema and its
+  single `text` result block were checked against 0.2.0-rc.2's `dsh-tools`, and the
+  plugin writes no session messages of its own, so the V4 session format's
+  `source.kind` rule does not apply to it.
 - Installed from a git tag (`dsh-image-search-searxng-v<version>`), not the npm
   registry — see the README's Install section.
+
+### Fixed
+
+- The SearXNG request's `User-Agent` reported `0.1.0` regardless of the installed
+  version; it now matches `package.json`, enforced by a test.
 
 ## 0.1.0
 

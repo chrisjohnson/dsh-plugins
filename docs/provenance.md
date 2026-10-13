@@ -28,7 +28,7 @@ layout is `packages/<name>` only.
 | --- | --- | --- |
 | `dsh-model-switch` | `plugins/model-switch/` | Behaviour changes at extraction are listed in its `CHANGELOG.md` under 0.1.0 (notably: no built-in escalation/reader routes). |
 | `dsh-image-search-searxng` | `plugins/image-search-searxng.mjs` | Split into a pure `src/searxng.mjs` plus wiring; tool output is byte-compatible with the original. |
-| `dsh-continue-kicker` | `plugins/continue-kicker.mjs` | Not yet packaged. |
+| `dsh-continue-kicker` | `plugins/continue-kicker.mjs` | Split into pure `src/decide.mjs` and `src/config.mjs` plus wiring. Behaviour changes at extraction (V4 source kind, genuine-user detection, `tool-call` block type) are listed in its `CHANGELOG.md` under 0.1.0. |
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker.mjs` (the watchdog, behind its `-rN` shim) and `plugins/semantic-loop-evals/` (the evals panel) | One package. Deployment paths, the model endpoint and the API-key variable became configuration; the panel is an optional `dsh-better-sidebar` integration. Behaviour changes are in its `CHANGELOG.md` under 0.1.0. |
 | `dsh-better-git-worktree` | `plugins/dsh-better-git-worktree/` | Not yet packaged. Its `client.js` is *generated* by inlining an official package via string seams and it disables a core row; releasing it means either upstreaming or rebuilding that half. See the `NOTICE` file in the old directory. |
 | `dsh-semantic-loop-evals` | `plugins/semantic-loop-evals/` | Merged into `dsh-loop-watchdog`; there is no separate package. |

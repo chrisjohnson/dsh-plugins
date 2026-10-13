@@ -12,7 +12,8 @@ export const PLUGIN_NAME = 'image-search-searxng';
 export const DEFAULT_BASE_URL = 'http://localhost:8888'; // verify-allow: no-deployment-leaks
 export const DEFAULT_MAX_RESULTS = 8;
 export const MAX_RESULTS_CEILING = 30;
-export const USER_AGENT = 'dsh-image-search-searxng/0.1.0';
+// Kept equal to package.json's version by a test; bump both together.
+export const USER_AGENT = 'dsh-image-search-searxng/0.2.0';
 
 /**
  * Resolve effective configuration.
