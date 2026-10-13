@@ -66,7 +66,7 @@ Set these on the row in your own profile patch (`config:` block), or via your de
 | `summaryReserveTokens` | `10000` | Room left for the summary checkpoint compaction writes. |
 | `autoCompact` | `true` | When `false`, the guard never compacts on its own: a too-big switch is refused with the `/compact` instruction instead. |
 
-Compaction retries are fixed internal limits (8 boundary attempts, 3 outer attempts), not configuration.
+Compaction retries are fixed internal limits, not configuration (`maxRegionAttempts` is 8 and `maxCompactionAttempts` is 3; setting either in the row is ignored with an unknown-key warning).
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). It is stricter than most plugins on purpose: a misspelled key, a YAML `"0.8"`, or an escalation provider with no model each print one warning at boot, because a misconfiguration you see once is worth much less debugging than one you discover at the first switch.
 
