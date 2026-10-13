@@ -32,7 +32,7 @@ layout is `packages/<name>` only.
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker*.mjs` | Not yet packaged. Needs the deployment's paths and `watchdog-mode.json` replaced with configuration first. |
 | `dsh-better-git-worktree` | `plugins/dsh-better-git-worktree/` | Not yet packaged. Its `client.js` is *generated* by inlining an official package via string seams and it disables a core row; releasing it means either upstreaming or rebuilding that half. See the `NOTICE` file in the old directory. |
 | `dsh-semantic-loop-evals` | `plugins/semantic-loop-evals/` | Not yet packaged. Hard-`inject`s another plugin's client module, which has to become an optional integration. |
-| `dsh-scheduled-queue` | `plugins/scheduled-queue/` | Not yet packaged. Disabled upstream and has no per-session scoping. |
+| `dsh-scheduled-queue` | `plugins/scheduled-queue/` | Split into pure `src/queue.mjs` and `src/config.mjs` plus host and browser halves. Behaviour changes at extraction (per-session dock, delivery through `sessionController.prompt`) are listed in its `CHANGELOG.md` under 0.1.0. |
 
 ## Why some of them are still waiting
 

@@ -26,6 +26,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | --- | --- | --- |
 | **[dsh-model-switch](./packages/model-switch/)** | Let the agent switch its own model mid-session, with a context-window fit guard so neither it nor a human in the composer can strand a conversation on a model too small to read it. | `packages/model-switch` |
 | **[dsh-image-search-searxng](./packages/image-search-searxng/)** | A model-facing `image_search` tool over your own SearXNG, rendered inline in the Web GUI. | `packages/image-search-searxng` |
+| **[dsh-scheduled-queue](./packages/scheduled-queue/)** | Schedule the composer's draft to be sent to its own session later, with a per-session dock to edit, cancel or send now. Runs alongside the official schedule bundle. | `packages/scheduled-queue` |
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.
 
