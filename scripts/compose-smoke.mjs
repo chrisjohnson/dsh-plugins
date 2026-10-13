@@ -133,10 +133,13 @@ for (const dir of packages) {
   const composed = run(['--profile', 'web', '--dump-config'], 'dump-config');
   if (composed === null) continue;
 
-  // 0. the harness did not skip the bundle. dsh >= 0.2 checks every bundle's
-  //    @deepseek-ai/dsh* peer ranges when it loads a profile and drops a
-  //    mismatched one with a single stderr line, so a peer range that drifted
-  //    out of the runtime's line shows up here rather than as an install error.
+  // 0. the harness did not skip the bundle. A peer range that misses the
+  //    runtime does not get this far on dsh 0.2: `plugin add` rejects the
+  //    install outright (exit 1, caught above). What reaches this check is a
+  //    bundle dsh skips while loading the profile - one whose package became
+  //    unreadable or incompatible after it was installed, e.g. a manifest edited
+  //    or a harness changed underneath it - which dsh reports with a single
+  //    `skipping profile bundle "<name>"` stderr line.
   const notSkipped = !composed.includes(`skipping profile bundle ${JSON.stringify(name)}`);
   // 1. the bundle became a layer of its own, attributed to this package
   const layer = new RegExp(`^# == ${name}$`, 'm').test(composed);
@@ -167,6 +170,8 @@ for (const dir of packages) {
   if (!keep) rmSync(home, { recursive: true, force: true });
 }
 
-console.log(`\ncompose-smoke: ${packages.length - (failures > 0 ? 1 : 0)}/${packages.length} package(s) composed` +
+// Every failure path above counts once and moves on to the next package, so
+// `failures` is the number of packages that failed.
+console.log(`\ncompose-smoke: ${packages.length - failures}/${packages.length} package(s) composed` +
   (failures ? ` — ${failures} failure(s)` : ''));
 process.exit(failures ? 1 : 0);

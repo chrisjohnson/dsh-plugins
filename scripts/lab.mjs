@@ -24,9 +24,10 @@
 // Usage:
 //   node scripts/lab.mjs up                 # install (or refresh) + boot on :3099
 //   node scripts/lab.mjs up --port 3123     # different port
-//   node scripts/lab.mjs install           # install/refresh without booting
-//   node scripts/lab.mjs down               # nothing to stop; alias for reset-clean
+//   node scripts/lab.mjs install            # install/refresh without booting
 //   node scripts/lab.mjs clean              # delete .lab/install and .lab/home
+//
+// There is no `down`: `up` runs in the foreground, so Ctrl-C stops it.
 //
 // Providers and plugin config: dsh >= 0.2 has no settings.yaml. Configure the
 // lab by adding rows to .lab/home/profiles/web/cordis.patch.yml (it may hold
