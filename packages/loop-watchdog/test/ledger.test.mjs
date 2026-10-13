@@ -87,3 +87,21 @@ test('a missing ledger is an empty result carrying the reason', () => {
   assert.equal(res.value.error, 'ledger-missing')
   assert.deepEqual(res.value.records, [])
 })
+
+test('historical PROGRESS rows banded stuck/watch read as noise, and are not counted stuck anywhere', () => {
+  const progress = { v: 2, ts: '2026-10-02T10:00:00Z', sessionId: 's3', skip: null, source: 'llm', verdict: 'PROGRESS', confidence: 95, band: 'stuck', streak: 1, window: 'w' }
+  const watch = { ...progress, ts: '2026-10-02T10:01:00Z', confidence: 75, band: 'watch' }
+  const loop = { ...progress, ts: '2026-10-02T10:02:00Z', verdict: 'LOOP', confidence: 95, band: 'stuck' }
+  const rec = normalize(progress, 0)
+  assert.equal(rec.band, 'noise')
+  assert.equal(rec.rawBand, 'stuck')
+  assert.equal(normalize(watch, 1).band, 'noise')
+  assert.equal(normalize(loop, 2).band, 'stuck', 'a LOOP keeps its band')
+  assert.equal(normalize(v1Llm, 0).band, 'noise')
+
+  const led = { ...parseLedger([progress, watch, loop].map((r) => JSON.stringify(r)).join('\n')), error: null }
+  const res = answer('list', {}, led, '/l').value
+  assert.equal(res.stats.stuck, 1)
+  assert.equal(res.sessions[0].stuck, 1)
+  assert.deepEqual(res.records.map((r) => r.band), ['noise', 'noise', 'stuck'])
+})

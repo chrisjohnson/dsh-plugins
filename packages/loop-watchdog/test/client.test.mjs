@@ -30,10 +30,11 @@ test('the module declares itself under the package name and needs only betterSid
   assert.deepEqual(exports.inject, ['betterSidebar'])
 })
 
-test('with better-sidebar present, it registers one tab and returns the disposer through ctx.effect', () => {
+test('with better-sidebar present, it registers one tab and returns a disposer through ctx.effect', () => {
   const { exports, styles } = loadClient()
   const registered = []
-  const disposer = () => {}
+  let disposed = 0
+  const disposer = () => disposed++
   const effects = []
   exports.apply({
     betterSidebar: { registerTab: (d) => (registered.push(d), disposer) },
@@ -41,13 +42,15 @@ test('with better-sidebar present, it registers one tab and returns the disposer
   })
   assert.equal(registered.length, 0, 'registration is deferred to the effect')
   assert.equal(effects.length, 1)
-  assert.equal(effects[0][0](), disposer)
+  const dispose = effects[0][0]()
   assert.equal(registered.length, 1)
   const tab = registered[0]
   assert.equal(tab.id, 'loop-watchdog:evals')
   assert.equal(typeof tab.component, 'function')
   assert.equal(typeof tab.title, 'string')
   assert.equal(styles.length, 1, 'styles are injected once')
+  dispose()
+  assert.equal(disposed, 1, 'the tab registration is disposed')
 })
 
 test('without registerTab (or without the service) it mounts nothing and does not throw', () => {

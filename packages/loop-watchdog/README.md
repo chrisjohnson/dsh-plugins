@@ -44,8 +44,8 @@ Set these on the row in your own profile patch (`config:` block). **A patch laye
 | `llmApiKeyEnv` | *unset* | The **name** of the environment variable that holds the API key — never the key. Read at call time. Unset, or an empty variable, sends no `Authorization` header (the boot log warns for the empty case). |
 | `llmExtraBody` | `{}` | Extra fields merged under the request body, for a backend-specific switch — for example `chat_template_kwargs: {enable_thinking: false}` to stop a thinking model reasoning before a one-line answer. The fixed fields (`model`, `max_tokens`, `temperature: 0`, `messages`) win. |
 | `llmMaxTokens` | `128` | Completion budget for the one-line verdict. |
-| `ledgerFile` | `$DSH_HOME/storages/loop-watchdog/evaluations.jsonl` | The [evaluation ledger](#the-ledger). Always written. |
-| `modeFile` | `$DSH_HOME/storages/loop-watchdog/mode.json` | The runtime act/log override. This plugin only reads it. |
+| `ledgerFile` | `$DSH_HOME/storages/loop-watchdog/evaluations.jsonl` | The [evaluation ledger](#the-ledger). Always written. A relative value resolves against `$DSH_HOME`. |
+| `modeFile` | `$DSH_HOME/storages/loop-watchdog/mode.json` | The runtime act/log override. This plugin only reads it. A relative value resolves against `$DSH_HOME`. |
 | `cooldownMs` | `30000` | Minimum gap between two evaluations of one session. |
 | `maxTranscriptLines` | `6` | Substantive events shown to the model (and recorded in the ledger window). |
 | `fpWindowEvents` | `60` | Raw events the repetition check scans (~15 tool calls). |
@@ -53,13 +53,13 @@ Set these on the row in your own profile patch (`config:` block). **A patch laye
 | `busyYieldMs` | `15000` | After a model call slower than this, the next model check is skipped so the watchdog does not compete with the session it supervises. |
 | `bandStuck` / `bandWatch` | `90` / `70` | Confidence thresholds for the `stuck` (actionable) and `watch` bands, for a `LOOP` verdict. Anything lower, or any `PROGRESS` verdict, is `noise`. |
 | `includeSubagents` | `false` | Subagent sessions are skipped unless this is `true`. |
-| `logFile` | `true` | Write the verbose stage trail to `logFilePath`. |
-| `logFilePath` | `$DSH_HOME/storages/loop-watchdog/watchdog.log` | Where that trail goes. |
+| `logFile` | `true` | Write the verbose stage trail to `logFilePath`. **The trail includes the transcript window sent to the model, so tool output and file contents land in that file by default**; set `false` if the log directory is not as private as the session. |
+| `logFilePath` | `$DSH_HOME/storages/loop-watchdog/watchdog.log` | Where that trail goes. Relative values resolve against `$DSH_HOME`. |
 | `logConsole` | `false` | Also print the trail to stdout (the journal under systemd). Off because it fires on every step of every session. |
 | `logDsh` | `false` | Send the trail to dsh's own logger. |
 | `logDshErrors` | `true` | Keep genuine errors on dsh's logger even when `logDsh` is off. |
 
-`$DSH_HOME` is the environment variable when set (blank counts as unset), else `~/.dsh`. Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs); a misspelled key, a YAML `"30000"`, a base URL that is not http(s), or a model with no endpoint each print one warning at boot.
+`$DSH_HOME` is the environment variable when set (blank counts as unset), else `~/.dsh`, resolved the way the harness resolves it (a leading `~` expands). Every path key accepts an absolute path (used verbatim), a `~` path, or a path **relative to `$DSH_HOME`** — never relative to the working directory. `watchdogTimeoutMs` and `llmMaxTokens` must be above zero. A `llmBaseUrl` with a query string warns, and the logged endpoint never carries credentials or a query. Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs); a misspelled key, a YAML `"30000"`, a base URL that is not http(s), or a model with no endpoint each print one warning at boot.
 
 Example, on a deployment with a local OpenAI-compatible gateway:
 
@@ -84,7 +84,18 @@ Every evaluation appends one JSON line to `ledgerFile` (schema `v: 2`), carrying
 - `model` — the model's verdict, present only when the first layer was inconclusive and the model was consulted;
 - `verdict`, `confidence`, `band`, `streak`, `mode`, `outcome` (`logged`, `intervened`, `intervene-error`, `skipped`), the matched `fingerprints`, latency, and the exact transcript `window` that was judged.
 
-Steps deliberately not evaluated are recorded too, but **only the first of a stretch**, so the ledger does not gain a row every few seconds: `no-signal` (fewer than two substantive events), `cooldown`, `busy` (the previous model check was slow), and `no-llm` (nothing left to ask). A real evaluation ends the stretch.
+Steps deliberately not evaluated are recorded too, but **only the first of a stretch** (a stretch of a different kind in between, such as a cooldown, starts a new one), so the ledger does not gain a row every few seconds: `no-signal` (fewer than two substantive events), `cooldown`, `busy` (the previous model check was slow), and `no-llm` (nothing left to ask). A real evaluation ends the stretch.
+
+### Existing history: pointing at the old locations
+
+The defaults above are this package's own directory. A deployment that already ran the original in-tree watchdog has history and a mode toggle elsewhere, and **without the mapping the watchdog starts a new empty ledger and ignores the old toggle**. Either set the keys (relative to `$DSH_HOME`):
+
+```yaml
+    ledgerFile: storages/semantic-loop-kicker/evaluations.jsonl
+    modeFile: profiles/web/watchdog-mode.json
+```
+
+or move the old data once — `mv $DSH_HOME/storages/semantic-loop-kicker $DSH_HOME/storages/loop-watchdog` (the file inside keeps its name, `evaluations.jsonl`) — and leave the keys unset. Remove the old in-tree rows in the same change: two watchers appending to one ledger would double every record.
 
 The file is the interface. Anything may read it; the evals panel is one reader. Older `v: 1` (decisions-only) lines stay readable: the reader normalises them into the current shape. The watchdog never rotates or truncates it.
 

@@ -15,7 +15,7 @@
 //      time.
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 export const DEFAULT_CONFIG = {
   // Minimum gap between two evaluations of one session.
@@ -69,16 +69,35 @@ const NUMBER_KEYS = [
   'llmMaxTokens',
 ]
 
+const POSITIVE_KEYS = ['watchdogTimeoutMs', 'llmMaxTokens']
+
 const BOOLEAN_KEYS = ['includeSubagents', 'interventionEnabled', 'logConsole', 'logFile', 'logDsh', 'logDshErrors']
 
+/** Expand a leading `~`, `~/` or `~\\` against the OS home, as the harness does. */
+function expandHome(path, home) {
+  if (path === '~') return home
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(home, path.slice(2))
+  return path
+}
+
 /**
- * The dsh home directory: `$DSH_HOME` when set (blank counts as unset), else
- * `~/.dsh`. This mirrors the harness's own resolution so the defaults below land
- * beside the rest of the profile's runtime state.
+ * The dsh home directory, resolved the way the harness's own `resolveDshHome`
+ * does: `$DSH_HOME` when it has non-blank content, else `~/.dsh`; a leading `~`
+ * is expanded and the result is made absolute.
  */
 export function dshHome(env = process.env, home = homedir()) {
-  const fromEnv = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : ''
-  return fromEnv.length > 0 ? fromEnv : join(home, '.dsh')
+  const fromEnv = env.DSH_HOME
+  const chosen = fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : join(home, '.dsh')
+  return resolve(expandHome(chosen, home))
+}
+
+/**
+ * A configured path: absolute values are used verbatim, `~` is expanded, and a
+ * relative value resolves against the dsh home (never the working directory),
+ * so one row can name a file the same way on every machine.
+ */
+export function resolveConfiguredPath(value, env, home = homedir()) {
+  return resolve(dshHome(env, home), expandHome(value, home))
 }
 
 /** Directory the plugin owns under `$DSH_HOME/storages`. */
@@ -97,6 +116,20 @@ export function chatCompletionsUrl(baseUrl) {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
   return `${baseUrl.trim().replace(/\/+$/, '')}/chat/completions`
+}
+
+/** The endpoint with credentials, query and fragment stripped, safe to log. */
+export function displayUrl(url) {
+  try {
+    const u = new URL(url)
+    u.username = ''
+    u.password = ''
+    u.search = ''
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return '(invalid url)'
+  }
 }
 
 function nonEmptyString(value) {
@@ -124,10 +157,10 @@ export function resolveSettings(config = {}, options = {}) {
   for (const key of NUMBER_KEYS) {
     const value = config[key]
     if (value === undefined) continue
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    if (typeof value === 'number' && Number.isFinite(value) && (POSITIVE_KEYS.includes(key) ? value > 0 : value >= 0)) {
       settings[key] = value
     } else {
-      warnings.push(`${key} ${JSON.stringify(value)} is not a non-negative number; using the default ${DEFAULT_CONFIG[key]}`)
+      warnings.push(`${key} ${JSON.stringify(value)} is not a valid number (non-negative; above 0 for watchdogTimeoutMs and llmMaxTokens); using the default ${DEFAULT_CONFIG[key]}`)
     }
   }
   for (const key of BOOLEAN_KEYS) {
@@ -144,9 +177,10 @@ export function resolveSettings(config = {}, options = {}) {
   }
 
   const dir = storageDir(env, home)
-  settings.ledgerFile = nonEmptyString(config.ledgerFile) ?? join(dir, 'evaluations.jsonl')
-  settings.modeFile = nonEmptyString(config.modeFile) ?? join(dir, 'mode.json')
-  settings.logFilePath = nonEmptyString(config.logFilePath) ?? join(dir, 'watchdog.log')
+  const place = (value, fallback) => (nonEmptyString(value) ? resolveConfiguredPath(nonEmptyString(value), env, home) : fallback)
+  settings.ledgerFile = place(config.ledgerFile, join(dir, 'evaluations.jsonl'))
+  settings.modeFile = place(config.modeFile, join(dir, 'mode.json'))
+  settings.logFilePath = place(config.logFilePath, join(dir, 'watchdog.log'))
 
   // --- the model that adjudicates windows the repetition check cannot settle ---
   const baseUrl = nonEmptyString(config.llmBaseUrl)
@@ -154,6 +188,9 @@ export function resolveSettings(config = {}, options = {}) {
   const url = chatCompletionsUrl(baseUrl)
   if (baseUrl !== undefined && url === undefined) {
     warnings.push(`llmBaseUrl ${JSON.stringify(config.llmBaseUrl)} is not an http(s) URL and is treated as unset`)
+  }
+  if (url !== undefined && /[?#]/.test(baseUrl)) {
+    warnings.push('llmBaseUrl contains a query string or fragment, and "/chat/completions" is appended after it, which is almost certainly not what you want')
   }
   if ((url !== undefined) !== (model !== undefined)) {
     if (url !== undefined) warnings.push('llmBaseUrl is set but llmModel is not; model adjudication stays off')
@@ -171,7 +208,7 @@ export function resolveSettings(config = {}, options = {}) {
 
   let llm
   if (url !== undefined && model !== undefined) {
-    llm = { url, model, apiKeyEnv, extraBody, maxTokens: settings.llmMaxTokens }
+    llm = { url, displayUrl: displayUrl(url), model, apiKeyEnv, extraBody, maxTokens: settings.llmMaxTokens }
     if (apiKeyEnv !== undefined && !nonEmptyString(env[apiKeyEnv])) {
       warnings.push(`llmApiKeyEnv names ${apiKeyEnv}, which is empty in this environment; requests are sent without an Authorization header`)
     }

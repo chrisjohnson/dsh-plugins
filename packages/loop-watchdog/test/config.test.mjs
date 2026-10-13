@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 
-import { DEFAULT_CONFIG, chatCompletionsUrl, dshHome, resolveSettings } from '../src/config.mjs'
+import { DEFAULT_CONFIG, chatCompletionsUrl, displayUrl, dshHome, resolveSettings } from '../src/config.mjs'
 
 const env = { DSH_HOME: '/srv/dsh' }
 const resolve = (config, e = env) => resolveSettings(config, { env: e, home: '/home/nobody' })
@@ -31,7 +31,9 @@ test('default paths live under $DSH_HOME/storages/loop-watchdog', () => {
 test('DSH_HOME falls back to ~/.dsh, and a blank value counts as unset', () => {
   assert.equal(dshHome({}, '/home/u'), join('/home/u', '.dsh'))
   assert.equal(dshHome({ DSH_HOME: '   ' }, '/home/u'), join('/home/u', '.dsh'))
-  assert.equal(dshHome({ DSH_HOME: ' /x ' }, '/home/u'), '/x')
+  assert.equal(dshHome({ DSH_HOME: '/x/' }, '/home/u'), '/x')
+  assert.equal(dshHome({ DSH_HOME: '~/lab' }, '/home/u'), join('/home/u', 'lab'), 'tilde is expanded like the harness does')
+  assert.equal(dshHome({ DSH_HOME: '~' }, '/home/u'), '/home/u')
 })
 
 test('explicit paths win over the defaults', () => {
@@ -53,6 +55,7 @@ test('a complete model block resolves; the API key is only ever a variable NAME'
   )
   assert.deepEqual(llm, {
     url: 'http://127.0.0.1:4000/v1/chat/completions',
+    displayUrl: 'http://127.0.0.1:4000/v1/chat/completions',
     model: 'small',
     apiKeyEnv: 'MY_KEY',
     extraBody: { chat_template_kwargs: { enable_thinking: false } },
@@ -109,4 +112,54 @@ test('unknown keys are named, and every documented key is honoured', () => {
 
 test('an inverted band pair warns', () => {
   assert.match(resolve({ bandStuck: 60, bandWatch: 80 }).warnings.join('\n'), /watch band is empty/)
+})
+
+test('relative paths resolve against the dsh home, never the working directory', () => {
+  const { settings } = resolve({
+    ledgerFile: 'storages/semantic-loop-kicker/evaluations.jsonl',
+    modeFile: 'profiles/web/watchdog-mode.json',
+    logFilePath: '../elsewhere/w.log',
+  })
+  assert.equal(settings.ledgerFile, join('/srv/dsh', 'storages/semantic-loop-kicker/evaluations.jsonl'))
+  assert.equal(settings.modeFile, join('/srv/dsh', 'profiles/web/watchdog-mode.json'))
+  assert.equal(settings.logFilePath, '/srv/elsewhere/w.log')
+})
+
+test('relative paths with DSH_HOME unset use ~/.dsh; a lab-style home moves them with it', () => {
+  const unset = resolveSettings({ modeFile: 'profiles/web/watchdog-mode.json' }, { env: {}, home: '/home/u' })
+  assert.equal(unset.settings.modeFile, join('/home/u', '.dsh', 'profiles/web/watchdog-mode.json'))
+  const lab = resolveSettings({ modeFile: 'profiles/web/watchdog-mode.json' }, { env: { DSH_HOME: '/work/.lab/home' }, home: '/home/u' })
+  assert.equal(lab.settings.modeFile, '/work/.lab/home/profiles/web/watchdog-mode.json')
+})
+
+test('absolute and tilde paths are used as given', () => {
+  const { settings } = resolveSettings({ ledgerFile: '/data/l.jsonl', logFilePath: '~/w.log' }, { env, home: '/home/u' })
+  assert.equal(settings.ledgerFile, '/data/l.jsonl')
+  assert.equal(settings.logFilePath, join('/home/u', 'w.log'))
+})
+
+test('timeouts and token budgets must be above zero', () => {
+  const { settings, warnings } = resolve({ watchdogTimeoutMs: 0, llmMaxTokens: 0, cooldownMs: 0 })
+  assert.equal(settings.watchdogTimeoutMs, DEFAULT_CONFIG.watchdogTimeoutMs)
+  assert.equal(settings.llmMaxTokens, DEFAULT_CONFIG.llmMaxTokens)
+  assert.equal(settings.cooldownMs, 0, 'a zero cooldown is legitimate')
+  assert.equal(warnings.filter((w) => /watchdogTimeoutMs|llmMaxTokens/.test(w)).length, 2)
+})
+
+test('the logged endpoint carries no credentials or query; a query in the base URL warns', () => {
+  assert.equal(displayUrl('https://user:pw@h.example/v1/chat/completions?key=abc#x'), 'https://h.example/v1/chat/completions')
+  const { llm, warnings } = resolve({ llmBaseUrl: 'https://user:pw@h.example/v1?key=abc', llmModel: 'm' })
+  assert.doesNotMatch(llm.displayUrl, /pw|abc|user/)
+  assert.match(warnings.join('\n'), /query string/)
+})
+
+test('the defaults equal the values the original deployment row set explicitly', () => {
+  assert.deepEqual(
+    { ...DEFAULT_CONFIG },
+    {
+      cooldownMs: 30000, maxTranscriptLines: 6, includeSubagents: false, interventionEnabled: false,
+      watchdogTimeoutMs: 25000, fpWindowEvents: 60, busyYieldMs: 15000, bandStuck: 90, bandWatch: 70,
+      logConsole: false, logFile: true, logDsh: false, logDshErrors: true, llmMaxTokens: 128,
+    },
+  )
 })

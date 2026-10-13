@@ -74,7 +74,7 @@ export function parseVerdict(raw) {
  * band: "PROGRESS:95" is confidence that the agent is working, and must neither
  * paint the session stuck nor extend a stuck streak. A missing confidence is noise.
  */
-export function bandOf(confidence, { bandStuck, bandWatch }, verdict = 'LOOP') {
+export function bandOf(confidence, { bandStuck, bandWatch }, verdict) {
   if (confidence == null || verdict !== 'LOOP') return 'noise'
   if (confidence >= bandStuck) return 'stuck'
   if (confidence >= bandWatch) return 'watch'

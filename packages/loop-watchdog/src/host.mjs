@@ -108,7 +108,7 @@ export default function loopWatchdog(ctx, config = {}) {
 
   logBoth('[A] PLUGIN LOADED: config=%j', {
     ...settings,
-    llm: llm ? { url: llm.url, model: llm.model, apiKeyEnv: llm.apiKeyEnv ?? null } : null,
+    llm: llm ? { url: llm.displayUrl, model: llm.model, apiKeyEnv: llm.apiKeyEnv ?? null } : null,
   })
   log.info('[A] PLUGIN LOADED: interventionEnabled=%s llm=%s', settings.interventionEnabled, llm ? llm.model : 'off')
 
@@ -148,7 +148,7 @@ export default function loopWatchdog(ctx, config = {}) {
     const start = Date.now()
     const body = buildRequestBody(llm, transcript)
 
-    logBoth('[C] SENDING TO MODEL: endpoint=%s model=%s transcript=%d chars', llm.url, llm.model, transcript.length)
+    logBoth('[C] SENDING TO MODEL: endpoint=%s model=%s transcript=%d chars', llm.displayUrl, llm.model, transcript.length)
     logBoth('[C] --- TRANSCRIPT START ---\n%s\n[C] --- TRANSCRIPT END ---', transcript)
 
     let text = ''

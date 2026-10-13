@@ -57,6 +57,11 @@ export function normalize(raw, id) {
   // was never evaluated (a skip). This is the axis the panel splits on.
   const layer = skip !== null ? 'none' : source === 'llm' ? 'model' : source ? 'code' : 'none'
 
+  // Rows written before the band took the verdict into account banded a
+  // confident PROGRESS as stuck/watch. Read them as noise, keeping the original.
+  const rawBand = raw.band ?? null
+  const band = raw.verdict != null && raw.verdict !== 'LOOP' && (rawBand === 'stuck' || rawBand === 'watch') ? 'noise' : rawBand
+
   return {
     id,
     v,
@@ -67,7 +72,8 @@ export function normalize(raw, id) {
     layer,
     verdict: raw.verdict ?? null,
     confidence: raw.confidence ?? null,
-    band: raw.band ?? null,
+    band,
+    rawBand,
     streak: typeof raw.streak === 'number' ? raw.streak : 0,
     mode: raw.mode ?? null,
     outcome: raw.outcome ?? null,

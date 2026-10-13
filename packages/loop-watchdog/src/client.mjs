@@ -10,7 +10,7 @@
 // the CURRENT session's evaluations, with a toggle for all sessions.
 //
 // It is a pure reader. All data comes from the Host half over the
-// authenticated /api fence:
+// plugin-owned route (trust-checked by the connection service):
 //   POST /loopWatchdog/<endpoint>  (a route the host half owns)
 //     list   -> compact rows (no transcript window) + stats + session list
 //     detail -> ONE full record, including the transcript window
@@ -594,16 +594,16 @@ window.__ModuleLoader__.load({
 				return;
 			}
 
-			var styleId = "sle-styles";
-			if (!document.getElementById(styleId)) {
-				var tag = document.createElement("style");
-				tag.id = styleId;
-				tag.textContent = CSS;
-				document.head.appendChild(tag);
-			}
-
 			var register = function () {
-				return sidebar.registerTab({
+				var styleId = "sle-styles";
+				var tag = null;
+				if (!document.getElementById(styleId)) {
+					tag = document.createElement("style");
+					tag.id = styleId;
+					tag.textContent = CSS;
+					document.head.appendChild(tag);
+				}
+				var dispose = sidebar.registerTab({
 					id: "loop-watchdog:evals",
 					title: "Loop evals",
 					description: "Watchdog evaluations for this session: deterministic fingerprint checks and model adjudications, per step.",
@@ -614,11 +614,15 @@ window.__ModuleLoader__.load({
 					},
 					component: function (props) { return h(EvalsPanel, props); }
 				});
+				return function () {
+					if (typeof dispose === "function") dispose();
+					if (tag && tag.parentNode) tag.parentNode.removeChild(tag);
+				};
 			};
 
 			// ctx.effect ties the registration to this plugin's fiber and returns
-			// the disposer, so a reload unregisters the tab instead of leaving it
-			// bound to a dead plugin.
+			// the disposer, so a reload unregisters the tab and removes the styles
+			// instead of leaving them bound to a dead plugin.
 			if (typeof ctx.effect === "function") ctx.effect(register, "dsh-loop-watchdog: evals tab");
 			else register();
 		}

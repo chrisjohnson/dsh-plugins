@@ -11,7 +11,7 @@ First release: the in-tree `semantic-loop-kicker` watchdog and the `semantic-loo
 
 ### Added
 
-- Configuration for everything that was hardcoded: the model endpoint (`llmBaseUrl`), model (`llmModel`), the **name** of the API-key environment variable (`llmApiKeyEnv`), extra request-body fields (`llmExtraBody`), completion budget (`llmMaxTokens`), the ledger path (`ledgerFile`), the mode-file path (`modeFile`) and the log-file path (`logFilePath`). Paths default under `$DSH_HOME/storages/loop-watchdog/`. See the README for each key and what unset means.
+- Configuration for everything that was hardcoded: the model endpoint (`llmBaseUrl`), model (`llmModel`), the **name** of the API-key environment variable (`llmApiKeyEnv`), extra request-body fields (`llmExtraBody`), completion budget (`llmMaxTokens`), the ledger path (`ledgerFile`), the mode-file path (`modeFile`) and the log-file path (`logFilePath`). Paths default under `$DSH_HOME/storages/loop-watchdog/`, and a relative value resolves against `$DSH_HOME`. **A deployment with existing history must set `ledgerFile: storages/semantic-loop-kicker/evaluations.jsonl` and `modeFile: profiles/web/watchdog-mode.json` (or move the old folder), otherwise the watchdog starts a new empty ledger and ignores the old act/log toggle;** see the README. See the README for each key and what unset means.
 - With no model configured the repetition check still runs; ambiguous windows are ledgered once per stretch as `skip: "no-llm"` instead of failing.
 - Boot-time warnings for misspelled or wrongly typed keys, a half-set model block, and an empty API-key variable.
 - Tests for the decision modules against V4 event shapes, the ledger reader (both schemas), configuration, the client's registration contract, and the host wired to a fake context.
@@ -25,6 +25,9 @@ First release: the in-tree `semantic-loop-kicker` watchdog and the `semantic-loo
 - Installed from a git tag (`dsh-loop-watchdog-v<version>`), not the npm registry — see the README's Install section.
 
 ### Fixed
+
+- Existing ledger rows with a `PROGRESS` verdict banded `stuck` or `watch` by the old code are read as `noise` (the original is kept as `rawBand`), so they no longer show red/amber or count as stuck in the panel's totals.
+- `watchdogTimeoutMs` and `llmMaxTokens` must be above zero; the logged model endpoint has credentials and query stripped; the panel's injected styles are removed when it is disposed.
 
 - A `PROGRESS` verdict with high confidence no longer lands in the `stuck` band or extends the stuck streak. Confidence is confidence in the verdict, so previously "PROGRESS:95" followed by one "LOOP:95" counted as a sustained streak and could steer after a single LOOP.
 - An empty tool result now counts as substantive activity (it is itself the signal), and a corrupt ledger line that parses as a JSON array is counted as corrupt rather than read as a record.
