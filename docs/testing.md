@@ -7,25 +7,28 @@ what it cannot catch.
 ## Tier 0 — static gates (no install, no dsh, no network)
 
 ```sh
-node scripts/verify.mjs                     # the publish contract
+node scripts/verify.mjs                     # the release contract
 node scripts/check-plugin-hooks.mjs         # Rules of Hooks over every client half
 ```
 
-`verify.mjs` is not a linter; it checks the things that make an install *work* —
-that the bundle patch exists and loads the package by name rather than by path, that
-`dsh.client` has a matching `./client` export, that the peer ranges admit prerelease
-harness builds, that every file the package imports is inside its `files` allowlist,
+`verify.mjs` is not a linter; it checks the things that make a git-tag install
+*work* — that the bundle patch exists and loads the package by name rather than by
+path, that `dsh.client` has a matching `./client` export, that every
+`@deepseek-ai/dsh*` peer and `engines.dsh` use the repository's one harness range,
+that every file the package imports is inside its `files` allowlist (all a git-tag
+install ships), that the README shows the git-tag install line and no bare-name one,
 that every `config.*` key is documented, that the package is in the README index, and
 that no author-local path, provider id, or credential pattern shipped.
 
 ## Tier 1 — unit tests
 
 ```sh
-node --test packages/*/test/*.test.mjs      # or npm test
+node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs   # or npm test
 ```
 
 These run against the pure modules (`src/fit.mjs`, `src/config.mjs`,
-`src/searxng.mjs`) — which is why those files import nothing from `@deepseek-ai/*`.
+`src/searxng.mjs`, plus `scripts/lib/` for the repository's own checks) — which is
+why those files import nothing from `@deepseek-ai/*`.
 If a decision cannot be tested this way, that is a signal it is tangled with the host
 and should be pulled out.
 
@@ -49,11 +52,12 @@ tier 3.
 ## Tier 3 — the lab profile
 
 ```sh
-node scripts/lab.mjs up --settings /path/to/settings.yaml     # http://127.0.0.1:3099
+node scripts/lab.mjs up          # http://127.0.0.1:3099
 node scripts/lab.mjs clean
 ```
 
-`.lab/install` gets its own dsh plus every local package; `.lab/home` is its own
+`.lab/install` gets its own dsh (`DSH_VERSION`, defaulting to `0.2.0-rc.2`, the same
+version CI smokes against) plus every local package; `.lab/home` is its own
 `DSH_HOME`. The production profile, its sessions, its settings and its service are
 never touched, so an agent can restart the thing it is testing as many times as it
 likes. `npm` installs a local `file:` dependency as a symlink, so edits under
@@ -65,7 +69,9 @@ likes. `npm` installs a local `file:` dependency as a symlink, so edits under
 > unrelated installation. A flat tree solves it; `npm` gives you one. (Measured here,
 > not inferred — this is the failure mode `compose-smoke` would not have shown.)
 
-> **`settings.yaml` may hold API keys.** The `--settings` flag symlinks it in; never
+> **Configuring the lab.** dsh 0.2 has no `settings.yaml`; providers and plugin config
+> are rows in `.lab/home/profiles/web/cordis.patch.yml`. The old `--settings` flag is
+> gone and now exits with an error that says this. That file may hold API keys: never
 > copy it into the repository, never print it, and remember that a lab session with
 > real credentials can spend real money.
 

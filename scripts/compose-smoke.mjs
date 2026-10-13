@@ -133,6 +133,14 @@ for (const dir of packages) {
   const composed = run(['--profile', 'web', '--dump-config'], 'dump-config');
   if (composed === null) continue;
 
+  // 0. the harness did not skip the bundle. A peer range that misses the
+  //    runtime does not get this far on dsh 0.2: `plugin add` rejects the
+  //    install outright (exit 1, caught above). What reaches this check is a
+  //    bundle dsh skips while loading the profile - one whose package became
+  //    unreadable or incompatible after it was installed, e.g. a manifest edited
+  //    or a harness changed underneath it - which dsh reports with a single
+  //    `skipping profile bundle "<name>"` stderr line.
+  const notSkipped = !composed.includes(`skipping profile bundle ${JSON.stringify(name)}`);
   // 1. the bundle became a layer of its own, attributed to this package
   const layer = new RegExp(`^# == ${name}$`, 'm').test(composed);
   // 2. its row is present with the id its patch declares
@@ -147,12 +155,12 @@ for (const dir of packages) {
   // 4. a package with a client half must resolve it, or the host throws at boot
   const clientOk = manifest.dsh?.client === undefined || composed.length > 0;
 
-  if (layer && rowsPresent && wired && clientOk) {
-    console.log(`ok    ${name}  (imports, layer + ${ids.length} row(s), profile wiring)`);
+  if (notSkipped && layer && rowsPresent && wired && clientOk) {
+    console.log(`ok    ${name}  (imports, not skipped, layer + ${ids.length} row(s), profile wiring)`);
   } else {
     failures += 1;
     console.error(
-      `FAIL  ${name}  layer=${layer} rows=${rowsPresent} wired=${wired} client=${clientOk}` +
+      `FAIL  ${name}  notSkipped=${notSkipped} layer=${layer} rows=${rowsPresent} wired=${wired} client=${clientOk}` +
         (keep ? '' : `  (rerun with --keep; home left at ${home})`),
     );
     if (keep) console.error(`      composed config left at ${join(home, 'dump-config.txt')}`);
@@ -162,6 +170,8 @@ for (const dir of packages) {
   if (!keep) rmSync(home, { recursive: true, force: true });
 }
 
-console.log(`\ncompose-smoke: ${packages.length - (failures > 0 ? 1 : 0)}/${packages.length} package(s) composed` +
+// Every failure path above counts once and moves on to the next package, so
+// `failures` is the number of packages that failed.
+console.log(`\ncompose-smoke: ${packages.length - failures}/${packages.length} package(s) composed` +
   (failures ? ` — ${failures} failure(s)` : ''));
 process.exit(failures ? 1 : 0);

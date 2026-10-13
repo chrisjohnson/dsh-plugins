@@ -37,9 +37,19 @@ Every number in the refusal messages is deliberate. A model told "cannot switch"
 
 ## Install
 
+Installed from a git tag of this repository — it is not published to npm. Replace `<version>` with a released version (tags are named `dsh-model-switch-v<version>`; see [the tag list](https://github.com/chrisjohnson/dsh-plugins/tags)):
+
 ```sh
-dsh plugin --profile web add dsh-model-switch
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v<version>&path:/packages/model-switch"
 ```
+
+That installs the package into the profile and enables its bundle. If you manage the profile's `package.json` yourself, the pnpm equivalent is below — then also add `dsh-model-switch` to the profile's `dsh.profile.bundles`, because `pnpm add` alone installs the plugin without enabling it:
+
+```sh
+pnpm add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v<version>&path:/packages/model-switch"
+```
+
+> **Warning:** never `pnpm add dsh-model-switch` (or `dsh plugin add dsh-model-switch`) by bare name. That resolves from the npm registry, where the package called `dsh-model-switch` belongs to an unrelated author and is **not** this plugin.
 
 Restart dsh. With no configuration you get `switch_model`, the fit guard, the pill and the banner. `switch_model_escalate` is **not** offered until you designate the escalation route — see below.
 
@@ -91,7 +101,7 @@ One subtlety that cost a bug each way: the *fit* margin (0.8) decides whether to
 
 ## Compatibility
 
-Declared in `package.json` under `engines.dsh`, with the explicit prerelease branch (`>=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0`) — without that branch, node-semver quietly excludes every `-rc` build of the harness and users hit an `ERESOLVE` at install.
+Requires dsh 0.2.0-rc.2 or later. Declared in `package.json` under `engines.dsh` and on every `@deepseek-ai/dsh*` peer as `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`. dsh checks these ranges itself, counting prereleases, so it accepts every harness build from 0.2.0-rc.2 on; on a harness outside them `dsh plugin add` refuses the install, and a profile that already has it skips the bundle with a log line. pnpm's own peer check is narrower: it admits only `0.2.0-rc.*` and `0.3.0-*` prereleases (plus every stable release from 0.2.0), so on other prereleases it reports a peer mismatch that dsh does not.
 
 ## Troubleshooting
 
@@ -109,7 +119,7 @@ Plain ESM, no build step:
 
 ```sh
 node --test packages/model-switch/test/*.test.mjs    # fit guard + config resolution
-node scripts/verify.mjs --package dsh-model-switch   # publish contract
+node scripts/verify.mjs --package dsh-model-switch   # release contract
 node scripts/compose-smoke.mjs model-switch          # real dsh composition
 node scripts/check-plugin-hooks.mjs                  # React hook-order gate for the client half
 ```

@@ -6,18 +6,26 @@ the same rules in [CONTRIBUTING.md](./CONTRIBUTING.md), less the imperative.
 ## What this repository is
 
 Public plugins for DeepSeek Harness. Each `packages/<name>` is an independently
-installable npm package and a dsh **bundle** (a package that ships a configuration
+installable package and a dsh **bundle** (a package that ships a configuration
 layer). This repository is the source of truth for plugin code; the deployment that
-consumes them (`dsh-deploy`) installs published versions and owns none of this code.
+consumes them (`dsh-deploy`) pins released tags and owns none of this code.
+
+**Releases are git tags, not npm.** A release is a normal pull request that bumps one
+package's version and moves its CHANGELOG `Unreleased` entry under that version.
+After it merges, the tag `<package>-v<version>` (e.g. `dsh-model-switch-v0.2.0`) is
+cut on that merge commit. Nothing is committed directly to `main`. Consumers install
+`git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>`.
+Nothing is published to the npm registry, and some unscoped `dsh-*` names there
+belong to other people — the npm package `dsh-model-switch` is an unrelated author's,
+not this plugin. Never write, suggest or run a bare-name install (`pnpm add dsh-…`).
 
 Two consequences shape every change:
 
 1. **This code runs with the plugin user's credentials, files and API keys, outside
    any sandbox the agent runs under.** Tool approvals do not gate plugin code. A bug
    here is not a crash, it is a permission you should think about before writing.
-2. **A published version can never be unwritten.** Whatever you release is what
-   someone's `dsh plugin add` pulls forever, and what their deployment rolls back
-   to.
+2. **A released tag can never be unwritten.** Whatever you tag is what someone's
+   install spec pulls forever, and what their deployment rolls back to.
 
 ## Layout
 
@@ -38,8 +46,8 @@ packages/<name>/
 | Command | What it proves |
 | --- | --- |
 | `npm run check` | Everything below, in one go. |
-| `node scripts/verify.mjs` | The publish contract: installability, docs parity, no deployment leakage, prerelease-safe peer ranges. |
-| `node --test packages/*/test/*.test.mjs` | Unit tests. No dsh, no install, no network. |
+| `node scripts/verify.mjs` | The release contract: installability, git-tag install line in each README, docs parity, no deployment leakage, the one harness peer range. |
+| `node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs` | Unit tests (plugins, and the repository's own checks). No dsh, no install, no network. |
 | `node scripts/check-plugin-hooks.mjs` | React Rules-of-Hooks gate over every browser half. |
 | `node scripts/compose-smoke.mjs` | Installs each package into a throwaway profile under `.lab/`, imports it for real, and asserts the layer lands in a composed config. Needs a dsh installation (`DSH_BIN`, or `DSH_DEPLOY_DIR` pointing at a checkout that has one). |
 
@@ -68,16 +76,26 @@ that imports nothing from `@deepseek-ai/*`, plus tests against it. The Cordis wi
 in `src/host.mjs` should be thin enough that reading it is enough.
 
 **Ship a `files` allowlist, and keep it honest.** `verify.mjs` fails when a source
-file is not covered by it, because a published package missing a file it imports is
-a 404 for the user.
+file is not covered by it, because a git-tag install ships only what `files` lists,
+and a released package missing a file it imports is a 404 for the user.
 
 **Declare official packages as peers, with a prerelease branch.**
 `@deepseek-ai/dsh-*` belongs in `peerDependencies`, not `dependencies` — the host
 supplies the single instance, and a second copy splits entry and context identity at
-runtime. And write ranges as `>=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-0`: node-semver only
-admits a prerelease when some comparator carries a prerelease tag on the same tuple,
-so an innocuous-looking `>=0.1.0 <0.2.0` excludes every `-rc` build of the harness
-and the user gets an `ERESOLVE`.
+runtime. Every `@deepseek-ai/dsh*` peer, and `engines.dsh`, is exactly
+`>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0` — one range repository-wide, enforced by
+`verify.mjs`. Two evaluators read it, and they disagree about prereleases:
+
+- **dsh itself** checks these ranges with `includePrerelease: true` — at
+  `plugin add`, where a miss rejects the install, and again when it loads a profile,
+  where a miss skips the bundle with one log line. To dsh the range admits every
+  build from 0.2.0-rc.2 on.
+- **pnpm/npm** use node-semver's default, which only admits a prerelease when some
+  comparator carries a prerelease tag on the same major.minor.patch tuple. To them
+  the range admits `0.2.0-rc.*` (from rc.2), `0.3.0-*`, and every stable release from
+  0.2.0 on — but not, say, `0.2.1-rc.1` or `0.4.0-rc.1`. That is why the prerelease
+  tags are there at all: a plain `>=0.2.0 <0.3.0` would exclude every `0.2.0-rc`
+  build of the harness and give the user an `ERESOLVE`.
 
 **Never declare the bare `cordis` package** in any dependency field — the harness
 supplies `@deepseek-ai/cordis`, and the Desktop community market rejects the bare
@@ -119,20 +137,24 @@ is the expected output.
 
 `entry-r7.mjs` files appear in this repository's history. They existed to defeat
 Node's ES-module cache (keyed on module URL, not mtime) so a host reload picked up
-edits without a restart. **They must never be published.** Release a version; do not
+edits without a restart. **They must never be released.** Release a version; do not
 ship a query string.
 
 ## Working here
 
-- Branch, then open a pull request. `main` is protected by review — unlike the
-  deployment repository this code came from.
-- Update the package's `CHANGELOG.md` in the same commit as the change; bump the
-  version only in a release commit.
+- Branch, then open a pull request. Changes reach `main` through a pull request,
+  merged once CI has passed and it has been reviewed. That is a convention, not a
+  GitHub setting: `main` has no branch protection, so nothing stops a direct push
+  or an unreviewed merge except you following it.
+- Update the package's `CHANGELOG.md` (under `Unreleased`) in the same commit as the
+  change; bump the version only in a release pull request.
 - A user-visible behaviour change gets a test, or a README paragraph explaining why
   a test would be worse than the docs.
-- Never edit `node_modules` to fix another plugin, including your own published one.
+- Never edit `node_modules` to fix another plugin, including your own released one.
   Pin, reproduce, report, release a fix.
-- Never push a version CI has not passed; never rewrite a pushed tag.
+- Tag only the merge commit of a release pull request, and only once CI has passed
+  on it; never move, delete or re-push a pushed tag. Tags are `<package>-v<version>`
+  and are the only release channel.
 
 ## Adding a plugin
 
@@ -142,11 +164,13 @@ ship a query string.
 2. It must be **self-contained**: no imports from outside its own directory, no
    reading another plugin's state files, no assumption about what else is installed.
    Optional integrations degrade to a no-op and say so in the log.
-3. Name it `dsh-<something>` (unscoped), set `repository.directory`, `engines.dsh`,
-   `keywords: ["dsh-plugin", …]`, MIT, and a `files` allowlist.
+3. Name it `dsh-<something>` (unscoped; the `name` in `package.json` is also the tag
+   prefix), set `repository.directory`, `engines.dsh`, `keywords: ["dsh-plugin", …]`,
+   MIT, and a `files` allowlist.
 4. Write its README before you finish coding. If you cannot say what every config key
    does and what happens when it is unset, you have designed a plugin only its author
-   can operate.
+   can operate. Its Install section uses the git-tag spec — `verify.mjs` fails a
+   README without one, or with a bare-name install line.
 5. Add a row to the index table in `README.md` — `verify.mjs` fails without it.
 6. `npm run check`, then `node scripts/compose-smoke.mjs`.
 

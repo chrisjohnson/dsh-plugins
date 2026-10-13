@@ -53,8 +53,8 @@
 // ---------------------------------------------------------------------------
 //   ctx.llm.resolveModelInfo(provider, model, signal) -> LlmResolvedModelInfo
 //       `.context.contextWindow` is the adapter-owned capacity. Hand-declared
-//       routes on this deployment declare it explicitly (see settings.yaml's
-//       long contextWindow notes) - it is the same number compaction uses.
+//       routes declare it explicitly on their provider rows in the deployment's
+//       cordis.patch.yml - it is the same number compaction uses.
 //   ctx.tokenMeter.measure(session) -> { totalTokens, nodes[] }
 //       Replay-based, no model calls. `totalTokens` is request-and-response
 //       pressure; `nodes[]` carries one entry per surface node with `seq` and

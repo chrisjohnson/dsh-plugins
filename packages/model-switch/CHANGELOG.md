@@ -7,6 +7,13 @@
 
 ### Changed
 
+- Requires dsh 0.2.0-rc.2 or later: `engines.dsh` and the `@deepseek-ai/dsh-tools`
+  / `@deepseek-ai/dsh-llm` peers are now `>=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0`.
+  dsh 0.2 checks bundle peer ranges at boot, so the range now states the line this
+  is actually tested against.
+- Installed from a git tag (`dsh-model-switch-v<version>`), not the npm registry —
+  see the README's Install section. The npm package named `dsh-model-switch` is an
+  unrelated author's, not this plugin.
 - The repair panel is collapsed by default. Past the auto-compact line nothing
   fails and nothing is stranded — the next request compacts on the route that can
   still read it — so the paragraph no longer takes composer height until it is

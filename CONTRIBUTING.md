@@ -17,6 +17,24 @@ git push -u origin <branch>        # then open a pull request
 One package per pull request where you can. A change that spans two packages should
 say why in the description.
 
+Pull requests merge into `main` once CI has passed and they have been reviewed. That is
+the process, not a GitHub rule — `main` has no branch protection.
+
+## Releases
+
+Releases are git tags, never npm. A release is a normal pull request that bumps one
+package's version and moves its CHANGELOG `Unreleased` entry under that version. After
+it merges, the tag `<package>-v<version>` (e.g. `dsh-model-switch-v0.2.0`) is cut on
+that merge commit. Nothing is committed directly to `main`. Consumers pin the tag:
+
+```sh
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>"
+```
+
+Do not suggest a bare-name install (`pnpm add dsh-model-switch`) anywhere: that
+resolves from the npm registry, where `dsh-model-switch` is an unrelated author's
+package. Details in [docs/releasing.md](./docs/releasing.md).
+
 ## What makes a plugin acceptable here
 
 - **It works with zero configuration, or it says exactly what to configure.** Optional
@@ -30,8 +48,8 @@ say why in the description.
 - **Its README is the contract.** Every config key, what it does, what happens when it
   is unset, how the failure modes present. If docs and behaviour disagree, the docs are
   the bug and the tests are the evidence.
-- **It installs with one command.** A `dsh.bundle.patch` so `dsh plugin add` activates
-  it, no hand-edited config, no "and then also…".
+- **It installs with one command.** A `dsh.bundle.patch` so `dsh plugin add <git-tag
+  spec>` activates it, no hand-edited config, no "and then also…".
 
 ## What we will not merge
 
