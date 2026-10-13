@@ -31,11 +31,13 @@ spec points at forever, and what their deployment rolls back to.
 2. `npm run check` locally (verify + hooks gate + tests).
 3. `node scripts/compose-smoke.mjs` — the package installs and imports in a real
    profile, with the harness checking its peer ranges.
-4. `npm pack --dry-run -w <pkg>` and read the file list. Nothing is published; this
-   is just the quickest way to see what the `files` allowlist selects, which is
-   exactly what a git-tag install ships. Is every runtime file in it? Is any test, script, or local note in it
-   that should not be? (`verify.mjs` checks the first half of this; only a human
-   notices the second.)
+4. `npm pack --dry-run`, run inside `packages/<dir>`, and read the file list.
+   Nothing is published; this is just the quickest way to see what the `files`
+   allowlist selects, which is exactly what a git-tag install ships. Is every
+   runtime file in it? Is any test, script, or local note in it that should not
+   be? (`verify.mjs` checks the first half of this; only a human notices the
+   second.) Run it from the package directory: the root `package.json` has no
+   npm `workspaces` field, so `-w` fails with "No workspaces found".
 5. The package's `README.md` and `CHANGELOG.md` describe the version you are about to
    tag — `verify.mjs` fails if the changelog does not mention the version string, and
    the README is what a plugin market shows.
@@ -55,7 +57,7 @@ and per tag: the pull request touches exactly one `package.json` and its changel
 
 ```sh
 # on a branch, then open a pull request like any other change:
-npm version <major|minor|patch> -w <pkg> --no-git-tag-version   # rewrites package.json
+(cd packages/<dir> && npm version <major|minor|patch> --no-git-tag-version)   # rewrites package.json
 # move the CHANGELOG "Unreleased" entry under a "## <version>" heading, then:
 git add packages/<dir>/package.json packages/<dir>/CHANGELOG.md
 git commit -m "release(dsh-model-switch): 0.2.0"
