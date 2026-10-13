@@ -128,8 +128,10 @@ ship a query string.
 
 ## Working here
 
-- Branch, then open a pull request. `main` is protected by review — unlike the
-  deployment repository this code came from.
+- Branch, then open a pull request. Changes reach `main` through a pull request,
+  merged once CI has passed and it has been reviewed. That is a convention, not a
+  GitHub setting: `main` has no branch protection, so nothing stops a direct push
+  or an unreviewed merge except you following it.
 - Update the package's `CHANGELOG.md` in the same commit as the change; bump the
   version only in a release commit.
 - A user-visible behaviour change gets a test, or a README paragraph explaining why
