@@ -12,10 +12,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   DEFAULT_BASE_URL,
+  DEFAULT_MAX_RESULTS,
   MAX_RESULTS_CEILING,
+  USER_AGENT,
   buildSearchURL,
   capResults,
   formatResults,
@@ -50,6 +53,23 @@ test('config: result count comes from config, then env, then the documented defa
   assert.equal(resolveConfig({}, { SEARXNG_NUM_RESULTS: '5' }).maxResults, 5);
   assert.equal(resolveConfig({}, { SEARXNG_NUM_RESULTS: 'zero' }).maxResults, 8);
   assert.equal(resolveConfig({}, { SEARXNG_NUM_RESULTS: '-4' }).maxResults, 8);
+});
+
+test('config: a profile row that passes environment variables through as `!!js process.env.X`', () => {
+  // Such a row hands the plugin raw strings when the variable is set and
+  // `undefined` when it is not; both must resolve exactly as if the key were absent.
+  const set = resolveConfig(
+    { baseURL: 'http://searxng.test:9000', maxResults: '5', apiKey: 'k' },
+    {},
+  );
+  assert.deepEqual(set, { baseURL: 'http://searxng.test:9000', maxResults: 5, apiKey: 'k' });
+  const unset = resolveConfig({ baseURL: undefined, maxResults: undefined, apiKey: undefined }, {});
+  assert.deepEqual(unset, { baseURL: DEFAULT_BASE_URL, maxResults: DEFAULT_MAX_RESULTS, apiKey: undefined });
+});
+
+test('user agent names the version actually installed', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(USER_AGENT, `${manifest.name}/${manifest.version}`);
 });
 
 test('capResults clamps into the advertised 1..30 range', () => {
