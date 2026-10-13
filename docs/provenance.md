@@ -26,7 +26,7 @@ layout is `packages/<name>` only.
 
 | Package | Extracted from | Notes |
 | --- | --- | --- |
-| `dsh-model-switch` | `plugins/model-switch/` | Behaviour changes at extraction are listed in its `CHANGELOG.md` under 0.1.0 (notably: no built-in escalation/reader routes). |
+| `dsh-model-switch` | `plugins/model-switch/` | Behaviour changes at extraction are listed in its `CHANGELOG.md` under 0.1.0 (notably: no built-in escalation/reader routes); the dsh 0.2.0 port (V4 `plugin:model-switch` source kind) is under 0.2.0. The in-tree copy differed from the package in two documented ways: built-in escalation/reader defaults (removed at extraction) and the old `source.kind: 'plugin'` (fixed in 0.2.0). The rest was compared by feature, not line by line (1108 lines in-tree vs 989 in the package). |
 | `dsh-image-search-searxng` | `plugins/image-search-searxng.mjs` | Split into a pure `src/searxng.mjs` plus wiring; tool output is byte-compatible with the original. |
 | `dsh-continue-kicker` | `plugins/continue-kicker.mjs` | Split into pure `src/decide.mjs` and `src/config.mjs` plus wiring. Behaviour changes at extraction (V4 source kind, genuine-user detection, `tool-call` block type) are listed in its `CHANGELOG.md` under 0.1.0. |
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker.mjs` (the watchdog, behind its `-rN` shim) and `plugins/semantic-loop-evals/` (the evals panel) | One package. Deployment paths, the model endpoint and the API-key variable became configuration; the panel is an optional `dsh-better-sidebar` integration. Behaviour changes are in its `CHANGELOG.md` under 0.1.0. |
