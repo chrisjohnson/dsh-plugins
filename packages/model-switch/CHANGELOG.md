@@ -5,6 +5,25 @@
 
 ## Unreleased
 
+## 0.2.1
+
+### Fixed
+
+- `switch_model` and `switch_model_escalate` no longer report a failed tool call
+  after a successful switch. The success value carried `undefined` for the
+  optional `freed`, `tokens` and `window` measurements; dsh 0.2's registry
+  requires structured output to be lossless JSON, which rejects an undefined
+  property, so the call was marked `INVALID_TOOL_OUTPUT` ("value is not lossless
+  JSON") even though the model had switched and the notice was written. Absent
+  measurements are now omitted. The text the model sees is unchanged.
+
+### Added
+
+- `test/registry.test.mjs` runs both tools through dsh's own output validation
+  (`snapshotJsonValue`, `validateJsonSchemaValue`, `render`) for success,
+  compact-then-switch, already-on-route, refusal, failures and the escalate tool.
+  It skips on a clone without dsh installed; CI's compose job runs it.
+
 ## 0.2.0
 
 ### Fixed

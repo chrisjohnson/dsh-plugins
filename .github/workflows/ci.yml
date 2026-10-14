@@ -75,6 +75,8 @@ jobs:
         run: |
           npm install --global --no-audit --no-fund pnpm@12.9.0
           pnpm --version
+      - name: Tool output through the harness's own validation
+        run: node --test packages/model-switch/test/registry.test.mjs
       - name: Composition smoke
         run: node scripts/compose-smoke.mjs
       - name: Leave the composed config behind on failure
