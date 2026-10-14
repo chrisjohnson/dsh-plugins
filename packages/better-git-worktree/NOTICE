@@ -1,0 +1,29 @@
+dsh-better-git-worktree: third-party notices
+=============================================
+
+## dsh-git-worktree
+
+The composer Worktree switch, the session-list status indicator and the
+session-header menu borrow the UX of `dsh-git-worktree`
+(https://github.com/wloops/dsh-git-worktree). No code from it is included; this
+plugin drops its review/acceptance lifecycle entirely.
+
+## @deepseek-ai/dsh-client-ui-workspace
+
+Earlier releases of this plugin inlined the client half of
+`@deepseek-ai/dsh-client-ui-workspace` into a generated bundle, with a set of
+exact-string "seams" applied. That package is MIT licensed:
+
+    @deepseek-ai/dsh-client-ui-workspace
+    Copyright (c) DeepSeek
+    MIT License, https://github.com/deepseek-ai/deepseek-harness
+
+This release no longer contains any of it. It adds to the official Workspace UI
+through the slot seats that UI declares, and re-registers the official `archive`
+entries' component and injected behaviour at runtime (it reads them from the slot
+registry; nothing is copied). The attribution is kept because the UX it decorates
+and the archive component it reuses are that package's.
+
+Working copies themselves are plain `git init` checkouts reading the source's
+objects through an alternate: no third-party code is involved in creating or
+managing them.
