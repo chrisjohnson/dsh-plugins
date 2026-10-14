@@ -5,8 +5,8 @@
 # (host half via `main`, browser half via the package's `dsh.client` declaration).
 #
 # The row carries NO config on purpose: a patch layer replaces a row's whole
-# `config` object instead of deep-merging. The one optional key
-# (scanIntervalMs) and its default are documented in README.md.
+# `config` object instead of deep-merging. The optional keys (scanIntervalMs,
+# deliveryTimeoutMs) and their defaults are documented in README.md.
 #
 # The row id is `scheduled-queue`. It is distinct from the rows the official
 # experimental schedule bundle inserts (`time-context`, `schedule`,

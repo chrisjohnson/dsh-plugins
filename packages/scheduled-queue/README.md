@@ -23,11 +23,12 @@ When an item is due the host calls `sessionController.prompt` with the item's id
 - **Normal item** — a follow-up: it runs as its own turn after the current one.
 - **Force steer item** — steering: it interrupts the current turn at the next step.
 - **Session not running** — the session is resumed first, then the message is delivered.
-- **Retries** — a delivery that fails stays queued and is retried with a back-off (5 s, doubling, capped at 5 min). A delivery that gets no answer within `deliveryTimeoutMs` is aborted and counts as a failure, so one hung session cannot hold up the others. Because `prompt` dedupes on the request id, a retry after a half-failed delivery cannot send twice.
+- **Retries** — a delivery that fails stays queued and is retried with a back-off (5 s, doubling, capped at 5 min). A delivery that gets no answer within `deliveryTimeoutMs` is given up on and counts as a failure, so one hung session cannot hold up the others; the item is retried later. The harness only checks the abort signal before it admits a prompt, so a prompt that was already admitted may still land. The retry then carries the same request id, which `prompt` dedupes on, so it cannot send twice.
 - **Session not found** — the harness also reports this transiently (a session disposed while the message was being admitted), so the host asks once more after two seconds. Only if the session is still not found is the item dropped, with a warning that includes the message text (first 500 characters).
 - **Rejected by the harness** (`gateway/bad-request`, e.g. empty content) — retrying cannot help, so the item is dropped with a warning that includes its text.
 - **Sorting** — due items are delivered oldest-due first.
-- **Time zone** — the browser's time zone is stored with the item when it is scheduled and passed as `clientTimeZone`, so time-aware context sees a zone. Items without one (queued by earlier versions) are sent without.
+- **Time zone** — the browser's time zone is stored with the item when it is scheduled and passed as `clientTimeZone`, so time-aware context sees a zone. Only `UTC` and `Area/Location` names are kept (the harness rejects anything else, such as `GMT`, `EST` or `+05:00`); otherwise the field is left off. If the harness still refuses a stored zone, the send is retried once without it. Items without one (queued by earlier versions) are sent without.
+- **Disposal** — when the plugin is unloaded the scanner stops, in-flight calls are aborted, and nothing more is sent or written.
 
 ## How this differs from the official schedule bundle
 
@@ -52,6 +53,10 @@ Nothing collides, so no setup is needed to run them side by side. Checked agains
 - **Client module id and styles:** `dsh-scheduled-queue`, style tag `sq-styles`, CSS classes `sq-*`.
 
 One practical consequence: a message queued here is not visible to the agent's `schedule_list`, and a reminder created through the bundle does not show in this plugin's dock.
+
+## Replacing the in-tree plugin
+
+If your deployment still carries the earlier copy (dsh-deploy's `.dsh/profiles/web/plugins/scheduled-queue` and its `scheduled-queue` row in `cordis.patch.yml`), remove or keep disabled that row **before** enabling this package. Two plugins would register the same `/api/scheduledQueue/*` routes (the second registration fails) and scan the same queue file. The queue file is shared and compatible, so items already queued carry over.
 
 ## Install
 
@@ -78,7 +83,7 @@ Set these on the row in your own profile patch (`config:` block). A top-level co
 | Key | Default | What it does |
 | --- | --- | --- |
 | `scanIntervalMs` | `5000` | How often, in milliseconds, the host looks for due items. Clamped to 1000–60000; a value that is not a number is ignored with a warning naming the key. Unset = 5000. |
-| `deliveryTimeoutMs` | `60000` | How long one delivery may take before it is aborted and retried. Clamped to 1000–600000; same handling of bad values. Unset = 60000. |
+| `deliveryTimeoutMs` | `60000` | How long one delivery may take before it is given up on and retried. Clamped to 1000–600000; same handling of bad values. Unset = 60000. |
 
 Unknown keys are ignored with one warning each. Nothing is required.
 
@@ -108,9 +113,11 @@ Every endpoint requires `sessionId`; a call without one gets `bad-request`. `rem
 
 ## Known limits
 
+- If the queue file exists but cannot be read, scheduling still works in memory and the dock warns that messages are not being saved yet. Nothing is written over the file; once it is readable again the restored items are merged in, without bringing back items that were delivered or removed in the meantime.
+
 - **Archived sessions** accept the message and park it until the session is unarchived, exactly as a normal composer send does.
 - **Overdue items** (due while the harness was down) wake and resume their sessions on the first scan after start-up. Several overdue items are delivered oldest-due first, one after another.
-- A failed **send now** is shown in the dock ("stays queued and is retried automatically") rather than silently ignored; the item is retried by the scanner.
+- **Send now** reports what happened: sent, "stays queued and is retried automatically", or "could not be delivered and was removed" (its text is in the host log). The notice appears even when the dock has no rows left.
 - Scheduling does not clear the composer draft.
 - The dock lists scheduled messages only for the session window it is in; there is no cross-session view.
 

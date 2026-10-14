@@ -75,7 +75,7 @@ export function createItem(payload, now, ids) {
       dueAt: now + minutes * 60000,
       createdAt: now,
       // Optional; items written by earlier versions have none.
-      ...(validTimeZone(p.timeZone) === undefined ? {} : { timeZone: p.timeZone }),
+      ...(validTimeZone(p.timeZone) === undefined ? {} : { timeZone: validTimeZone(p.timeZone) }),
     },
   }
 }
@@ -116,12 +116,20 @@ export function excerpt(text, max = 500) {
   return s.length > max ? `${s.slice(0, max)}...` : s
 }
 
-/** A time zone name Intl accepts, else undefined. */
+const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(?:\/[A-Za-z0-9_+.-]+)+$/
+
+/**
+ * The canonical zone name the harness accepts as `clientTimeZone`, else undefined:
+ * `UTC` or an `Area/Location` name (the rule `sessionController.prompt` applies,
+ * so an alias such as `GMT`, `EST` or `+05:00` is left out rather than failing a send).
+ */
 export function validTimeZone(value) {
-  if (typeof value !== 'string' || value === '' || value.length > 100) return undefined
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) return undefined
+  if (value !== 'UTC' && !IANA_TIME_ZONE.test(value)) return undefined
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value })
-    return value
+    const canonical = new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone
+    if (canonical !== 'UTC' && !IANA_TIME_ZONE.test(canonical)) return undefined
+    return canonical
   } catch {
     return undefined
   }
@@ -169,6 +177,11 @@ const errorCode = (error) => (error !== null && typeof error === 'object' ? erro
  */
 export function isSessionGone(error) {
   return errorCode(error) === 'session/not-found'
+}
+
+/** The harness refused the reported time zone; the send can go without one. */
+export function isInvalidTimeZone(error) {
+  return errorCode(error) === 'session/invalid-time-zone'
 }
 
 /** A delivery failure that no retry will fix: the harness rejects the request itself. */

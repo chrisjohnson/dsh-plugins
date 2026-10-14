@@ -11,6 +11,7 @@ import {
   editItem,
   excerpt,
   isPermanentFailure,
+  isInvalidTimeZone,
   isSessionGone,
   validTimeZone,
   itemsForSession,
@@ -166,6 +167,11 @@ test('time zone: stored when valid, passed to prompt as clientTimeZone, absent f
   const ids = { id: 'i', messageId: 'm' }
   assert.equal(validTimeZone('Europe/Berlin'), 'Europe/Berlin')
   assert.equal(validTimeZone('Not/AZone'), undefined)
+  assert.equal(validTimeZone('UTC'), 'UTC')
+  for (const alias of ['GMT', 'EST', 'CET', 'utc', 'Zulu', '+05:00', ' Europe/Berlin', 'Europe/Berlin ', '']) {
+    assert.equal(validTimeZone(alias), undefined, JSON.stringify(alias))
+  }
+  assert.equal('timeZone' in createItem({ sessionId: 'A', text: 'x', timeZone: 'EST' }, 0, { id: 'i', messageId: 'm' }).item, false)
   assert.equal(validTimeZone(5), undefined)
   const { item: made } = createItem({ sessionId: 'A', text: 'x', timeZone: 'Europe/Berlin' }, 0, ids)
   assert.equal(made.timeZone, 'Europe/Berlin')
@@ -200,4 +206,9 @@ test('parsePersisted: drops unusable rows, repairs a missing messageId, flags a 
   assert.deepEqual(parsePersisted('not json'), { items: [], corrupt: true })
   assert.deepEqual(parsePersisted('{"a":1}'), { items: [], corrupt: true })
   assert.deepEqual(parsePersisted('   '), { items: [], corrupt: false })
+})
+
+test('isInvalidTimeZone: only the harness refusing a zone', () => {
+  assert.equal(isInvalidTimeZone({ code: 'session/invalid-time-zone' }), true)
+  assert.equal(isInvalidTimeZone({ code: 'gateway/bad-request' }), false)
 })

@@ -31,6 +31,7 @@ import {
   dueItems,
   editItem,
   excerpt,
+  isInvalidTimeZone,
   isPermanentFailure,
   isSessionGone,
   isSessionId,
@@ -47,10 +48,10 @@ const ENDPOINTS = ['schedule', 'list', 'remove', 'sendNow', 'edit']
 // `session/not-found` is also raised transiently (an agent disposed while a prompt
 // is being admitted), so a delivery that gets it asks once more after this pause.
 const SESSION_RECHECK_MS = 2000
+const UNREADABLE_WARNING = 'The queue file could not be read, so scheduled messages are not being saved yet. They are kept in memory and saved once it can be read.'
 
 const message = (error) => (error && error.message ? error.message : String(error))
 const fail = (code, text) => ({ ok: false, error: { code, message: text, details: {} } })
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export default function scheduledQueue(ctx, config = {}) {
   const log = ctx.logger(PLUGIN_NAME)
@@ -73,6 +74,25 @@ export default function scheduledQueue(ctx, config = {}) {
     const attempts = new Map()
     const inflight = new Set()
     let scanning = false
+    let disposed = false
+    const controllers = new Set()
+    const timers = new Set()
+    // Ids settled (delivered, removed, dropped) while the queue file could not be
+    // read, so a later successful read does not bring them back.
+    const settled = new Set()
+
+    /** Resolves after `ms`, or at once when the plugin is disposed. */
+    const sleep = (ms) =>
+      new Promise((resolve) => {
+        const wake = () => {
+          clearTimeout(timer)
+          timers.delete(wake)
+          resolve()
+        }
+        const timer = setTimeout(wake, ms)
+        timer.unref?.()
+        timers.add(wake)
+      })
     // True while the queue file exists but could not be read. Nothing is written
     // over it until a later read succeeds.
     let readFailed = false
@@ -81,12 +101,14 @@ export default function scheduledQueue(ctx, config = {}) {
 
     let writes = Promise.resolve()
     function persist() {
+      if (disposed) return writes
       if (readFailed) {
         log.error('not writing %s: it could not be read, and writing would replace it', FILE)
         return writes
       }
       const snapshot = JSON.stringify(queue, null, 2)
       writes = writes.then(async () => {
+        if (disposed) return
         try {
           await mkdir(dirname(FILE), { recursive: true })
           const temp = `${FILE}.${process.pid}.tmp`
@@ -130,7 +152,8 @@ export default function scheduledQueue(ctx, config = {}) {
       const known = new Set(queue.map((it) => it.id))
       const wasFailed = readFailed
       readFailed = false
-      queue = [...queue, ...items.filter((it) => !known.has(it.id))]
+      queue = [...queue, ...items.filter((it) => !known.has(it.id) && !settled.has(it.id))]
+      settled.clear()
       log.info('queue file ready: %s (%d item(s) restored)', FILE, items.length)
       if (wasFailed) await persist()
     }
@@ -142,14 +165,16 @@ export default function scheduledQueue(ctx, config = {}) {
     // --- delivery ----------------------------------------------------------
 
     function drop(item) {
+      if (readFailed) settled.add(item.id)
       queue = queue.filter((it) => it.id !== item.id)
       retryAt.delete(item.id)
       attempts.delete(item.id)
     }
 
-    /** One `prompt` call that is given up on, and aborted, after the delivery timeout. */
-    async function promptWithTimeout(item) {
+    /** One `prompt` call, given up on after the delivery timeout (the signal is aborted too). */
+    async function promptWithTimeout(request) {
       const controller = new AbortController()
+      controllers.add(controller)
       let timer
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => {
@@ -157,52 +182,75 @@ export default function scheduledQueue(ctx, config = {}) {
           controller.abort(error)
           reject(error)
         }, settings.deliveryTimeoutMs)
+        timer.unref?.()
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
       })
       try {
-        return await Promise.race([sessionController.prompt(promptRequest(item), controller.signal), timeout])
+        return await Promise.race([sessionController.prompt(request, controller.signal), timeout])
       } finally {
         clearTimeout(timer)
+        controllers.delete(controller)
       }
     }
 
-    /** @returns whether the item was handed to its session (and so left the queue). */
-    async function deliver(item) {
-      if (inflight.has(item.id)) return false
+    /** `prompt` for one item; a refused time zone is retried once without it. */
+    async function send(item) {
+      const request = promptRequest(item)
+      try {
+        return await promptWithTimeout(request)
+      } catch (error) {
+        if (!isInvalidTimeZone(error) || request.clientTimeZone === undefined) throw error
+        log.warn('the harness refused time zone %s for %s; sending without it', request.clientTimeZone, item.id)
+        const { clientTimeZone: _omit, ...withoutZone } = request
+        return await promptWithTimeout(withoutZone)
+      }
+    }
+
+    /**
+     * Hand one queued item to its session. The CURRENT queue entry is used, not
+     * the object the caller saw: an item removed, edited or sent while an earlier
+     * delivery was in flight is not sent stale. `due` makes the scanner's own
+     * rules (due, not backing off) apply; send-now passes `due: false`.
+     * @returns 'delivered' | 'retry' | 'dropped' | 'skipped'
+     */
+    async function deliver(seen, { due = false } = {}) {
+      const item = queue.find((it) => it.id === seen.id)
+      if (disposed || item === undefined || inflight.has(item.id)) return 'skipped'
+      if (due && (item.dueAt > Date.now() || (retryAt.get(item.id) ?? 0) > Date.now())) return 'skipped'
       inflight.add(item.id)
       try {
         try {
-          await promptWithTimeout(item)
+          await send(item)
         } catch (error) {
-          if (!isSessionGone(error)) throw error
+          if (!isSessionGone(error) || disposed) throw error
           await sleep(SESSION_RECHECK_MS)
-          await promptWithTimeout(item)
+          if (disposed) return 'skipped'
+          await send(item)
         }
+        if (disposed) return 'skipped'
         drop(item)
         await persist()
-        return true
+        return 'delivered'
       } catch (error) {
+        if (disposed) return 'skipped'
         if (isSessionGone(error)) {
           log.warn('dropping scheduled message %s: session %s no longer exists. Text: %s', item.id, item.sessionId, excerpt(item.text))
           drop(item)
           await persist()
-          return false
+          return 'dropped'
         }
         if (isPermanentFailure(error)) {
           log.warn('dropping scheduled message %s: the harness rejected it (%s). Text: %s', item.id, message(error), excerpt(item.text))
           drop(item)
           await persist()
-          return false
+          return 'dropped'
         }
-        // The item may have been removed while it was being sent; only a queued
-        // item gets a retry time.
-        if (queue.some((it) => it.id === item.id)) {
-          const n = (attempts.get(item.id) ?? 0) + 1
-          attempts.set(item.id, n)
-          const delay = retryDelayMs(n)
-          retryAt.set(item.id, Date.now() + delay)
-          log.warn('delivery of %s to session %s failed (attempt %d, retry in %ds): %s', item.id, item.sessionId, n, Math.round(delay / 1000), message(error))
-        }
-        return false
+        const n = (attempts.get(item.id) ?? 0) + 1
+        attempts.set(item.id, n)
+        const delay = retryDelayMs(n)
+        retryAt.set(item.id, Date.now() + delay)
+        log.warn('delivery of %s to session %s failed (attempt %d, retry in %ds): %s', item.id, item.sessionId, n, Math.round(delay / 1000), message(error))
+        return 'retry'
       } finally {
         inflight.delete(item.id)
       }
@@ -213,8 +261,12 @@ export default function scheduledQueue(ctx, config = {}) {
       scanning = true
       try {
         await ready
+        if (disposed) return
         if (readFailed) await load()
-        for (const item of dueItems(queue, Date.now(), retryAt)) await deliver(item)
+        for (const item of dueItems(queue, Date.now(), retryAt)) {
+          if (disposed) break
+          await deliver(item, { due: true })
+        }
       } catch (error) {
         log.error('scan failed: %s', message(error))
       } finally {
@@ -235,16 +287,17 @@ export default function scheduledQueue(ctx, config = {}) {
           return fail('bad-request', `${endpoint} needs the sessionId whose scheduled messages it concerns`)
         }
         const view = () => publicQueue(queue, sessionId)
+        const warningField = () => (readFailed ? { warning: UNREADABLE_WARNING } : {})
         switch (endpoint) {
           case 'schedule': {
             const { item, error } = createItem(p, Date.now(), { id: randomUUID(), messageId: randomUUID() })
             if (error !== undefined) return fail('bad-request', error)
             queue.push(item)
             await persist()
-            return { ok: true, value: { id: item.id, dueAt: item.dueAt, queue: publicQueue(queue, item.sessionId) } }
+            return { ok: true, value: { id: item.id, dueAt: item.dueAt, queue: publicQueue(queue, item.sessionId), ...warningField() } }
           }
           case 'list':
-            return { ok: true, value: { queue: view() } }
+            return { ok: true, value: { queue: view(), ...warningField() } }
           case 'remove': {
             const item = queue.find((it) => it.id === p.id)
             if (item === undefined || !ownedBy(item, sessionId)) return { ok: true, value: { removed: false, queue: view() } }
@@ -257,8 +310,8 @@ export default function scheduledQueue(ctx, config = {}) {
             const item = queue.find((it) => it.id === p.id)
             if (item === undefined || !ownedBy(item, sessionId)) return fail('not-found', 'no scheduled message with that id')
             if (inflight.has(item.id)) return beingSent()
-            const delivered = await deliver(item)
-            return { ok: true, value: { delivered, queue: view() } }
+            const outcome = await deliver(item)
+            return { ok: true, value: { delivered: outcome === 'delivered', outcome, queue: view(), ...warningField() } }
           }
           case 'edit': {
             const index = queue.findIndex((it) => it.id === p.id)
@@ -311,7 +364,13 @@ export default function scheduledQueue(ctx, config = {}) {
     scope.effect(() => {
       const timer = setInterval(() => void scan(), settings.scanIntervalMs)
       if (typeof timer.unref === 'function') timer.unref()
-      return () => clearInterval(timer)
+      return () => {
+        disposed = true
+        clearInterval(timer)
+        for (const wake of [...timers]) wake()
+        for (const controller of controllers) controller.abort(new Error('scheduled-queue disposed'))
+        controllers.clear()
+      }
     }, `${PLUGIN_NAME}: delivery scan`)
 
     log.info('applied: file=%s scan=%dms routes=%s/{%s}', FILE, settings.scanIntervalMs, API_BASE, ENDPOINTS.join(','))

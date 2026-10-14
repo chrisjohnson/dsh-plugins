@@ -32,12 +32,16 @@ async function boot({ items, prompt, config = {}, prepare } = {}) {
   const routes = new Map()
   const logs = []
   const sink = (level) => (...args) => logs.push([level, ...args].join(' '))
+  const mine = []
   const scope = {
     connection: { fetch: { register: (route) => routes.set(route.path, route) } },
     sessionController: { prompt },
     effect: (fn) => {
       const dispose = fn()
-      if (typeof dispose === 'function') disposers.push(dispose)
+      if (typeof dispose === 'function') {
+        disposers.push(dispose)
+        mine.push(dispose)
+      }
     },
   }
   plugin(
@@ -52,7 +56,7 @@ async function boot({ items, prompt, config = {}, prepare } = {}) {
     const response = await routes.get(`/api/scheduledQueue/${endpoint}`).fetch(new Request('http://127.0.0.1/', { method: 'POST', body: JSON.stringify(body) }))
     return (await response.json()).result
   }
-  return { call, file, logs }
+  return { call, file, logs, dispose: () => mine.forEach((d) => d()) }
 }
 
 const due = (over = {}) => ({ id: 'x', messageId: 'mx', sessionId: 'A', text: 'hello', minutes: 1, forceSteer: false, dueAt: Date.now() - 1000, createdAt: 0, ...over })
@@ -178,4 +182,104 @@ test('a queue file that cannot be read is not overwritten', async () => {
   assert.equal(made.ok, true, 'the in-memory queue keeps working')
   assert.equal((await stat(h.file)).isDirectory(), true, 'the unreadable path was left alone')
   assert.ok(h.logs.some((l) => l.startsWith('error') && l.includes('could not read')))
+})
+
+const readQueue = async (file) => JSON.parse(await readFile(file, 'utf8'))
+
+test('an item removed, edited or sent while an earlier delivery is in flight is not sent stale', async () => {
+  const sent = []
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  const t = Date.now()
+  const h = await boot({
+    config: { deliveryTimeoutMs: 20000 },
+    items: [
+      due({ id: 'slow', messageId: 'mslow', text: 'slow', dueAt: t - 9000 }),
+      due({ id: 'rm', messageId: 'mrm', text: 'removed me', dueAt: t - 8000 }),
+      due({ id: 'ed', messageId: 'med', text: 'old text', dueAt: t - 7000 }),
+      due({ id: 'sn', messageId: 'msn', text: 'sendnow', dueAt: t - 6000 }),
+    ],
+    prompt: async (request) => {
+      sent.push(`${request.requestId}:${request.content[0].text}`)
+      if (request.requestId === 'mslow') await gate
+      return { accepted: true }
+    },
+  })
+  await until(() => sent.length > 0)
+  assert.equal((await h.call('remove', { id: 'rm', sessionId: 'A' })).value.removed, true)
+  assert.equal((await h.call('edit', { id: 'ed', sessionId: 'A', text: 'NEW text', minutes: 30 })).ok, true)
+  const now = h.call('sendNow', { id: 'sn', sessionId: 'A' })
+  await sleep(200)
+  release()
+  assert.equal((await now).value.outcome, 'delivered')
+  await sleep(1500)
+  assert.deepEqual(sent.sort(), ['mslow:slow', 'msn:sendnow'], 'nothing removed, edited-away or already sent went out again')
+  const left = await readQueue(h.file)
+  assert.deepEqual(left.map((i) => `${i.id}:${i.text}`), ['ed:NEW text'], 'the edit was kept, and it is no longer due')
+  h.dispose()
+})
+
+test('a disposed plugin neither prompts nor writes the file', async () => {
+  const sent = []
+  const t = Date.now()
+  const h = await boot({
+    items: [due({ id: 'd1', messageId: 'm1', dueAt: t - 2000 }), due({ id: 'd2', messageId: 'm2', dueAt: t - 1000 })],
+    prompt: async (request, signal) => {
+      sent.push(request.requestId)
+      await new Promise((resolve, reject) => {
+        const end = setTimeout(resolve, 1500)
+        signal.addEventListener('abort', () => (clearTimeout(end), reject(signal.reason)))
+      })
+      return { accepted: true }
+    },
+  })
+  await until(() => sent.length > 0)
+  const before = await readFile(h.file, 'utf8')
+  h.dispose()
+  await sleep(4000)
+  assert.deepEqual(sent, ['m1'], 'the second item was never prompted')
+  assert.equal(await readFile(h.file, 'utf8'), before, 'the file was not written after dispose')
+})
+
+test('a refused time zone is retried once without it', async () => {
+  const requests = []
+  const h = await boot({
+    items: [due({ timeZone: 'Europe/Berlin' })],
+    prompt: async (request) => {
+      requests.push(request)
+      if (request.clientTimeZone !== undefined) throw Object.assign(new Error('bad zone'), { code: 'session/invalid-time-zone' })
+    },
+  })
+  await until(() => requests.length >= 2)
+  await sleep(200)
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].clientTimeZone, 'Europe/Berlin')
+  assert.equal('clientTimeZone' in requests[1], false)
+  assert.equal((await h.call('list', { sessionId: 'A' })).value.queue.length, 0)
+})
+
+test('scheduling while the file is unreadable warns, and recovery does not resurrect settled items', async () => {
+  const sent = []
+  const h = await boot({
+    prompt: async (request) => sent.push(request.requestId),
+    prepare: (file) => mkdir(file, { recursive: true }),
+  })
+  const made = await h.call('schedule', { sessionId: 'A', text: 'kept in memory', minutes: 5 })
+  assert.equal(made.ok, true)
+  assert.match(made.value.warning, /not being saved/)
+  assert.match((await h.call('list', { sessionId: 'A' })).value.warning, /not being saved/)
+  // Make the file readable: an old copy still holding an item that was since removed.
+  const { rm } = await import('node:fs/promises')
+  const doomed = due({ id: 'old', messageId: 'mold', dueAt: Date.now() + 3_600_000 })
+  const kept = later({ id: 'file-only' })
+  await rm(h.file, { recursive: true })
+  const id = made.value.id
+  await writeFile(h.file, JSON.stringify([doomed, kept, later({ id })]))
+  assert.equal((await h.call('remove', { id, sessionId: 'A' })).value.removed, true)
+  await sleep(1600)
+  const queued = (await h.call('list', { sessionId: 'A' })).value
+  assert.deepEqual(queued.queue.map((i) => i.id).sort(), ['file-only', 'old'])
+  assert.equal(queued.warning, undefined)
+  assert.ok(!(await readQueue(h.file)).some((i) => i.id === id), 'the removed item did not come back')
+  h.dispose()
 })

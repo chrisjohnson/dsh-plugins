@@ -145,6 +145,7 @@ window.__ModuleLoader__.load({
 
 		function useQueue(sessionId) {
 			var itemsState = React.useState([]);
+			var warningState = React.useState(null);
 			var tickState = React.useState(0);
 			React.useEffect(function () {
 				var stopped = false;
@@ -152,7 +153,10 @@ window.__ModuleLoader__.load({
 				function refresh() {
 					if (typeof sessionId !== "string" || sessionId === "") return Promise.resolve();
 					return rpcCall("list", { sessionId: sessionId }).then(function (res) {
-						if (!stopped && res && res.ok && res.value && Array.isArray(res.value.queue)) itemsState[1](res.value.queue);
+						if (!stopped && res && res.ok && res.value && Array.isArray(res.value.queue)) {
+						itemsState[1](res.value.queue);
+						warningState[1](res.value.warning || null);
+					}
 					}).catch(function () {});
 				}
 				refresh();
@@ -164,7 +168,7 @@ window.__ModuleLoader__.load({
 					clearInterval(clockId);
 				};
 			}, [sessionId]);
-			return { items: itemsState[0], setItems: itemsState[1], tick: tickState[0] };
+			return { items: itemsState[0], setItems: itemsState[1], warning: warningState[0], setWarning: warningState[1], tick: tickState[0] };
 		}
 
 		function ScheduleModal(props) {
@@ -335,9 +339,17 @@ window.__ModuleLoader__.load({
 			var q = useQueue(sessionId);
 			var busyState = React.useState(null);
 			var noticeState = React.useState(null);
+			React.useEffect(function () {
+				if (!noticeState[0]) return undefined;
+				var t = setTimeout(function () { noticeState[1](null); }, 15000);
+				return function () { clearTimeout(t); };
+			}, [noticeState[0]]);
 
 			function applyQueue(res) {
-				if (res && res.ok && res.value && Array.isArray(res.value.queue)) q.setItems(res.value.queue);
+				if (res && res.ok && res.value && Array.isArray(res.value.queue)) {
+					q.setItems(res.value.queue);
+					q.setWarning(res.value.warning || null);
+				}
 			}
 			function call(method, id, extra) {
 				busyState[1](id);
@@ -348,8 +360,10 @@ window.__ModuleLoader__.load({
 						applyQueue(res);
 						if (res && !res.ok) {
 							noticeState[1](res.error && res.error.message ? res.error.message : "That did not work.");
-						} else if (method === "sendNow" && res && res.value && res.value.delivered === false) {
+						} else if (method === "sendNow" && res && res.value && res.value.outcome === "retry") {
 							noticeState[1]("Could not send now; it stays queued and is retried automatically.");
+						} else if (method === "sendNow" && res && res.value && res.value.outcome === "dropped") {
+							noticeState[1]("That message could not be delivered and was removed. Its text is in the host log.");
 						}
 					},
 					function () { noticeState[1]("Could not reach the host."); }
@@ -357,15 +371,16 @@ window.__ModuleLoader__.load({
 			}
 
 			var items = sessionItems(q.items, sessionId);
-			if (!items.length) return null;
-			var next = items.slice().sort(function (a, b) { return a.dueAt - b.dueAt; })[0];
+			var notice = noticeState[0] || q.warning;
+			if (!items.length && !notice) return null;
+			var next = items.length ? items.slice().sort(function (a, b) { return a.dueAt - b.dueAt; })[0] : null;
 
 			return React.createElement("div", { className: "sq-panel" },
-				React.createElement("div", { className: "sq-header" },
+				items.length ? React.createElement("div", { className: "sq-header" },
 					React.createElement("span", null, items.length === 1 ? "1 scheduled message" : items.length + " scheduled messages"),
 					React.createElement("span", { className: "sq-countdown" }, "next in " + fmtCountdown(next.dueAt))
-				),
-				noticeState[0] ? React.createElement("div", { className: "sq-header", role: "alert" }, noticeState[0]) : null,
+				) : null,
+				notice ? React.createElement("div", { className: "sq-header", role: "alert" }, notice) : null,
 				React.createElement("ul", { className: "sq-list" },
 					items.map(function (item) {
 						return React.createElement(QueueRow, {

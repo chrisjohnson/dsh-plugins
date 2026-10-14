@@ -33,7 +33,8 @@ disabled because of the defect fixed below.
   `conversation.input.right` and `conversation.input.dock` slots.
 - Installed from a git tag (`dsh-scheduled-queue-v<version>`), not the npm registry.
 - A delivery that fails is retried with a back-off (5 s doubling to 5 min) instead
-  of every scan, and is aborted if it gets no answer within `deliveryTimeoutMs`.
+  of every scan, and is given up on (and retried under the same request id) if it gets no answer
+  within `deliveryTimeoutMs`.
   An item whose session is still not found after a second try two seconds later,
   or that the harness rejects as a bad request, is dropped with a warning that
   includes its text. Due items are delivered oldest-due first.
@@ -44,7 +45,15 @@ disabled because of the defect fixed below.
   that exists but cannot be read is never written over, and is re-read each scan.
 - The browser's time zone is stored on new items and sent as `clientTimeZone`. The
   field is optional, so older queue files read unchanged.
-- The dock reports a failed send-now or rejected edit instead of ignoring it.
+- The dock reports a failed send-now (retry, or dropped), a rejected edit, and an
+  unreadable queue file instead of ignoring them, even when no rows are left.
+- A delivery re-reads the current queue entry, so an item removed, edited or sent
+  while an earlier delivery was in flight is not sent stale and an edit is kept.
+- Only `UTC` and `Area/Location` time zones are stored; a zone the harness refuses
+  is retried once without it.
+- A disposed plugin stops scanning, aborts in-flight calls, and writes nothing.
+- While the queue file is unreadable, scheduling returns a warning, and recovery
+  does not bring back items delivered or removed in the meantime.
 - The queue file is written to a temporary file and renamed into place, and
   requests wait until the file has been read, so an early request cannot replace
   it with an empty queue.
