@@ -134,6 +134,8 @@ window.__ModuleLoader__.load({
 			var listeners = new Set();
 			var state = { decorations: {}, entries: [], current: {}, capabilities: {}, at: 0, error: null, ready: false };
 			var tracked = null;
+			var started = 0;
+			var applied = 0;
 			function emit() {
 				for (var listener of Array.from(listeners)) {
 					try {
@@ -177,7 +179,16 @@ window.__ModuleLoader__.load({
 				refreshFresh: function () {
 					return this.refresh(true, true);
 				},
+				/**
+				 * Poll the host. Resolves `{ ok, error }` for THIS request, never rejects:
+				 * a caller that needs the present (the archive dialog) must look at `ok`,
+				 * because a failed read leaves the previous entries in place. Requests are
+				 * sequenced by start order, so a slow older poll that finishes after a
+				 * fresher one cannot overwrite it.
+				 */
 				refresh: function (force, fresh) {
+					var seq = ++started;
+					var outcome = { ok: false, error: null };
 					var current = tracked === null ? Promise.resolve() : rpc("status", { sessionId: tracked, force: force === true })
 						.then(function (result) {
 							if (result && result.ok === true && result.value && result.value.status) {
@@ -188,6 +199,9 @@ window.__ModuleLoader__.load({
 					var snapshot = rpc("snapshot", fresh === true ? { force: true } : {})
 						.then(function (result) {
 							if (result && result.ok === true) {
+								outcome.ok = true;
+								if (seq < applied) return;
+								applied = seq;
 								var decorations = {};
 								var entries = result.value.worktrees || [];
 								for (var entry of entries) {
@@ -208,13 +222,17 @@ window.__ModuleLoader__.load({
 									ready: true,
 								});
 							} else {
-								state = Object.assign({}, state, { error: failureOf(result, "snapshot failed"), ready: true });
+								outcome.error = failureOf(result, "snapshot failed");
+								if (seq > applied) state = Object.assign({}, state, { error: outcome.error, ready: true });
 							}
 						})
 						.catch(function (error) {
-							state = Object.assign({}, state, { error: String((error && error.message) || error), ready: true });
+							outcome.error = String((error && error.message) || error);
+							if (seq > applied) state = Object.assign({}, state, { error: outcome.error, ready: true });
 						});
-					return Promise.all([current, snapshot]).then(emit);
+					return Promise.all([current, snapshot]).then(emit).then(function () {
+						return outcome;
+					});
 				},
 			};
 		}
@@ -359,16 +377,32 @@ window.__ModuleLoader__.load({
 			}, h("p", { className: "bgw-menu-error" }, notice.message));
 		}
 
-		var NO_PLAN = { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] };
+		var NO_PLAN = { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] };
 
 		/** What the dialog warns about for one session, with every field present. */
 		function planFor(entry) {
 			return Object.assign({}, NO_PLAN, (entry && entry.archive) || {});
 		}
 
-		/** Whether the copy of `sessionId` is still the working directory of a different, live session. */
-		function liveElsewhere(entry, sessionId) {
-			return Boolean(entry) && typeof entry.targetSessionId === "string" && entry.targetSessionId !== sessionId;
+		/** Whether the harness lists a session as archived (an archived session no longer works in its directory). */
+		function isArchived(services, sessionId) {
+			try {
+				var snapshot = services.workspaces.list.getSnapshot();
+				return Array.isArray(snapshot.archivedSessionIds) && snapshot.archivedSessionIds.indexOf(sessionId) !== -1;
+			} catch (error) {
+				return false;
+			}
+		}
+
+		/**
+		 * Whether the copy of `sessionId` is still the working directory of a
+		 * different session that is not archived. A converted copy's record belongs
+		 * to the source session and names the continuation as `targetSessionId`;
+		 * once that continuation is archived the source may remove the copy.
+		 */
+		function liveElsewhere(entry, sessionId, services) {
+			return Boolean(entry) && typeof entry.targetSessionId === "string" && entry.targetSessionId !== sessionId
+				&& !isArchived(services, entry.targetSessionId);
 		}
 
 		/** Whether more is at stake now than the dialog showed, or the copy can no longer be verified. */
@@ -387,7 +421,7 @@ window.__ModuleLoader__.load({
 			if (pending === null) return null;
 			var entry = statusStore.entryFor(pending.sessionId) || {};
 			var plan = planFor(entry);
-			var otherLive = liveElsewhere(entry, pending.sessionId);
+			var otherLive = liveElsewhere(entry, pending.sessionId, services);
 			var blocked = plan.unknown || otherLive;
 
 			var close = function () {
@@ -401,31 +435,39 @@ window.__ModuleLoader__.load({
 				archivePrompt.close();
 				void request.proceed(request.sessionId);
 			};
+			var verify = async function (sessionId, holder) {
+				var refreshed;
+				try {
+					refreshed = await statusStore.refreshFresh();
+				} catch (error) {
+					refreshed = { ok: false, error: String((error && error.message) || error) };
+				}
+				// A failed read leaves the old entries in place; comparing them with
+				// themselves would pass. A failed re-check is a refusal.
+				if (!refreshed || refreshed.ok !== true) {
+					return "The working copy could not be re-checked (" + String((refreshed && refreshed.error) || "no answer") + "), so it was not removed.";
+				}
+				var latest = statusStore.entryFor(sessionId);
+				var now = planFor(latest);
+				if (!latest || !latest.archive || latest.archive.prompt !== true) return "The working copy could not be re-checked, so it was not removed.";
+				if (now.unknown) return "Could not verify that this copy has no unsaved work, so it was not removed.";
+				if (liveElsewhere(latest, sessionId, services)) return "Another session still works in this copy, so it was not removed.";
+				if (planGotWorse(plan, now)) return "The working copy changed while this dialog was open (now " + String(now.dirty) + " uncommitted path(s), " + String(now.unpushed) + " unpushed commit(s), " + String(now.stashes) + " stash entr" + (now.stashes === 1 ? "y" : "ies") + "). Review the warnings above and try again.";
+				holder.plan = now;
+				return null;
+			};
 			/**
 			 * Read the present state of the copy and compare it with what the dialog
 			 * showed: the dialog's own data is up to ~14 s old (the poll plus the host's
 			 * cache), and work done in that window must not be deleted unseen.
 			 * @returns an error text, or null when removal may go ahead.
 			 */
-			var verify = async function (sessionId) {
-				try {
-					await statusStore.refreshFresh();
-				} catch (error) {
-					return "The working copy could not be re-checked: " + String((error && error.message) || error);
-				}
-				var latest = statusStore.entryFor(sessionId);
-				var now = planFor(latest);
-				if (!latest || !latest.archive || latest.archive.prompt !== true) return "The working copy could not be re-checked, so it was not removed.";
-				if (now.unknown) return "Could not verify that this copy has no unsaved work, so it was not removed.";
-				if (liveElsewhere(latest, sessionId)) return "Another session still works in this copy, so it was not removed.";
-				if (planGotWorse(plan, now)) return "The working copy changed while this dialog was open (now " + String(now.dirty) + " uncommitted path(s), " + String(now.unpushed) + " unpushed commit(s), " + String(now.stashes) + " stash entr" + (now.stashes === 1 ? "y" : "ies") + "). Review the warnings above and try again.";
-				return null;
-			};
 			var removeThenArchive = async function () {
 				var request = pending;
 				if (blocked) return;
 				setState({ busy: "remove", error: null, archived: state.archived });
-				var problem = await verify(request.sessionId);
+				var holder = { plan: plan };
+				var problem = await verify(request.sessionId, holder);
 				if (problem !== null) {
 					setState({ busy: null, error: problem, archived: state.archived });
 					return;
@@ -447,14 +489,18 @@ window.__ModuleLoader__.load({
 						});
 						return;
 					}
-					problem = await verify(request.sessionId);
+					problem = await verify(request.sessionId, holder);
 					if (problem !== null) {
 						setState({ busy: null, archived: true, error: "The session was archived. " + problem });
 						return;
 					}
 				}
 				try {
-					var result = await rpc("remove", { sessionId: request.sessionId });
+					var result = await rpc("remove", {
+						sessionId: request.sessionId,
+						// What was verified a moment ago; the host re-reads and refuses unless it is exactly this.
+						confirmedPlan: { dirty: holder.plan.dirty, unpushed: holder.plan.unpushed, stashes: holder.plan.stashes },
+					});
 					if (!result || result.ok !== true) throw new Error(failureOf(result, "the worktree could not be removed"));
 					// The Host retires the dead Workspace registration with the copy.
 					await statusStore.refresh(true);
@@ -501,6 +547,12 @@ window.__ModuleLoader__.load({
 						: null,
 					!plan.unknown && plan.stashes > 0
 						? h("div", { className: "bgw-warn" }, String(plan.stashes) + " stash entr" + (plan.stashes === 1 ? "y" : "ies") + " inside the copy; removing the copy discards them.")
+						: null,
+					!plan.unknown && plan.operations.length > 0
+						? h("div", { className: "bgw-warn" }, "In progress: " + plan.operations.join("; ") + ".")
+						: null,
+					plan.ignored !== null && plan.ignored.count > 0
+						? h("div", { className: "bgw-note" }, String(plan.ignored.count) + " ignored file(s) or folder(s) will be deleted too, e.g. " + plan.ignored.examples.join(", ") + (plan.ignored.count > plan.ignored.examples.length ? ", ..." : "") + ".")
 						: null,
 					otherLive
 						? h("div", { className: "bgw-warn" }, "Session " + String(entry.targetSessionId) + " still works in this copy. Remove is unavailable until that session is archived.")

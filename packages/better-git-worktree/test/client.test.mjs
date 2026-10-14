@@ -113,6 +113,7 @@ function fakeSlots() {
 
 function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, holdTimeouts } = {}) {
   const held = new Map()
+  const intervalFns = []
   const slots = fakeSlots()
   const flags = { failRemove: false }
   const fetched = []
@@ -131,7 +132,9 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
     if (endpoint === 'remove' && flags.failRemove) {
       return { ok: true, json: async () => ({ ok: false, error: { message: 'refusing to remove' } }) }
     }
-    const value = endpoint === 'snapshot' ? (typeof snapshot === 'function' ? snapshot(JSON.parse(init.body)) : snapshot) : endpoint === 'remove' ? { removed: true } : { status: null }
+    const value = endpoint === 'snapshot' ? await (typeof snapshot === 'function' ? snapshot(JSON.parse(init.body)) : snapshot) : endpoint === 'remove' ? { removed: true } : { status: null }
+    if (value && value.__http) return { ok: false, status: value.__http, json: async () => ({}) }
+    if (value && value.__fail) return { ok: true, json: async () => ({ ok: false, error: { message: value.__fail } }) }
     return { ok: true, json: async () => ({ ok: true, value }) }
   }
   const react = fakeReact()
@@ -149,7 +152,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
   }
   const navigatorStub = clipboard === undefined ? undefined : { clipboard }
   new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', source)(
-    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, () => 0, () => {}, setTimeoutStub, (id) => held.delete(id),
+    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, (fn) => (intervalFns.push(fn), 0), () => {}, setTimeoutStub, (id) => held.delete(id),
   )
   const exports = loaded.factory(require)
   const sidebarTabs = []
@@ -162,7 +165,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
       if (betterSidebar !== undefined) callback({ betterSidebar, effect: (fn, label) => effects.push({ run: fn, label }) })
     },
   }
-  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, held, failRemove: () => { flags.failRemove = true } }
+  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, held, poll: () => intervalFns.forEach((fn) => fn()), failRemove: () => { flags.failRemove = true } }
 }
 
 const DECLARED = [
@@ -368,7 +371,7 @@ test('Remove archives first and deletes the copy only after the archive succeede
   await flush()
   await flush()
   const removal = t.fetched.find((f) => f.url === '/betterGitWorktree/remove')
-  assert.deepEqual(removal.body, { sessionId: 'session-wt' })
+  assert.deepEqual(removal.body, { sessionId: 'session-wt', confirmedPlan: { dirty: 2, unpushed: 1, stashes: 0 } })
   assert.deepEqual(order, [['archive', 'session-wt']])
   assert.ok(t.fetched.indexOf(removal) > -1)
 })
@@ -668,6 +671,74 @@ test('a pending archive retry is cancelled when the plugin is disposed', async (
   assert.equal(t.held.size, 2, 'a retry is now scheduled (the first timer entry is spent)')
   for (const dispose of t.disposers) if (typeof dispose === 'function') dispose()
   assert.equal([...t.held.keys()].filter((id) => id !== 1).length, 0, 'the scheduled retry was cancelled')
+})
+
+for (const [label, failure] of [['an HTTP 500', { __http: 500 }], ['an ok:false answer', { __fail: 'host exploded' }]]) {
+  test(`a forced re-read that fails (${label}) is a refusal: nothing is archived or removed on the stale snapshot`, async () => {
+    let fresh = 0
+    const { order, services } = archivingServices(async () => {})
+    const t = mountClient({
+      snapshot: (body) => (body.force && ++fresh > 1 ? failure : copySnapshot(planOf())),
+      services,
+    })
+    const tree = await openRemoveDialog(t)
+    await flush()
+    await flush()
+    assert.equal(fresh, 1, 'the open-time read succeeded')
+    button(tree, 'primary').props.onClick()
+    await flush()
+    await flush()
+    assert.equal(fresh, 2, 'the pre-remove read failed')
+    assert.deepEqual(order, [], 'nothing was archived')
+    assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false, 'nothing was removed')
+    assert.match(t.react.stateLog.at(-1).error, /could not be re-checked \(.+\), so it was not removed/)
+  })
+}
+
+test('a slow older poll cannot overwrite a fresher forced snapshot', async () => {
+  let releaseOld
+  const behind = copySnapshot(planOf(), {})
+  behind.worktrees[0].decoration = { ...behind.worktrees[0].decoration, state: 'behind', label: 'Behind' }
+  const stale = copySnapshot(planOf())
+  stale.worktrees[0].decoration = { ...stale.worktrees[0].decoration, state: 'progressing', label: 'Progressing' }
+  let calls = 0
+  const t = mountClient({
+    snapshot: () => (++calls === 1 ? new Promise((resolve) => { releaseOld = () => resolve(stale) }) : behind),
+  })
+  await flush()
+  // The poll started at mount is still in flight; the next poll starts later and answers first.
+  t.poll()
+  await flush()
+  await flush()
+  const badge = t.slots.winners('sidebar.session.row.leading')[0].component
+  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the forced answer is in')
+  releaseOld()
+  await flush()
+  await flush()
+  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the older answer arrived later and was dropped')
+})
+
+test('the dialog tells about ignored files and half-done operations without blocking Remove', async () => {
+  const t = mountClient({
+    snapshot: copySnapshot(planOf({ ignored: { count: 7, examples: ['.env', 'node_modules/'] }, operations: ['a rebase is in progress'] })),
+  })
+  const tree = await openRemoveDialog(t)
+  const text = JSON.stringify(tree)
+  assert.match(text, /7 ignored file\(s\) or folder\(s\) will be deleted too, e\.g\. \.env, node_modules\/, \.\.\./)
+  assert.match(text, /In progress: a rebase is in progress\./)
+  assert.equal(button(tree, 'primary').props.disabled, false)
+})
+
+test('the source row of a conversion is unblocked once the continuation is archived', async () => {
+  const snapshot = copySnapshot(planOf(), { targetSessionId: 'session-new' })
+  const archived = []
+  const { services } = archivingServices(async () => {})
+  services.workspaces = { list: { getSnapshot: () => ({ archivedSessionIds: archived }) } }
+  const live = mountClient({ snapshot, services })
+  assert.equal(button(await openRemoveDialog(live), 'primary').props.disabled, true, 'blocked while the continuation is live')
+  archived.push('session-new')
+  const done = mountClient({ snapshot, services })
+  assert.equal(button(await openRemoveDialog(done), 'primary').props.disabled, false, 'unblocked once it is archived')
 })
 
 test('with dsh-better-sidebar the Branch tab is registered, and disposed with the plugin', () => {
