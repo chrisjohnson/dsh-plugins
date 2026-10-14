@@ -111,7 +111,8 @@ function fakeSlots() {
   return slots
 }
 
-function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard } = {}) {
+function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, holdTimeouts } = {}) {
+  const held = new Map()
   const slots = fakeSlots()
   const flags = { failRemove: false }
   const fetched = []
@@ -130,7 +131,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard } = 
     if (endpoint === 'remove' && flags.failRemove) {
       return { ok: true, json: async () => ({ ok: false, error: { message: 'refusing to remove' } }) }
     }
-    const value = endpoint === 'snapshot' ? snapshot : endpoint === 'remove' ? { removed: true } : { status: null }
+    const value = endpoint === 'snapshot' ? (typeof snapshot === 'function' ? snapshot(JSON.parse(init.body)) : snapshot) : endpoint === 'remove' ? { removed: true } : { status: null }
     return { ok: true, json: async () => ({ ok: true, value }) }
   }
   const react = fakeReact()
@@ -139,12 +140,16 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard } = 
   // Timers: polling never fires; one-shot timeouts run at once (recording their delay) when a test asks to see them.
   const setTimeoutStub = (fn, ms) => {
     timeouts?.push(ms)
+    if (holdTimeouts) {
+      held.set(held.size + 1, fn)
+      return held.size
+    }
     queueMicrotask(fn)
     return 0
   }
   const navigatorStub = clipboard === undefined ? undefined : { clipboard }
-  new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', 'setTimeout', source)(
-    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, () => 0, () => {}, setTimeoutStub,
+  new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', source)(
+    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, () => 0, () => {}, setTimeoutStub, (id) => held.delete(id),
   )
   const exports = loaded.factory(require)
   const sidebarTabs = []
@@ -157,7 +162,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard } = 
       if (betterSidebar !== undefined) callback({ betterSidebar, effect: (fn, label) => effects.push({ run: fn, label }) })
     },
   }
-  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, failRemove: () => { flags.failRemove = true } }
+  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, held, failRemove: () => { flags.failRemove = true } }
 }
 
 const DECLARED = [
@@ -318,7 +323,7 @@ test('a worktree session asks first: the official archive runs only after the di
   const text = JSON.stringify(tree)
   assert.match(text, /brave-otter/)
   assert.match(text, /2 uncommitted path\(s\) will be lost with it\./)
-  assert.match(text, /1 commit\(s\) are not pushed anywhere/)
+  assert.match(text, /1 unpushed commit\(s\)/)
   assert.match(text, /does nothing while the session is still running/)
 
   // "Keep" archives without removing the copy.
@@ -521,6 +526,148 @@ test('a clipboard failure is reported too', async () => {
   copy.component({ sessionId: 'session-wt', useMenuOpenState: () => [true, () => {}] }).props.onSelect()
   await flush()
   assert.match(JSON.stringify(find(overlay(t), named('Modal'))), /Could not copy the path: denied/)
+})
+
+const planOf = (fields) => ({ prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ...fields })
+const copySnapshot = (archive, extra = {}) => ({
+  worktrees: [{
+    sessionId: 'session-wt',
+    managedRoot: '/work/project/.dsh-worktrees/brave-otter',
+    branch: 'dsh/brave-otter',
+    decoration: { state: 'progressing', label: 'Progressing', needsRebase: false, tooltip: 't', name: 'brave-otter', title: 'brave-otter - Progressing' },
+    archive,
+    ...extra,
+  }],
+  capabilities: {},
+  at: 1,
+})
+
+test('a copy whose status could not be read is "unknown", never "clean": Remove is disabled, Keep still works, and nothing is touched', async () => {
+  const reason = 'could not read the working tree: fatal: unable to normalize alternate object path'
+  const { order, services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot: copySnapshot(planOf({ unknown: true, reasons: [reason] })), services })
+  const tree = await openRemoveDialog(t)
+  const text = JSON.stringify(tree)
+  assert.match(text, /Could not verify that this copy has no unsaved work; removing it may lose work\./)
+  assert.match(text, /unable to normalize alternate object path/)
+  assert.doesNotMatch(text, /The working copy is clean/)
+  assert.equal(button(tree, 'primary').props.disabled, true)
+  assert.equal(button(tree, 'outline').props.disabled, false, 'Keep (archive only) is still available')
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  assert.deepEqual(order, [], 'nothing was archived')
+  assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false, 'nothing was removed')
+})
+
+test('the dialog warns about stash entries and unpushed commits separately from uncommitted files', async () => {
+  const t = mountClient({ snapshot: copySnapshot(planOf({ dirty: 1, unpushed: 2, stashes: 3 })) })
+  const text = JSON.stringify(await openRemoveDialog(t))
+  assert.match(text, /1 uncommitted path\(s\) will be lost with it\./)
+  assert.match(text, /2 unpushed commit\(s\)/)
+  assert.match(text, /3 stash entries inside the copy/)
+})
+
+test('archiving the source row of a conversion cannot remove the copy its continuation still works in', async () => {
+  const snapshot = copySnapshot(planOf(), { targetSessionId: 'session-new' })
+  const { order, services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot, services })
+  const tree = await openRemoveDialog(t)
+  assert.equal(button(tree, 'primary').props.disabled, true)
+  assert.match(JSON.stringify(tree), /Session session-new still works in this copy\. Remove is unavailable until that session is archived\./)
+  button(tree, 'primary').props.onClick()
+  await flush()
+  assert.deepEqual(order, [])
+  assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false)
+
+  // Archiving the continuation itself (the session that lives there) is not blocked.
+  archivePrompt(t, 'session-new')
+  const own = overlay(t)
+  assert.equal(button(own, 'primary').props.disabled, false)
+})
+
+function archivePrompt(t, sessionId) {
+  t.slots.winners('sidebar.workspaces.session.row.action').find((e) => e.options.id === 'archive').inject().archiveSession(sessionId)
+}
+
+test('the dialog reads the present state on open and re-reads it before removing: work done since is not deleted unseen', async () => {
+  let fresh = 0
+  const clean = copySnapshot(planOf())
+  const dirtier = copySnapshot(planOf({ dirty: 3 }))
+  const { order, services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot: (body) => (body.force ? (++fresh === 1 ? clean : dirtier) : clean), services })
+  const tree = await openRemoveDialog(t)
+  await flush()
+  await flush()
+  assert.ok(t.fetched.some((f) => f.url.endsWith('/snapshot') && f.body.force === true), 'a fresh (cache-bypassing) read was requested on open')
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  assert.equal(fresh, 2, 'and once more just before removing')
+  assert.deepEqual(order, [], 'the plan got worse, so nothing was archived')
+  assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false)
+  assert.match(t.react.stateLog.at(-1).error, /changed while this dialog was open \(now 3 uncommitted path\(s\), 0 unpushed commit\(s\), 0 stash entries\)/)
+})
+
+test('a copy that becomes unverifiable between the dialog and Remove is not removed', async () => {
+  let fresh = 0
+  const { order, services } = archivingServices(async () => {})
+  const t = mountClient({
+    snapshot: (body) => (body.force && ++fresh > 1 ? copySnapshot(planOf({ unknown: true, reasons: ['timed out'] })) : copySnapshot(planOf())),
+    services,
+  })
+  const tree = await openRemoveDialog(t)
+  await flush()
+  await flush()
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  assert.deepEqual(order, [])
+  assert.match(t.react.stateLog.at(-1).error, /Could not verify that this copy has no unsaved work, so it was not removed/)
+})
+
+test('after "archived but the copy could not be removed" the dialog names the path so removal can be retried', async () => {
+  const { services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot: SNAPSHOT, services })
+  const tree = await openRemoveDialog(t)
+  t.failRemove()
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  const last = t.react.stateLog.at(-1)
+  assert.equal(last.archived, true)
+  assert.match(last.error, /still at \/work\/project\/\.dsh-worktrees\/brave-otter; press Remove to try again/)
+})
+
+test('the source archive stops at once on a permanent error (the session is gone)', async () => {
+  const timeouts = []
+  const { calls, snapshot, services } = conversionFixture({
+    archive: () => {
+      throw Object.assign(new Error('session not found'), { name: 'WorkspaceArchiveError', rpcError: { code: 'session/not-found' } })
+    },
+  })
+  const t = mountClient({ snapshot, services, timeouts })
+  await settle()
+  assert.equal(calls.archive.length, 1)
+  assert.deepEqual(timeouts, [0])
+  assert.match(t.warnings.join('\n'), /not archiving the source session session-src: session not found/)
+})
+
+test('a pending archive retry is cancelled when the plugin is disposed', async () => {
+  const { calls, snapshot, services } = conversionFixture({
+    archive: () => {
+      throw new Error('workspace/session-active')
+    },
+  })
+  const t = mountClient({ snapshot, services, holdTimeouts: true })
+  await settle()
+  assert.equal(t.held.size, 1, 'the first attempt is waiting')
+  ;[...t.held.values()][0]()
+  await settle()
+  assert.equal(calls.archive.length, 1)
+  assert.equal(t.held.size, 2, 'a retry is now scheduled (the first timer entry is spent)')
+  for (const dispose of t.disposers) if (typeof dispose === 'function') dispose()
+  assert.equal([...t.held.keys()].filter((id) => id !== 1).length, 0, 'the scheduled retry was cancelled')
 })
 
 test('with dsh-better-sidebar the Branch tab is registered, and disposed with the plugin', () => {

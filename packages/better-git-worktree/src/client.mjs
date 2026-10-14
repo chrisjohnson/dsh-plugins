@@ -173,7 +173,11 @@ window.__ModuleLoader__.load({
 						listeners.delete(listener);
 					};
 				},
-				refresh: function (force) {
+				/** A refresh that bypasses the host's status cache (the archive dialog needs the present, not ~14 s ago). */
+				refreshFresh: function () {
+					return this.refresh(true, true);
+				},
+				refresh: function (force, fresh) {
 					var current = tracked === null ? Promise.resolve() : rpc("status", { sessionId: tracked, force: force === true })
 						.then(function (result) {
 							if (result && result.ok === true && result.value && result.value.status) {
@@ -181,7 +185,7 @@ window.__ModuleLoader__.load({
 							}
 						})
 						.catch(function () {});
-					var snapshot = rpc("snapshot", {})
+					var snapshot = rpc("snapshot", fresh === true ? { force: true } : {})
 						.then(function (result) {
 							if (result && result.ok === true) {
 								var decorations = {};
@@ -279,6 +283,9 @@ window.__ModuleLoader__.load({
 				archivePrompt.open(sessionId, function () {
 					return original.apply(self, args);
 				});
+				// The plan on screen may be seconds old: read the present state now
+				// (the dialog re-renders when it arrives).
+				void statusStore.refreshFresh();
 				return undefined;
 			};
 		}
@@ -352,57 +359,113 @@ window.__ModuleLoader__.load({
 			}, h("p", { className: "bgw-menu-error" }, notice.message));
 		}
 
+		var NO_PLAN = { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] };
+
+		/** What the dialog warns about for one session, with every field present. */
+		function planFor(entry) {
+			return Object.assign({}, NO_PLAN, (entry && entry.archive) || {});
+		}
+
+		/** Whether the copy of `sessionId` is still the working directory of a different, live session. */
+		function liveElsewhere(entry, sessionId) {
+			return Boolean(entry) && typeof entry.targetSessionId === "string" && entry.targetSessionId !== sessionId;
+		}
+
+		/** Whether more is at stake now than the dialog showed, or the copy can no longer be verified. */
+		function planGotWorse(shown, now) {
+			return (now.unknown && !shown.unknown) || now.dirty > shown.dirty || now.unpushed > shown.unpushed || now.stashes > shown.stashes;
+		}
+
 		function ArchiveWorktreePrompt(props) {
 			var services = props.services;
 			useArchivePromptVersion();
-			var pair = React.useState({ busy: null, error: null });
+			useStatusVersion();
+			var pair = React.useState({ busy: null, error: null, archived: false });
 			var state = pair[0];
 			var setState = pair[1];
 			var pending = archivePrompt.pending;
 			if (pending === null) return null;
 			var entry = statusStore.entryFor(pending.sessionId) || {};
-			var plan = entry.archive || { dirty: 0, unpushed: 0 };
+			var plan = planFor(entry);
+			var otherLive = liveElsewhere(entry, pending.sessionId);
+			var blocked = plan.unknown || otherLive;
 
 			var close = function () {
 				if (state.busy !== null) return;
-				setState({ busy: null, error: null });
+				setState({ busy: null, error: null, archived: false });
 				archivePrompt.close();
 			};
 			var archiveOnly = function () {
 				var request = pending;
-				setState({ busy: null, error: null });
+				setState({ busy: null, error: null, archived: false });
 				archivePrompt.close();
 				void request.proceed(request.sessionId);
 			};
+			/**
+			 * Read the present state of the copy and compare it with what the dialog
+			 * showed: the dialog's own data is up to ~14 s old (the poll plus the host's
+			 * cache), and work done in that window must not be deleted unseen.
+			 * @returns an error text, or null when removal may go ahead.
+			 */
+			var verify = async function (sessionId) {
+				try {
+					await statusStore.refreshFresh();
+				} catch (error) {
+					return "The working copy could not be re-checked: " + String((error && error.message) || error);
+				}
+				var latest = statusStore.entryFor(sessionId);
+				var now = planFor(latest);
+				if (!latest || !latest.archive || latest.archive.prompt !== true) return "The working copy could not be re-checked, so it was not removed.";
+				if (now.unknown) return "Could not verify that this copy has no unsaved work, so it was not removed.";
+				if (liveElsewhere(latest, sessionId)) return "Another session still works in this copy, so it was not removed.";
+				if (planGotWorse(plan, now)) return "The working copy changed while this dialog was open (now " + String(now.dirty) + " uncommitted path(s), " + String(now.unpushed) + " unpushed commit(s), " + String(now.stashes) + " stash entr" + (now.stashes === 1 ? "y" : "ies") + "). Review the warnings above and try again.";
+				return null;
+			};
 			var removeThenArchive = async function () {
 				var request = pending;
-				setState({ busy: "remove", error: null });
+				if (blocked) return;
+				setState({ busy: "remove", error: null, archived: state.archived });
+				var problem = await verify(request.sessionId);
+				if (problem !== null) {
+					setState({ busy: null, error: problem, archived: state.archived });
+					return;
+				}
 				// Archive first, delete second. The harness refuses to archive a session
 				// with running work, and a session left running in a deleted directory is
 				// the one outcome that cannot be undone, so nothing is removed until the
 				// archive has actually succeeded.
-				try {
-					await archiveNow(services, request.sessionId);
-				} catch (error) {
-					setState({
-						busy: null,
-						error: "The session could not be archived, so the worktree was not touched: "
-							+ String((error && error.message) || error)
-							+ " If it is still running, stop it first and archive it again.",
-					});
-					return;
+				if (!state.archived) {
+					try {
+						await archiveNow(services, request.sessionId);
+					} catch (error) {
+						setState({
+							busy: null,
+							archived: false,
+							error: "The session could not be archived, so the worktree was not touched: "
+								+ String((error && error.message) || error)
+								+ " If it is still running, stop it first and archive it again.",
+						});
+						return;
+					}
+					problem = await verify(request.sessionId);
+					if (problem !== null) {
+						setState({ busy: null, archived: true, error: "The session was archived. " + problem });
+						return;
+					}
 				}
 				try {
 					var result = await rpc("remove", { sessionId: request.sessionId });
 					if (!result || result.ok !== true) throw new Error(failureOf(result, "the worktree could not be removed"));
 					// The Host retires the dead Workspace registration with the copy.
 					await statusStore.refresh(true);
-					setState({ busy: null, error: null });
+					setState({ busy: null, error: null, archived: false });
 					archivePrompt.close();
 				} catch (error) {
 					setState({
 						busy: null,
-						error: "The session was archived but its worktree could not be removed: " + String((error && error.message) || error),
+						archived: true,
+						error: "The session was archived but its worktree could not be removed: " + String((error && error.message) || error)
+							+ " The working copy is still at " + (entry.managedRoot || "(unknown)") + "; press Remove to try again.",
 					});
 				}
 			};
@@ -415,10 +478,10 @@ window.__ModuleLoader__.load({
 				description: "This session works in a git worktree. Archiving it hides the session; the working copy on disk is a separate decision.",
 				footer: h("span", { className: "bgw-modal-actions" },
 					h(primitives.Button, { variant: "ghost", disabled: state.busy !== null, onClick: close }, "Cancel"),
-					h(primitives.Button, { variant: "outline", disabled: state.busy !== null, onClick: archiveOnly }, "Keep"),
+					h(primitives.Button, { variant: "outline", disabled: state.busy !== null || state.archived, onClick: archiveOnly }, "Keep"),
 					h(primitives.Button, {
 						variant: "primary",
-						disabled: state.busy !== null,
+						disabled: state.busy !== null || blocked,
 						onClick: function () {
 							void removeThenArchive();
 						},
@@ -427,15 +490,25 @@ window.__ModuleLoader__.load({
 				h("div", { className: "bgw-panel", style: { padding: 0, height: "auto", gap: "6px" } },
 					h("div", null, h("strong", null, "Worktree: "), entry.managedRoot || "(unknown)"),
 					entry.branch ? h("div", null, h("strong", null, "Branch: "), entry.branch) : null,
-					plan.dirty > 0
-						? h("div", { className: "bgw-warn" }, String(plan.dirty) + " uncommitted path(s) will be lost with it.")
-						: h("div", { className: "bgw-note" }, "The working copy is clean."),
-					plan.unpushed > 0
-						? h("div", { className: "bgw-warn" }, String(plan.unpushed) + " commit(s) are not pushed anywhere; removing the copy discards them.")
+					plan.unknown
+						? h("div", { className: "bgw-warn" }, "Could not verify that this copy has no unsaved work; removing it may lose work. Remove is unavailable; Keep still archives the session and leaves the copy.")
+						: plan.dirty > 0
+							? h("div", { className: "bgw-warn" }, String(plan.dirty) + " uncommitted path(s) will be lost with it.")
+							: h("div", { className: "bgw-note" }, "The working copy is clean."),
+					plan.unknown && plan.reasons.length > 0 ? h("div", { className: "bgw-note" }, plan.reasons.join("; ")) : null,
+					!plan.unknown && plan.unpushed > 0
+						? h("div", { className: "bgw-warn" }, String(plan.unpushed) + " unpushed commit(s) (on no remote and not in the source repository); removing the copy discards them.")
+						: null,
+					!plan.unknown && plan.stashes > 0
+						? h("div", { className: "bgw-warn" }, String(plan.stashes) + " stash entr" + (plan.stashes === 1 ? "y" : "ies") + " inside the copy; removing the copy discards them.")
+						: null,
+					otherLive
+						? h("div", { className: "bgw-warn" }, "Session " + String(entry.targetSessionId) + " still works in this copy. Remove is unavailable until that session is archived.")
 						: null,
 					h("div", { className: "bgw-note" }, "Remove archives the session first, so it does nothing while the session is still running: stop it, then archive again."),
 					state.error !== null ? h("div", { className: "bgw-menu-error" }, state.error) : null));
 		}
+
 
 		/**
 		 * Shadow one of the official workspace UI's archive entries.
@@ -586,9 +659,34 @@ window.__ModuleLoader__.load({
 		// so the first attempt fails and a later one succeeds once the turn ends.
 		var ARCHIVE_RETRY_MS = [0, 3000, 8000, 20000, 45000, 90000];
 
+		// Timers of retry chains still waiting, so a reload or dispose can end them.
+		var retryTimers = new Set();
+		var retiring = false;
+
+		function cancelArchiveRetries() {
+			retiring = true;
+			for (var timer of Array.from(retryTimers)) clearTimeout(timer);
+			retryTimers.clear();
+		}
+
+		/** An archive refusal that waiting cannot fix (the session is gone), as opposed to "still running". */
+		function isPermanentArchiveError(error) {
+			var code = error && error.rpcError && error.rpcError.code;
+			return /not-found|unknown-session/i.test(String(code || "")) || (error && error.name === "WorkspaceUnknownSessionError");
+		}
+
 		function archiveSourceWithRetry(services, sessionId) {
 			if (services.workspaces === undefined || typeof services.workspaces.archiveSession !== "function") return;
 			var attempt = 0;
+
+			function schedule(delay) {
+				if (retiring) return;
+				var timer = setTimeout(function () {
+					retryTimers.delete(timer);
+					next();
+				}, delay);
+				retryTimers.add(timer);
+			}
 			function next() {
 				var outcome;
 				try {
@@ -598,6 +696,12 @@ window.__ModuleLoader__.load({
 				}
 				outcome.then(function () {}, function (error) {
 					attempt += 1;
+					if (isPermanentArchiveError(error)) {
+						console.warn(
+							"[better-git-worktree] not archiving the source session " + sessionId + ": " + String((error && error.message) || error),
+						);
+						return;
+					}
 					if (attempt >= ARCHIVE_RETRY_MS.length) {
 						console.warn(
 							"[better-git-worktree] gave up archiving the source session " + sessionId + " after "
@@ -605,11 +709,12 @@ window.__ModuleLoader__.load({
 						);
 						return;
 					}
-					setTimeout(next, ARCHIVE_RETRY_MS[attempt]);
+					schedule(ARCHIVE_RETRY_MS[attempt]);
 				});
 			}
-			setTimeout(next, ARCHIVE_RETRY_MS[0]);
+			schedule(ARCHIVE_RETRY_MS[0]);
 		}
+
 
 		/**
 		 * Create the working-copy-rooted Session for a prepared working copy and hand
@@ -1177,6 +1282,7 @@ window.__ModuleLoader__.load({
 				};
 			}, "dsh-better-git-worktree: status polling");
 			ctx.effect(function () { return activationWatcher(ctx); }, "dsh-better-git-worktree: activation watcher");
+			ctx.effect(function () { return cancelArchiveRetries; }, "dsh-better-git-worktree: archive retries");
 
 			function seat(slotName, id, order, component, label) {
 				ctx.effect(function () {
