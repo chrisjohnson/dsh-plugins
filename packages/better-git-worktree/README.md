@@ -18,7 +18,7 @@ It borrows the UX of [`dsh-git-worktree`](https://github.com/wloops/dsh-git-work
 - **Header pill and menu, for every session.** The pill reads `<name> - <status>` (`brave-otter - Progressing`, `main - In Sync`). Its menu offers *Git Changes*, *Review branch vs `<default>`*, *git fetch*, *Copy worktree path* / *Open worktree folder* for working-copy sessions, and *Move this session into a worktree* for the rest.
 - **Session "..." menu**: *Copy worktree path* and *Open worktree folder* on a session that has a working copy.
 - **Archiving a worktree session asks about the working copy.** The official *Archive* actions (the row's hover button and the "..." menu row) are shadowed: a session with a working copy opens one dialog (*Remove*, *Keep*, *Cancel*) that names the path and branch and warns about uncommitted paths and unpushed commits. *Remove* also retires the dead workspace registration. Every other session archives exactly as before.
-- **Background git with a cache.** TTL cache (single-flight, stale-while-revalidate), a 15 s background refresher, and a 90 s-throttled `git fetch` that never blocks a read.
+- **Background git with a cache.** TTL cache (single-flight, stale-while-revalidate), a 15 s background refresher, and a 90 s-throttled `git fetch` of the source checkout that never blocks a read (a copy's own refs update when the copy fetches; see Working copies).
 
 The official Workspace UI stays in charge of the sidebar; this plugin only adds to it through the seats that UI declares (see [How it plugs in](#how-it-plugs-in)). It does not replace or disable any core row.
 
@@ -38,7 +38,7 @@ pnpm add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-better-git-wor
 
 > **Warning:** never install it by bare name. Unscoped `dsh-*` names on the npm registry can belong to unrelated authors.
 
-Restart dsh. No other row needs to change.
+Restart dsh. If you ran an earlier, in-tree version of this plugin, also **remove its old `ui-workspace` row** (the one whose `disabled` expression tests `betterGitWorktreeWorkspaceProvider`) and its old `better-git-worktree` row pointing at an `entry-rN.mjs`: the official Workspace UI must stay active, and this plugin no longer elects itself in its place. A fresh install needs no other row.
 
 ## Configuration
 
@@ -107,8 +107,9 @@ A shadow reuses the official component and locale and the official inject result
 ## Known limits
 
 - The keyboard shortcut for *Archive session* calls the official archive directly and is not intercepted: it archives without the dialog and leaves the working copy on disk (the *Keep* outcome).
-- No badge on rows that are busy or have a pending interaction (the leading seat is not rendered there), none in search results, and none on archived rows.
-- A working-copy session is a workspace of its own in the sidebar (named after the copy) and is listed in the new-session workspace dropdown; the official UI offers no seat to regroup it under the project it was branched from.
+- The status badge is drawn only in a row's leading seat, which the official UI renders only for an idle row. There is none on a busy row, a row with a pending interaction, a completed-unread row (its dot), a row with running subagents, an archived row or a blank session, and none in search results. The hover card still shows the status text where the row's hover seat is mounted.
+- A working-copy session is a workspace of its own in the sidebar (named after the copy) and is listed in the new-session workspace dropdown; the official UI offers no seat to regroup it under the project it was branched from. The sidebar's "Group by: Workspace Tree" view option nests a copy under a registered repository workspace by path, but that is a per-browser setting the plugin cannot set.
+- *Remove* in the archive dialog archives the session first and deletes the copy only if that succeeded, so it does nothing while the session is running (the harness refuses to archive running work): stop the session, then archive it again. The dialog's warnings count uncommitted paths and unpublished commits, including a fresh copy's local commits before it has ever fetched.
 - A running session cannot change its checkout (`session.header.cwd` is immutable), so *convert* creates a session in the working copy and continues the conversation there.
 - `Open worktree folder` needs a desktop opener on the host (`xdg-open`, `gio`, ... `open` on macOS, `explorer` on Windows); without one the menu says so.
 

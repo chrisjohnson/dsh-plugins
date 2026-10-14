@@ -245,6 +245,9 @@ work and are still removed by the same archive action.
 - **`Open worktree folder` needs a desktop opener.** On a host with no file
   manager launcher installed, use **Copy worktree path** instead — the menu
   reports the missing opener explicitly.
-- **Statuses are read from local refs.** `git fetch` (in the menu, or the
-  plugin's own throttled background fetch) is what makes "Behind"/"In Sync"
-  reflect the real remote.
+- **Statuses are read from local refs.** A working copy's own `git fetch`, from
+  the header menu or run by the agent, is what makes "Behind"/"In Sync" and the
+  rebase glow reflect the real remote. The plugin's throttled background fetch
+  refreshes the source checkout, not the copies, so it does not do this for you;
+  until a copy's first fetch it has no `origin` refs and no comparison with the
+  default branch. (Unpushed commits are still counted without them.)

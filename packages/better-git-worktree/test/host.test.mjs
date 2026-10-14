@@ -240,6 +240,36 @@ test('a new agent in a worktree gets the tool hidden; a plain one keeps it and g
   }
 })
 
+test('a tool restriction the harness refused is retried on the next tick instead of being marked done', { skip }, async () => {
+  const { dir, cleanup } = tempDir('bgw-host-')
+  try {
+    const { repo } = makeRepo(dir)
+    const copy = join(repo, '.dsh-worktrees', 'brave-otter')
+    mkdirSync(copy, { recursive: true })
+    mkdirSync(join(dir, 'state'))
+    writeFileSync(join(dir, 'state', REGISTRY_FILE), JSON.stringify(v1Registry(repo, [{ sessionId: 'session-b', managedRoot: copy, pet: 'brave-otter' }])))
+    let tick
+    const m = mount({ config: { stateDir: join(dir, 'state') }, services: { timer: { interval: (fn) => { tick = fn; return () => {} } } } })
+    const agent = makeAgent('session-continued', copy)
+    let refusals = 2 // the creation attempt and the immediate retry
+    agent.ctx.tools.restrict = (filter) => {
+      if (refusals-- > 0) throw new Error('unknown global tool "worktree_convert"')
+      agent.restrictions.push(filter)
+    }
+    await m.listeners['agent/created']({ agent })
+    assert.deepEqual(agent.restrictions, [], 'refused the first time')
+    assert.equal(agent.contexts.length, 1, 'the prompt context did not wait for it')
+    tick()
+    assert.deepEqual(agent.restrictions, [{ deny: ['worktree_convert'] }], 'applied on the next tick')
+    tick()
+    await m.listeners['agent/created']({ agent })
+    assert.equal(agent.restrictions.length, 1, 'and only once')
+    assert.equal(agent.contexts.length, 1, 'the prompt context is registered once')
+  } finally {
+    cleanup()
+  }
+})
+
 test('an unreadable registry is reported at boot and never rewritten', { skip }, async () => {
   const { dir, cleanup } = tempDir('bgw-host-')
   try {

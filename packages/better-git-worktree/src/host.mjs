@@ -299,47 +299,85 @@ export default function betterGitWorktree(ctx, config = {}) {
   // model is told where it works, through a prompt context registered in the same
   // scope (an assembly carries a scope key, not an agent, so the context is bound
   // to its agent when it is registered).
-  const composed = new WeakSet()
+  //
+  // Each step is marked done only when it worked. A tool restriction the harness
+  // refused (it throws while the tool is not registered yet, for instance) leaves
+  // the agent pending, and is tried again on every refresh tick, on `ready` and
+  // whenever another agent is composed, until it succeeds or the agent is gone.
+  const progress = new WeakMap()
+  const pendingTool = new Set()
+  const warned = new WeakSet()
   const composeAgent = (agent) => {
-    if (agent === undefined || agent === null || composed.has(agent)) return
-    composed.add(agent)
-    try {
+    if (agent === undefined || agent === null) return
+    const done = progress.get(agent) ?? { prompt: false, tool: false }
+    progress.set(agent, done)
+    if (!done.tool) {
       // Only `worktree_convert` is hidden here. Whether a session is a worktree
       // session can still change after creation (a conversion registers the
-      // record afterwards), so a one-shot deny would hide a tool for good.
-      if (inWorktree(agent)) agent.ctx.tools.restrict({ deny: ['worktree_convert'] })
-    } catch (error) {
-      log.warn(`could not scope the worktree tools for ${agent.id}: ${message(error)}`)
+      // record afterwards), so the decision is taken once, at creation.
+      if (!inWorktree(agent)) {
+        done.tool = true
+      } else {
+        try {
+          agent.ctx.tools.restrict({ deny: ['worktree_convert'] })
+          done.tool = true
+          pendingTool.delete(agent)
+        } catch (error) {
+          pendingTool.add(agent)
+          if (!warned.has(agent)) {
+            warned.add(agent)
+            log.warn(`could not scope the worktree tools for ${agent.id} (will retry): ${message(error)}`)
+          }
+        }
+      }
     }
-    try {
-      agent.ctx.systemPrompt.context({
-        name: PROMPT_CONTEXT_NAME,
-        order: PROMPT_CONTEXT_ORDER,
-        text: () => {
-          const record = registry.get(agent.id)
-          return record === undefined ? '' : sessionRootContext(record)
-        },
-      })
-    } catch (error) {
-      log.warn(`could not add the worktree prompt context for ${agent.id}: ${message(error)}`)
+    if (!done.prompt) {
+      try {
+        agent.ctx.systemPrompt.context({
+          name: PROMPT_CONTEXT_NAME,
+          order: PROMPT_CONTEXT_ORDER,
+          text: () => {
+            const record = registry.get(agent.id)
+            return record === undefined ? '' : sessionRootContext(record)
+          },
+        })
+        done.prompt = true
+      } catch (error) {
+        log.warn(`could not add the worktree prompt context for ${agent.id}: ${message(error)}`)
+        done.prompt = true
+      }
     }
   }
+  const retryPending = () => {
+    for (const agent of [...pendingTool]) composeAgent(agent)
+  }
   for (const agent of agents()?.list?.() ?? []) composeAgent(agent)
-  ctx.on('agent/created', (payload) => composeAgent(payload?.agent))
+  ctx.on('agent/created', (payload) => {
+    composeAgent(payload?.agent)
+    retryPending()
+  })
+  ctx.on('agent/disposed', (payload) => {
+    if (payload?.agent !== undefined) pendingTool.delete(payload.agent)
+  })
 
   // -- background refresh -------------------------------------------------------
 
+  const refresh = () => {
+    retryPending()
+    service.warmAll()
+  }
   const timer = ctx.get('timer')
   if (timer !== undefined && typeof timer.interval === 'function') {
-    const disposeTimer = timer.interval(() => service.warmAll(), BACKGROUND_REFRESH_MS)
+    const disposeTimer = timer.interval(refresh, BACKGROUND_REFRESH_MS)
     ctx.effect(() => disposeTimer, 'dsh-better-git-worktree: status refresh')
   } else {
-    const handle = setInterval(() => service.warmAll(), BACKGROUND_REFRESH_MS)
+    const handle = setInterval(refresh, BACKGROUND_REFRESH_MS)
     handle.unref?.()
     ctx.effect(() => () => clearInterval(handle), 'dsh-better-git-worktree: status refresh')
   }
 
   ctx.on('ready', () => {
+    retryPending()
     service.warmAll()
     for (const record of registry.list()) service.kickFetch(record.repoRoot)
   })

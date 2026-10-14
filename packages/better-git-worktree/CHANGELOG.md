@@ -24,9 +24,15 @@ First release: the in-tree `dsh-better-git-worktree` plugin of a private deploym
 - The plugin no longer stands down a leftover `dsh-git-worktree` loader row on boot.
 - `worktree_convert` and the endpoints are otherwise unchanged. The Branch review tab and its fallback modal carry over; the tab is registered only when `dsh-better-sidebar` is present (through `ctx.inject(['betterSidebar'])`), as an optional integration.
 
+- **Remove archives first.** The in-tree dialog deleted the working copy and then archived the session; the harness refuses to archive a session with running work, so cancelling its stop dialog left a running session in a deleted directory. *Remove* now archives through the official service first and deletes the copy only if that succeeded; a refused archive leaves the copy untouched and tells the user to stop the session. It therefore does nothing while the session runs.
+- **The source of a converted session is archived with retries.** After the agent's `worktree_convert` the source turn is still running when the continuation opens, so the one archive attempt was refused and silently dropped, leaving both sessions in the sidebar. It is now retried with back-off (0, 3, 8, 20, 45, 90 s) and a warning is logged if it never succeeds.
+- **Unpushed commits are counted before a copy's first fetch.** The archive dialog counted unpushed commits only against an upstream or `origin/<default>`, so a fresh copy's local commits were not warned about. Status now carries `unpublished` (commits reachable from no remote-tracking ref and no ref of the source repository, through the alternate) and the dialog uses it when there is no upstream.
+- The images in `docs/screenshots` are kept in the repository but not shipped in the package until they are retaken on a 0.2.0 UI.
+- A tool restriction the harness refuses is retried on the next refresh tick instead of being given up on.
+
 ### Added
 
-- Session "..." menu rows *Copy worktree path* and *Open worktree folder* for sessions with a working copy.
+- Session "..." menu rows *Copy worktree path* and *Open worktree folder* for sessions with a working copy (*Open worktree folder* only when the host has a folder opener; a missing or failing clipboard, or a failed open, is reported in a notice).
 - `snapshot` returns `registry: { writable, problem }`, and each entry carries its `decoration` and `archive` plan, computed on the host (`src/status.mjs`) so the browser only draws them.
 - Tests: status derivation, registry load/round-trip/refusal (a registry in the real v1 shape), config, removal policy, fork seed (V4 events), folder opener, working-copy creation / change-move / status / review against real temporary git repositories, the service endpoints, the real host on a mock context (including 15 v1-bound sessions), and the browser half's seat and shadowing contract.
 
@@ -36,6 +42,3 @@ First release: the in-tree `dsh-better-git-worktree` plugin of a private deploym
 - `scripts/dev-reload-host.mjs` and the versioned entry shims. Ship a version instead.
 - Prompt, header and doc text about linked worktrees and sandbox escalation.
 
-### Fixed
-
-- `worktree_convert` and the archive flow no longer depend on 0.1.5-only client internals.

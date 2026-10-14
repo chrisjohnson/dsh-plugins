@@ -13,7 +13,7 @@
   "files": [
     "index.mjs",
     "src",
-    "docs",
+    "docs/USAGE.md",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
