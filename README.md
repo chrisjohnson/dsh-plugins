@@ -4,7 +4,7 @@ Public [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugi
 
 ## Install
 
-**Nothing here is published to npm.** Every release is a git tag on this repository, named `<package>-v<version>` (for example `dsh-model-switch-v0.2.0`), and you install a plugin by pinning that tag plus the package's subdirectory:
+**Nothing here is published to npm.** Every release is a git tag on this repository, named `<package>-v<version>` (for example `dsh-model-switch-v0.2.1`), and you install a plugin by pinning that tag plus the package's subdirectory:
 
 ```sh
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#<package>-v<version>&path:/packages/<dir>"
@@ -24,7 +24,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 
 | Plugin | What it is for | Latest | Directory |
 | --- | --- | --- | --- |
-| **[dsh-model-switch](./packages/model-switch/)** | Let the agent switch its own model mid-session, with a context-window fit guard so neither it nor a human in the composer can strand a conversation on a model too small to read it. | 0.2.0 | `packages/model-switch` |
+| **[dsh-model-switch](./packages/model-switch/)** | Let the agent switch its own model mid-session, with a context-window fit guard so neither it nor a human in the composer can strand a conversation on a model too small to read it. | 0.2.1 | `packages/model-switch` |
 | **[dsh-image-search-searxng](./packages/image-search-searxng/)** | A model-facing `image_search` tool over your own SearXNG, rendered inline in the Web GUI. | 0.2.0 | `packages/image-search-searxng` |
 | **[dsh-continue-kicker](./packages/continue-kicker/)** | Automatically send "continue" when a turn halts on the output-token limit (or after a crash, or on a reasoning-only empty stop), with a runaway guard that stops after repeated kicks with no progress. | 0.1.0 | `packages/continue-kicker` |
 | **[dsh-loop-watchdog](./packages/loop-watchdog/)** | Detect an agent stuck in a loop before each step (a deterministic repetition check plus an optional model judge), keep an audit ledger of every check, optionally steer the session, and chart the ledger in a `dsh-better-sidebar` panel. | 0.1.0 | `packages/loop-watchdog` |
@@ -34,7 +34,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 Install lines for the latest release of each package:
 
 ```sh
-dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v0.2.0&path:/packages/model-switch"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-switch-v0.2.1&path:/packages/model-switch"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-search-searxng-v0.2.0&path:/packages/image-search-searxng"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-continue-kicker-v0.1.0&path:/packages/continue-kicker"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-loop-watchdog-v0.1.0&path:/packages/loop-watchdog"
