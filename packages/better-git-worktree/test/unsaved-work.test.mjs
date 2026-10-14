@@ -139,10 +139,20 @@ test('a source that has moved (broken alternates) makes the status unknown, not 
 test('a git call that times out makes the status unknown', async () => {
   const t = await freshCopy()
   try {
-    const { plan } = await planOf(t.copy, t.created, { timeoutMs: 1 })
-    assert.equal(plan.unknown, true)
-    const count = await countUnpublished(t.copy, { timeoutMs: 1 })
-    assert.match(count.error ?? '', /timed out|exit|could not/)
+    // The runner reports a kill by timeout exactly like this (see runGit); a real
+    // 1 ms timeout would be a race, so the result is injected.
+    const timedOut = (what) => (cwd, args, options) => (
+      what(args)
+        ? Promise.resolve({ ok: false, code: 1, stdout: '', stderr: `git ${args[0]} timed out after 15000ms`, timedOut: true })
+        : runGit(cwd, args, options)
+    )
+    for (const [label, which] of [['status', (a) => a[0] === 'status'], ['commit count', (a) => a[0] === 'rev-list'], ['stash list', (a) => a[0] === 'stash']]) {
+      const { status, plan } = await planOf(t.copy, t.created, { run: timedOut(which) })
+      assert.equal(plan.unknown, true, label)
+      assert.match(status.unverified.join('\n'), /timed out/, label)
+    }
+    const count = await countUnpublished(t.copy, { run: timedOut(() => true) })
+    assert.match(count.error, /could not count unpublished commits: timed out/)
   } finally {
     t.cleanup()
   }
