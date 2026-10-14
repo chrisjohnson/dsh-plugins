@@ -1,0 +1,47 @@
+{
+  "name": "dsh-scheduled-queue",
+  "version": "0.1.0",
+  "description": "Composer scheduled-send for DeepSeek Harness: a clock button schedules the draft for later delivery into its own session, and a dock above the composer lists, edits and cancels that session's scheduled messages. Durable across restarts.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "scheduling",
+    "composer",
+    "queue"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/scheduled-queue"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/scheduled-queue#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

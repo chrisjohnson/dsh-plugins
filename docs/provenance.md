@@ -32,7 +32,7 @@ layout is `packages/<name>` only.
 | `dsh-loop-watchdog` | `plugins/semantic-loop-kicker.mjs` (the watchdog, behind its `-rN` shim) and `plugins/semantic-loop-evals/` (the evals panel) | One package. Deployment paths, the model endpoint and the API-key variable became configuration; the panel is an optional `dsh-better-sidebar` integration. Behaviour changes are in its `CHANGELOG.md` under 0.1.0. |
 | `dsh-better-git-worktree` | `plugins/dsh-better-git-worktree/` | Split into pure modules (`src/status.mjs`, `registry.mjs`, `removal.mjs`, ...) plus a service and thin dsh wiring. The inlined official-client bundle and its `ui-workspace` election were replaced by the 0.2.0 sidebar seats; the registry format is unchanged. Behaviour changes are in its `CHANGELOG.md` under 0.1.0. |
 | `dsh-semantic-loop-evals` | `plugins/semantic-loop-evals/` | Merged into `dsh-loop-watchdog`; there is no separate package. |
-| `dsh-scheduled-queue` | `plugins/scheduled-queue/` | Not yet packaged. Disabled upstream and has no per-session scoping. |
+| `dsh-scheduled-queue` | `plugins/scheduled-queue/` | Split into pure `src/queue.mjs` and `src/config.mjs` plus host and browser halves. Behaviour changes at extraction (per-session dock, delivery through `sessionController.prompt`) are listed in its `CHANGELOG.md` under 0.1.0. |
 
 ## Why some of them are still waiting
 
