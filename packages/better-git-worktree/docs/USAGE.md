@@ -2,8 +2,13 @@
 
 A session can work in its own **git worktree** for its whole life. This guide is
 the operator's view: what each surface shows, what every action does, and what
-the statuses mean. The design rationale (real linked worktrees, and the sandbox
-escalation that implies) lives in the plugin `README.md`.
+the statuses mean. The design rationale (self-contained working copies, and why
+the sandbox needs no escalation) lives in the plugin `README.md`.
+
+> The screenshots below were captured on dsh 0.1.5 with the earlier, inlined
+> version of this plugin. Pending retake on a 0.2.0 UI: the session-row badge is
+> now an icon in the row's leading cell rather than a text pill, and
+> worktree sessions are their own workspace in the sidebar.
 
 ## Gallery
 
@@ -68,7 +73,7 @@ working copy on its own branch.
 
 ```
 workspace directory            managed working copy
-/home/dsh/project      ──▶     /home/dsh/project/.dsh-worktrees/brave-otter
+<repo>                 ──▶     <repo>/.dsh-worktrees/brave-otter
    (main checkout)                     branch: dsh/brave-otter
 ```
 
@@ -121,14 +126,15 @@ Clicking it opens the actions:
 
 ### 3. Sidebar badge (worktree sessions only)
 
-Rows for worktree sessions carry a small badge with the status and a full
-tooltip; hovering shows the same detail in the session hover card. Worktree
-sessions are listed **inside the workspace they were branched from**, not as
-their own top-level workspace.
+Idle rows for worktree sessions carry a small icon in the cell before the title,
+coloured by status; hovering shows the full detail in the session hover card.
+A busy or pending row shows its own state dot instead and no badge. A worktree
+session is its own workspace in the sidebar (named after the working copy), and
+the working copy is also listed in the new-session workspace dropdown; it is
+created by the composer switch, not meant to be picked there.
 
-The new-session **Workspace dropdown** applies the same projection and lists only
-the projects: a working copy is never chosen there, it is created by the composer
-switch.
+The session's "..." menu also offers **Copy worktree path** and **Open worktree
+folder** for these sessions.
 
 ## Statuses
 
@@ -140,7 +146,7 @@ switch.
 | **In Sync** | green | in step with its upstream *and* identical to `origin/<default>` | nothing — fully integrated |
 | **Missing** | grey | the recorded working-copy directory is gone | archive the session and remove the worktree, or recreate it |
 
-A **yellow glow** is a separate overlay: the branch has its own commits *and*
+A **yellow glow** on the badge is a separate overlay: the branch has its own commits *and*
 `origin/<default>` has moved on, so it needs rebasing. It appears on top of any
 status, and the tooltip spells out how many commits behind the default branch is.
 
@@ -233,9 +239,9 @@ work and are still removed by the same archive action.
 - **A running session cannot change its checkout.** `session.header.cwd` is
   immutable creation metadata, so "convert this session" creates a session in the
   worktree and continues the conversation there.
-- **This harness build has no un-archive affordance.** Archiving is one-way from
-  the UI; the plugin's own flows archive source sessions, so it keeps the sessions
-  it owns visible rather than letting them disappear silently.
+- **The archive shortcut skips the dialog.** The row's archive button and the "..."
+  menu row ask first; the keyboard shortcut calls the official archive directly and
+  keeps the working copy on disk.
 - **`Open worktree folder` needs a desktop opener.** On a host with no file
   manager launcher installed, use **Copy worktree path** instead — the menu
   reports the missing opener explicitly.

@@ -28,10 +28,11 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | **[dsh-image-search-searxng](./packages/image-search-searxng/)** | A model-facing `image_search` tool over your own SearXNG, rendered inline in the Web GUI. | `packages/image-search-searxng` |
 | **[dsh-continue-kicker](./packages/continue-kicker/)** | Automatically send "continue" when a turn halts on the output-token limit (or after a crash, or on a reasoning-only empty stop), with a runaway guard that stops after repeated kicks with no progress. | `packages/continue-kicker` |
 | **[dsh-loop-watchdog](./packages/loop-watchdog/)** | Detect an agent stuck in a loop before each step (a deterministic repetition check plus an optional model judge), keep an audit ledger of every check, optionally steer the session, and chart the ledger in a `dsh-better-sidebar` panel. | `packages/loop-watchdog` |
+| **[dsh-better-git-worktree](./packages/better-git-worktree/)** | Run a session in its own self-contained git working copy: a composer Worktree switch, a `worktree_convert` tool, session-list status badges, a header menu, and an archive prompt that decides the working copy's fate. | `packages/better-git-worktree` |
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.
 
-**Coming next**, in rough order of readiness: `dsh-continue-kicker` (resume sessions that halted on a maxed-out generation), `dsh-loop-watchdog` (detect an agent stuck in a semantic loop, with an audit ledger), `dsh-scheduled-queue`, `dsh-better-git-worktree` (worktree-per-session with approval-aware git), `dsh-semantic-loop-evals`. Their history is already in this repository — see [docs/provenance.md](./docs/provenance.md).
+**Coming next**, in rough order of readiness: `dsh-continue-kicker` (resume sessions that halted on a maxed-out generation), `dsh-loop-watchdog` (detect an agent stuck in a semantic loop, with an audit ledger), `dsh-scheduled-queue`, `dsh-semantic-loop-evals`. Their history is already in this repository — see [docs/provenance.md](./docs/provenance.md).
 
 ## Releases
 
