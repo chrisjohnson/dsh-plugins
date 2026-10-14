@@ -5,6 +5,16 @@
 
 ## Unreleased
 
+## 0.1.1
+
+### Fixed
+
+- `worktree_convert` returns lossless JSON. dsh 0.2 rejects a tool's structured output when any property is `undefined` and reports the call as failed after the work was done; the result carried `undefined` for an absent `baseRef`, `stashRef` or (after a failed handoff) `targetSessionId`. Absent facts are now absent keys. A new test passes the tool through dsh's own output validation (`snapshotJsonValue`, `validateJsonSchemaValue`, `render`) with a real temporary repository and the real session class.
+
+### Documentation
+
+- State accurately what a conversion carries. The continuation is seeded with the source's events through its **last completed turn**, as in the in-tree plugin and the harness's own session fork. When the agent calls `worktree_convert` in a session's first turn there is no completed turn: the new session is blank (`conversationCarried: false`, "A new session (...) was created in the worktree; open it to continue there") and the source session is not archived (it is archived only when the conversation was carried). This is unchanged behaviour, now documented in the README and usage guide, and covered by a test that feeds the seed to the real `Session` class.
+
 ## 0.1.0
 
 First release: the in-tree `dsh-better-git-worktree` plugin of a private deployment, rebuilt for dsh 0.2.0-rc.2 or later. The registry format (`STATE_VERSION 1`), the working-copy layout (`<repo>/.dsh-worktrees/<pet>`, branch `dsh/<pet>`), the RPC route (`/betterGitWorktree`), the `worktree_convert` tool and the status vocabulary are unchanged, so sessions already bound to a working copy keep their status and binding.

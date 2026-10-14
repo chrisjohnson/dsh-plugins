@@ -104,18 +104,22 @@ export function convertReport(result, status) {
     lines.push(`The worktree is ready but the session handoff failed: ${result.error}`)
     lines.push('Open a session in the worktree from the Worktree menu to continue there.')
   }
-  return {
+  const report = {
     kind: 'worktree_converted',
     managedRoot: result.record.managedRoot,
     branch: result.record.branch,
-    baseRef: result.record.baseRef ?? undefined,
+    baseRef: result.record.baseRef,
     targetSessionId: result.ok === true ? result.targetSessionId : undefined,
     conversationCarried: result.ok === true ? result.conversationCarried : false,
     movedFiles: result.move.files,
-    stashRef: result.move.stashRef ?? undefined,
+    stashRef: result.move.stashRef,
     status: status?.state ?? 'progressing',
     detail: lines.join('\n'),
   }
+  // dsh 0.2 takes a tool's structured output through snapshotJsonValue, which
+  // rejects the whole value when any property is undefined (the call is then
+  // reported as failed after the work was done). An absent fact is an absent key.
+  return Object.fromEntries(Object.entries(report).filter(([, value]) => value !== undefined && value !== null))
 }
 
 /**

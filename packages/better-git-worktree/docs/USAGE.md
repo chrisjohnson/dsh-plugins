@@ -191,7 +191,11 @@ Two things follow from that layout:
    menu (or ask the agent to call the `worktree_convert` tool).
 2. A branch and working copy are created; the session's uncommitted work is moved
    into it.
-3. The conversation continues in a session rooted in the working copy.
+3. The conversation continues in a session rooted in the working copy: the new
+   session carries everything through the source's last completed turn, and the
+   source is archived. If the source has no completed turn yet (the agent called
+   the tool in the first turn of the session), there is nothing to carry: the new
+   session starts blank and the source is left where it is.
 
 The move uses `git stash` in the source checkout and replays the same change into
 the working copy. The stash entry is deliberately kept as a backup and its ref is
