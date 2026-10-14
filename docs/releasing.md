@@ -66,6 +66,9 @@ git commit -m "release(dsh-model-switch): 0.2.0"
 git fetch origin
 git tag dsh-model-switch-v0.2.0 "$(gh pr view <number> --json mergeCommit --jq .mergeCommit.oid)"
 git push origin dsh-model-switch-v0.2.0
+
+# or, without a local clone, create the lightweight tag ref through the API:
+gh api repos/chrisjohnson/dsh-plugins/git/refs -f ref=refs/tags/dsh-model-switch-v0.2.0 -f sha=<merge commit>
 ```
 
 Never move, delete or re-push a tag that has been pushed. If a release is bad, cut a
