@@ -1,0 +1,16 @@
+# Bundle layer for dsh-scheduled-queue.
+#
+# `dsh plugin --profile web add <spec>` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging. The optional keys (scanIntervalMs,
+# deliveryTimeoutMs) and their defaults are documented in README.md.
+#
+# The row id is `scheduled-queue`. It is distinct from the rows the official
+# experimental schedule bundle inserts (`time-context`, `schedule`,
+# `ui-schedule`), so both bundles can be enabled together.
+- insert:
+    - id: scheduled-queue
+      name: dsh-scheduled-queue
