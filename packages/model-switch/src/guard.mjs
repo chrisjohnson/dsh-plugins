@@ -18,6 +18,16 @@ import {
 } from './fit.mjs'
 import { noticeSource } from './notice.mjs'
 
+/**
+ * A tool's structured output must be lossless JSON, and dsh's validator rejects an
+ * object property whose value is `undefined` (a JSON round trip would drop it).
+ * The optional measurements are absent when there was nothing to measure, so they
+ * are omitted rather than set to undefined.
+ */
+export function withoutUndefined(object) {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined))
+}
+
 function message(error) {
   return error instanceof Error ? error.message : String(error)
 }
@@ -163,7 +173,7 @@ export async function switchAgentModel(deps, log, config, agent, provider, model
     routeLabel(to),
     alreadyOnRoute ? 'already on route, message queued only' : 'switched',
   )
-  return {
+  return withoutUndefined({
     ok: true,
     from: routeLabel(from),
     to: routeLabel(to),
@@ -172,5 +182,5 @@ export async function switchAgentModel(deps, log, config, agent, provider, model
     freed: guard.freed,
     tokens: guard.tokens,
     window: guard.window
-  }
+  })
 }
