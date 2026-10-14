@@ -1,0 +1,53 @@
+{
+  "name": "dsh-better-git-worktree",
+  "version": "0.1.0",
+  "description": "Git worktree sessions for DeepSeek Harness: a composer Worktree switch, an agent tool that moves a session into a self-contained working copy, status badges on the session list, a header menu, and an archive prompt that decides the working copy's fate.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "git",
+    "worktree",
+    "sessions",
+    "better-sidebar"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/better-git-worktree"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/better-git-worktree#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

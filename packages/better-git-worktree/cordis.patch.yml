@@ -1,0 +1,16 @@
+# Bundle layer for dsh-better-git-worktree.
+#
+# `dsh plugin --profile web add dsh-better-git-worktree` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key the
+# user then has to restate. Defaults and the meaning of an unset value live in
+# src/config.mjs, and are documented in README.md.
+#
+# This plugin does not replace or disable any core row. The official Workspace UI
+# stays active; the plugin adds to it through the seats that UI declares.
+- insert:
+    - id: better-git-worktree
+      name: dsh-better-git-worktree
