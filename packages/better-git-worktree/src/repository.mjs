@@ -5,7 +5,7 @@
 // header pill, so they can never disagree. The folding of git's output into the
 // status vocabulary is in status.mjs; this file only runs git.
 
-import { gitText } from './git-runner.mjs'
+import { gitText, runGit } from './git-runner.mjs'
 import { needsRebase, parseLeftRight, parsePorcelain, worktreeState } from './status.mjs'
 
 /** Absolute repository root for a working directory, or undefined outside a repo. */
@@ -62,19 +62,44 @@ export async function baseRefFor(cwd, branch) {
   return local === undefined ? undefined : branch
 }
 
+/** Why a git call failed, for the "could not verify" message. */
+function failure(what, result) {
+  const detail = result.timedOut ? 'timed out' : (result.stderr.trim().split('\n')[0] || `exit ${result.code}`)
+  return `${what}: ${detail}`
+}
+
 /**
- * Commits on HEAD that exist nowhere else: not reachable from any remote-tracking
- * ref of this repository, nor from any ref of the repository whose objects it
- * borrows through `objects/info/alternates` (`--alternate-refs`). A fresh working
- * copy has no remote-tracking refs at all until its first fetch, so the second
- * source is what keeps its starting history from counting as unpublished.
- * Undefined when git cannot answer.
+ * Commits that exist nowhere else: reachable from HEAD, any local branch or any
+ * tag, but from no remote-tracking ref of this repository and no ref of the
+ * repository whose objects it borrows through `objects/info/alternates`
+ * (`--alternate-refs`), nor from `baseOid`, the commit the copy was started from
+ * (which the source repository keeps whether or not any of its refs name it, e.g.
+ * when it sat on a detached HEAD). A fresh copy has no remote-tracking refs until
+ * its first fetch, so the alternate refs and the base are what keep its starting
+ * history from counting. Walking every branch and tag, not only HEAD, keeps work
+ * on a branch that is no longer checked out in the count.
+ *
+ * Never throws and never guesses: a failed call is returned as `error`, so the
+ * caller can say "could not verify" instead of "nothing to lose".
+ *
+ * @returns {Promise<{count: number} | {error: string}>}
  */
-export async function countUnpublished(path) {
-  const text = await gitText(path, ['rev-list', '--count', 'HEAD', '--not', '--remotes', '--alternate-refs'])
-  if (text === undefined) return undefined
-  const count = Number(text)
-  return Number.isFinite(count) ? count : undefined
+export async function countUnpublished(path, options = {}) {
+  const run = options.run ?? runGit
+  const args = ['rev-list', '--count', 'HEAD', '--branches', '--tags', '--not', '--remotes', '--alternate-refs']
+  if (typeof options.baseOid === 'string' && options.baseOid !== '') args.push(options.baseOid)
+  const result = await run(path, args, { timeoutMs: options.timeoutMs })
+  if (!result.ok) return { error: failure('could not count unpublished commits', result) }
+  const count = Number(result.stdout.trim())
+  return Number.isFinite(count) ? { count } : { error: 'could not count unpublished commits: unexpected output' }
+}
+
+/** Number of stash entries in the copy's own repository, or `{error}`. */
+export async function countStashes(path, options = {}) {
+  const run = options.run ?? runGit
+  const result = await run(path, ['stash', 'list'], { timeoutMs: options.timeoutMs })
+  if (!result.ok) return { error: failure('could not list stash entries', result) }
+  return { count: result.stdout.split('\n').filter((line) => line !== '').length }
 }
 
 /**
@@ -92,17 +117,23 @@ export async function readWorktreeStatus(path, options = {}) {
       needsRebase: false,
       dirty: 0,
       error: 'the worktree has no commit to inspect (unborn HEAD)',
+      unverified: ['the worktree has no commit to inspect (it could be unborn, or git could not read it)'],
       files: [],
     }
   }
 
-  const [oid, statusText, upstreamName, subjectLine] = await Promise.all([
+  const run = options.run ?? runGit
+  const [oid, statusResult, upstreamName, subjectLine] = await Promise.all([
     headOid(path),
-    gitText(path, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']),
+    run(path, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], { timeoutMs: options.timeoutMs }),
     gitText(path, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
     gitText(path, ['log', '-1', '--format=%h%x1f%s']),
   ])
-  const changes = parsePorcelain(statusText ?? '')
+  // What the archive dialog may say "nothing to lose" about must have been read
+  // successfully; a failed read is recorded, never folded into zero.
+  const unverified = []
+  if (!statusResult.ok) unverified.push(failure('could not read the working tree', statusResult))
+  const changes = parsePorcelain(statusResult.ok ? statusResult.stdout : '')
 
   let upstream
   let aheadUpstream
@@ -129,7 +160,11 @@ export async function readWorktreeStatus(path, options = {}) {
   }
 
   const [shortOid, subject] = (subjectLine ?? '').split('\x1f')
-  const unpublished = await countUnpublished(path)
+  const safety = { run, timeoutMs: options.timeoutMs }
+  const unpublishedResult = await countUnpublished(path, { ...safety, baseOid: options.baseOid })
+  if (unpublishedResult.error !== undefined) unverified.push(unpublishedResult.error)
+  const stashResult = await countStashes(path, safety)
+  if (stashResult.error !== undefined) unverified.push(stashResult.error)
 
   return {
     branch,
@@ -144,7 +179,9 @@ export async function readWorktreeStatus(path, options = {}) {
     aheadBase,
     behindBase,
     needsRebase: needsRebase({ aheadBase, behindBase }),
-    unpublished,
+    unpublished: unpublishedResult.count,
+    stashes: stashResult.count,
+    unverified,
     dirty: changes.dirty,
     staged: changes.staged,
     unstaged: changes.unstaged,

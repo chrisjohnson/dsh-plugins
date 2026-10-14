@@ -68,6 +68,7 @@ export function createService(deps) {
   const findOpener = o.findOpener ?? defaultFindOpener
   const openFolder = o.openFolder ?? defaultOpenFolder
   const fetchRemote = o.gitFetch ?? gitFetch
+  const readStatus = o.readWorktreeStatus ?? readWorktreeStatus
 
   /** repoRoot -> timestamp of the last fetch we kicked. */
   const lastFetchAt = new Map()
@@ -123,16 +124,20 @@ export function createService(deps) {
     try {
       status = await cache.get(
         key,
-        () => readWorktreeStatus(checkout.path, { baseBranch: checkout.baseBranch }),
+        () => readStatus(checkout.path, { baseBranch: checkout.baseBranch, baseOid: checkout.record?.baseOid }),
         { ttlMs: STATUS_TTL_MS, force: options.force === true },
       )
     } catch (error) {
+      // An unreadable checkout is unknown, never clean: the archive plan reads
+      // `unverified` and refuses to offer removal.
       return withDerived({
+        ...(checkout.record ?? {}),
         sessionId,
         path: checkout.path,
         missing: false,
         state: 'unknown',
         needsRebase: false,
+        unverified: [`could not inspect ${checkout.path}: ${message(error)}`],
         tooltip: `${checkout.path} could not be inspected: ${message(error)}`,
       })
     }
@@ -217,6 +222,7 @@ export function createService(deps) {
       petName: created.petName,
       baseBranch: base,
       baseRef,
+      baseOid: created.baseOid,
       activated: options.activated ?? false,
       createdAt: Date.now(),
     })
@@ -330,7 +336,8 @@ export function createService(deps) {
       case 'snapshot': {
         const entries = []
         for (const record of registry.list()) {
-          entries.push(await statusFor(record.sessionId))
+          // `force` bypasses the status cache: the archive dialog asks for a fresh read.
+          entries.push(await statusFor(record.sessionId, { force: p.force === true }))
         }
         return {
           ok: true,

@@ -187,14 +187,19 @@ export function decorationOf(entry) {
  */
 export function archivePlan(entry) {
   const managed = entry !== undefined && entry !== null && entry.missing !== true && typeof entry.managedRoot === 'string'
-  if (!managed) return { prompt: false, dirty: 0, unpushed: 0 }
+  if (!managed) return { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] }
+  const reasons = Array.isArray(entry.unverified) ? [...entry.unverified] : []
+  if (typeof entry.error === 'string' && entry.error !== '' && reasons.length === 0) reasons.push(entry.error)
   const dirty = typeof entry.dirty === 'number' ? entry.dirty : 0
-  // Commits that exist nowhere else: ahead of the upstream when there is one;
-  // otherwise those no remote-tracking ref or source-repository ref has, which
-  // still answers for a fresh copy that has not fetched; last resort, the count
-  // ahead of the default branch.
+  // Commits that exist nowhere else: on HEAD, any local branch or any tag, and on
+  // no remote-tracking ref and no ref of the source repository (`unpublished`).
+  // Where that could not be counted, fall back to ahead of the upstream, then
+  // ahead of the default branch; `unknown` is set in that case anyway.
   let unpushed = entry.aheadBase || 0
-  if (typeof entry.aheadUpstream === 'number') unpushed = entry.aheadUpstream
-  else if (typeof entry.unpublished === 'number') unpushed = entry.unpublished
-  return { prompt: true, dirty, unpushed }
+  if (typeof entry.unpublished === 'number') unpushed = entry.unpublished
+  else if (typeof entry.aheadUpstream === 'number') unpushed = entry.aheadUpstream
+  const stashes = typeof entry.stashes === 'number' ? entry.stashes : 0
+  // A status that could not be read is never "clean": the dialog says so and
+  // refuses to remove.
+  return { prompt: true, dirty, unpushed, stashes, unknown: reasons.length > 0, reasons }
 }
