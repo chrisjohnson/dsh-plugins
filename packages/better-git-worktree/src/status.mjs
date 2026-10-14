@@ -189,6 +189,12 @@ export function archivePlan(entry) {
   const managed = entry !== undefined && entry !== null && entry.missing !== true && typeof entry.managedRoot === 'string'
   if (!managed) return { prompt: false, dirty: 0, unpushed: 0 }
   const dirty = typeof entry.dirty === 'number' ? entry.dirty : 0
-  const unpushed = typeof entry.aheadUpstream === 'number' ? entry.aheadUpstream : (entry.aheadBase || 0)
+  // Commits that exist nowhere else: ahead of the upstream when there is one;
+  // otherwise those no remote-tracking ref or source-repository ref has, which
+  // still answers for a fresh copy that has not fetched; last resort, the count
+  // ahead of the default branch.
+  let unpushed = entry.aheadBase || 0
+  if (typeof entry.aheadUpstream === 'number') unpushed = entry.aheadUpstream
+  else if (typeof entry.unpublished === 'number') unpushed = entry.unpublished
   return { prompt: true, dirty, unpushed }
 }

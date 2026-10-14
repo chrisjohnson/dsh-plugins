@@ -63,6 +63,21 @@ export async function baseRefFor(cwd, branch) {
 }
 
 /**
+ * Commits on HEAD that exist nowhere else: not reachable from any remote-tracking
+ * ref of this repository, nor from any ref of the repository whose objects it
+ * borrows through `objects/info/alternates` (`--alternate-refs`). A fresh working
+ * copy has no remote-tracking refs at all until its first fetch, so the second
+ * source is what keeps its starting history from counting as unpublished.
+ * Undefined when git cannot answer.
+ */
+export async function countUnpublished(path) {
+  const text = await gitText(path, ['rev-list', '--count', 'HEAD', '--not', '--remotes', '--alternate-refs'])
+  if (text === undefined) return undefined
+  const count = Number(text)
+  return Number.isFinite(count) ? count : undefined
+}
+
+/**
  * Read one working copy's complete status.
  * @param path - working copy root (this is where git runs).
  * @param options.baseBranch - repository default branch name.
@@ -114,6 +129,7 @@ export async function readWorktreeStatus(path, options = {}) {
   }
 
   const [shortOid, subject] = (subjectLine ?? '').split('\x1f')
+  const unpublished = await countUnpublished(path)
 
   return {
     branch,
@@ -128,6 +144,7 @@ export async function readWorktreeStatus(path, options = {}) {
     aheadBase,
     behindBase,
     needsRebase: needsRebase({ aheadBase, behindBase }),
+    unpublished,
     dirty: changes.dirty,
     staged: changes.staged,
     unstaged: changes.unstaged,

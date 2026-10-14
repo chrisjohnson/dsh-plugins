@@ -17,6 +17,7 @@ import {
   worktreesIgnored,
 } from '../src/working-copy.mjs'
 import { baseRefFor, defaultBranch, readWorktreeStatus } from '../src/repository.mjs'
+import { archivePlan } from '../src/status.mjs'
 
 test('createWorktree makes a self-contained copy that reads the source objects through an alternate', async () => {
   const { dir, cleanup } = tempDir()
@@ -241,4 +242,45 @@ test('branchReview with no default branch to compare against says so', async () 
   const review = await branchReview('/nowhere', { baseRef: undefined })
   assert.deepEqual(review.commits, [])
   assert.match(review.note, /nothing to compare against/)
+})
+
+test('unpublished commits are counted without origin refs: a fresh copy is clean, a local commit warns, a pushed one does not', async () => {
+  const { dir, cleanup } = tempDir()
+  try {
+    const { repo } = makeRepo(dir, { remote: true })
+    const created = await createWorktree({ repoRoot: repo, home: dir })
+    const copy = created.managedRoot
+    const options = { baseBranch: 'main' }
+
+    // Fresh copy: no remote-tracking refs, no upstream, nothing of its own.
+    let status = await readWorktreeStatus(copy, options)
+    assert.equal(status.baseRef, undefined)
+    assert.equal(status.upstream, undefined)
+    assert.equal(status.unpublished, 0)
+    assert.equal(archivePlan({ ...status, managedRoot: copy }).unpushed, 0, 'its starting history is not "unpushed"')
+
+    // One local commit plus one dirty file: both are reported.
+    commitFile(copy, 'local.txt', 'l\n', 'local work')
+    writeFileSync(join(copy, 'tracked.txt'), 'dirty\n')
+    status = await readWorktreeStatus(copy, options)
+    assert.equal(status.unpublished, 1)
+    assert.deepEqual(archivePlan({ ...status, managedRoot: copy }), { prompt: true, dirty: 1, unpushed: 1 })
+
+    // Pushed (no upstream configured, then fetched): the remote-tracking ref has it, so no false warning.
+    git(copy, 'checkout', '-q', 'tracked.txt')
+    git(copy, 'push', '-q', 'origin', `${created.branch}:refs/heads/${created.branch}`)
+    git(copy, 'fetch', '-q', 'origin')
+    status = await readWorktreeStatus(copy, options)
+    assert.equal(status.upstream, undefined)
+    assert.equal(status.unpublished, 0)
+    assert.equal(archivePlan({ ...status, managedRoot: copy }).unpushed, 0)
+
+    // And with an upstream the ahead count still rules.
+    git(copy, 'push', '-q', '-u', 'origin', created.branch)
+    commitFile(copy, 'more.txt', 'm\n', 'more')
+    status = await readWorktreeStatus(copy, options)
+    assert.equal(archivePlan({ ...status, managedRoot: copy }).unpushed, 1)
+  } finally {
+    cleanup()
+  }
 })
