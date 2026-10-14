@@ -30,7 +30,7 @@ test('a fresh copy has nothing unsaved', async () => {
   const t = await freshCopy()
   try {
     const { plan } = await planOf(t.copy, t.created)
-    assert.deepEqual(plan, { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] })
+    assert.deepEqual(plan, { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: { count: 0, examples: [] }, operations: [] })
   } finally {
     t.cleanup()
   }

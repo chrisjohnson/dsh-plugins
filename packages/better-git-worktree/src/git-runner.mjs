@@ -100,13 +100,21 @@ export class TtlCache {
    */
   async get(key, loader, options = {}) {
     const ttlMs = options.ttlMs ?? 5000
+    const force = options.force === true
+    // A forced read exists because something changed (or may have) just now. A
+    // read already in flight started before that, so it cannot answer: wait for
+    // it to settle and read again. An unforced caller shares the in-flight read.
+    for (let inflight = this.entries.get(key); inflight?.promise !== undefined; inflight = this.entries.get(key)) {
+      if (!force) return inflight.value !== undefined ? inflight.value : inflight.promise
+      try {
+        await inflight.promise
+      } catch {
+        // The failed read is not the answer either; the next one is.
+      }
+    }
     const now = Date.now()
     const existing = this.entries.get(key)
-    if (existing !== undefined && existing.promise !== undefined) {
-      if (existing.value !== undefined && !options.force) return existing.value
-      return existing.promise
-    }
-    if (existing !== undefined && !options.force && now - existing.at < ttlMs) return existing.value
+    if (existing !== undefined && !force && now - existing.at < ttlMs) return existing.value
 
     const promise = (async () => {
       try {
@@ -117,6 +125,13 @@ export class TtlCache {
         // Keep the previous value on failure so the UI degrades to stale data
         // rather than an error flash; remember the failure for diagnostics.
         const previous = this.entries.get(key)
+        // ...but never for a forced read: it asked for the present, and an old
+        // value would be the wrong answer to that, now or for the next reader
+        // within the TTL, so the entry is dropped.
+        if (force) {
+          this.entries.delete(key)
+          throw error
+        }
         this.entries.set(key, {
           at: Date.now(),
           value: previous?.value,

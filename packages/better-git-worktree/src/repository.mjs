@@ -5,6 +5,8 @@
 // header pill, so they can never disagree. The folding of git's output into the
 // status vocabulary is in status.mjs; this file only runs git.
 
+import { existsSync, realpathSync } from 'node:fs'
+import { join } from 'node:path'
 import { gitText, runGit } from './git-runner.mjs'
 import { needsRebase, parseLeftRight, parsePorcelain, worktreeState } from './status.mjs'
 
@@ -102,6 +104,76 @@ export async function countStashes(path, options = {}) {
   return { count: result.stdout.split('\n').filter((line) => line !== '').length }
 }
 
+function realpath(path) {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+/**
+ * Whether `path` is the root of a git repository of its own, with its own git
+ * directory at `<path>/.git`. A managed copy is nested inside its source
+ * checkout (or under a home directory that may itself be a repository), and git
+ * walks up from a directory whose `.git` is missing, empty or has an invalid HEAD
+ * until it finds the enclosing repository: every read would then describe the
+ * SOURCE (its branch, its counts, an empty status because the copy is ignored)
+ * and call the copy clean while it still holds user files.
+ *
+ * @returns {Promise<string | undefined>} a problem description, or undefined when the copy is its own repository.
+ */
+export async function checkOwnRepository(path, options = {}) {
+  const run = options.run ?? runGit
+  const own = realpath(path)
+  const top = await run(path, ['rev-parse', '--show-toplevel'], { timeoutMs: options.timeoutMs })
+  if (!top.ok) return failure(`git cannot read ${path} as a repository`, top)
+  const resolved = top.stdout.trim()
+  if (realpath(resolved) !== own) {
+    return `${path} is not a git checkout of its own (git resolves it to ${resolved}), so its status cannot be trusted`
+  }
+  const dir = await run(path, ['rev-parse', '--absolute-git-dir'], { timeoutMs: options.timeoutMs })
+  if (!dir.ok) return failure(`git cannot find the git directory of ${path}`, dir)
+  if (realpath(dir.stdout.trim()) !== realpath(join(own, '.git'))) {
+    return `${path} does not own its git directory (git uses ${dir.stdout.trim()}), so its status cannot be trusted`
+  }
+  return undefined
+}
+
+/**
+ * Files and directories the copy's ignore rules hide from status, and which
+ * removing the copy deletes all the same (`.env`, local config, build output).
+ * Fully ignored directories are reported as one entry, so this stays cheap.
+ * @returns {Promise<{count: number, examples: string[]} | {error: string}>}
+ */
+export async function summarizeIgnored(path, options = {}) {
+  const run = options.run ?? runGit
+  const result = await run(
+    path,
+    ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory', '-z'],
+    { timeoutMs: options.timeoutMs },
+  )
+  if (!result.ok) return { error: failure('could not list ignored files', result) }
+  const names = result.stdout.split('\0').filter((name) => name !== '')
+  return { count: names.length, examples: names.slice(0, IGNORED_EXAMPLES) }
+}
+
+const IGNORED_EXAMPLES = 5
+
+/** Git operations left half-done in the copy, from the marker files git keeps in its directory. */
+export function inProgressOperations(path) {
+  const markers = [
+    ['MERGE_HEAD', 'a merge is in progress'],
+    ['rebase-merge', 'a rebase is in progress'],
+    ['rebase-apply', 'a rebase or patch application is in progress'],
+    ['CHERRY_PICK_HEAD', 'a cherry-pick is in progress'],
+    ['REVERT_HEAD', 'a revert is in progress'],
+    ['BISECT_LOG', 'a bisect is in progress'],
+    ['index.lock', 'a git command is running or crashed (index.lock exists)'],
+  ]
+  return markers.filter(([name]) => existsSync(join(path, '.git', name))).map(([, text]) => text)
+}
+
 /**
  * Read one working copy's complete status.
  * @param path - working copy root (this is where git runs).
@@ -109,6 +181,20 @@ export async function countStashes(path, options = {}) {
  * @returns a plain JSON status object; `error` is set when the path is not a usable repo.
  */
 export async function readWorktreeStatus(path, options = {}) {
+  if (options.requireOwnRepo === true) {
+    const problem = await checkOwnRepository(path, options)
+    if (problem !== undefined) {
+      return {
+        branch: undefined,
+        state: 'unknown',
+        needsRebase: false,
+        dirty: 0,
+        error: problem,
+        unverified: [problem],
+        files: [],
+      }
+    }
+  }
   const branch = await currentBranch(path)
   if (branch === undefined && (await headOid(path)) === undefined) {
     return {
@@ -165,6 +251,9 @@ export async function readWorktreeStatus(path, options = {}) {
   if (unpublishedResult.error !== undefined) unverified.push(unpublishedResult.error)
   const stashResult = await countStashes(path, safety)
   if (stashResult.error !== undefined) unverified.push(stashResult.error)
+  const ignoredResult = await summarizeIgnored(path, safety)
+  if (ignoredResult.error !== undefined) unverified.push(ignoredResult.error)
+  const operations = inProgressOperations(path)
 
   return {
     branch,
@@ -181,6 +270,8 @@ export async function readWorktreeStatus(path, options = {}) {
     needsRebase: needsRebase({ aheadBase, behindBase }),
     unpublished: unpublishedResult.count,
     stashes: stashResult.count,
+    ignored: ignoredResult.error === undefined ? { count: ignoredResult.count, examples: ignoredResult.examples } : undefined,
+    operations,
     unverified,
     dirty: changes.dirty,
     staged: changes.staged,

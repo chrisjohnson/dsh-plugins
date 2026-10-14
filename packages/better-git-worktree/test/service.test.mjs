@@ -187,7 +187,7 @@ test('snapshot reports every recorded copy with its decoration, archive plan and
     assert.equal(entry.ignored, true)
     assert.equal(entry.decoration.label, 'Progressing')
     assert.match(entry.decoration.tooltip, /Worktree .* · branch dsh\//)
-    assert.deepEqual(entry.archive, { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] })
+    assert.deepEqual(entry.archive, { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: { count: 0, examples: [] }, operations: [] })
     assert.deepEqual(snapshot.value.capabilities, { folderOpener: 'xdg-open' })
     assert.deepEqual(snapshot.value.registry, { writable: true, problem: null })
   } finally {

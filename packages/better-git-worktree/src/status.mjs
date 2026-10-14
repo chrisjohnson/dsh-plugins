@@ -187,7 +187,7 @@ export function decorationOf(entry) {
  */
 export function archivePlan(entry) {
   const managed = entry !== undefined && entry !== null && entry.missing !== true && typeof entry.managedRoot === 'string'
-  if (!managed) return { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] }
+  if (!managed) return { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] }
   const reasons = Array.isArray(entry.unverified) ? [...entry.unverified] : []
   if (typeof entry.error === 'string' && entry.error !== '' && reasons.length === 0) reasons.push(entry.error)
   const dirty = typeof entry.dirty === 'number' ? entry.dirty : 0
@@ -201,5 +201,28 @@ export function archivePlan(entry) {
   const stashes = typeof entry.stashes === 'number' ? entry.stashes : 0
   // A status that could not be read is never "clean": the dialog says so and
   // refuses to remove.
-  return { prompt: true, dirty, unpushed, stashes, unknown: reasons.length > 0, reasons }
+  const operations = Array.isArray(entry.operations) ? [...entry.operations] : []
+  const ignored = entry.ignored && typeof entry.ignored.count === 'number' ? entry.ignored : null
+  return { prompt: true, dirty, unpushed, stashes, unknown: reasons.length > 0, reasons, ignored, operations }
+}
+
+/** The part of an archive plan a user confirms by pressing Remove. */
+export function confirmationOf(plan) {
+  return { dirty: plan.dirty, unpushed: plan.unpushed, stashes: plan.stashes }
+}
+
+/**
+ * Whether a plan the user confirmed is exactly the one the host just computed.
+ * The host never removes a copy with anything at risk on a confirmation that is
+ * missing, malformed, or for a different amount of work.
+ */
+export function confirmationMatches(confirmed, plan) {
+  if (confirmed === null || typeof confirmed !== 'object') return false
+  const now = confirmationOf(plan)
+  return confirmed.dirty === now.dirty && confirmed.unpushed === now.unpushed && confirmed.stashes === now.stashes
+}
+
+/** Whether removing the copy would discard any work the plan counts. */
+export function planAtRisk(plan) {
+  return plan.dirty > 0 || plan.unpushed > 0 || plan.stashes > 0 || plan.operations.length > 0
 }

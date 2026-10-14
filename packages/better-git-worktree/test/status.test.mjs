@@ -114,13 +114,13 @@ test('decorationOf: a missing copy reads Missing on the badge and Unknown on the
 })
 
 test('archivePlan: only a session with a live managed working copy asks what to do with it', () => {
-  assert.deepEqual(archivePlan(undefined), { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] })
-  assert.deepEqual(archivePlan({ path: '/work/project' }), { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] }, 'a plain checkout session archives straight away')
+  assert.deepEqual(archivePlan(undefined), { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] })
+  assert.deepEqual(archivePlan({ path: '/work/project' }), { prompt: false, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] }, 'a plain checkout session archives straight away')
   assert.equal(archivePlan({ managedRoot: '/w/c', missing: true }).prompt, false, 'a copy that is already gone has nothing to remove')
-  assert.deepEqual(archivePlan({ managedRoot: '/w/c', dirty: 3, aheadUpstream: 2, aheadBase: 9 }), { prompt: true, dirty: 3, unpushed: 2, stashes: 0, unknown: false, reasons: [] })
+  assert.deepEqual(archivePlan({ managedRoot: '/w/c', dirty: 3, aheadUpstream: 2, aheadBase: 9 }), { prompt: true, dirty: 3, unpushed: 2, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] })
 })
 
 test('archivePlan: unpushed commits fall back to the count ahead of the default branch when there is no upstream', () => {
-  assert.deepEqual(archivePlan({ managedRoot: '/w/c', aheadBase: 4 }), { prompt: true, dirty: 0, unpushed: 4, stashes: 0, unknown: false, reasons: [] })
-  assert.deepEqual(archivePlan({ managedRoot: '/w/c' }), { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [] })
+  assert.deepEqual(archivePlan({ managedRoot: '/w/c', aheadBase: 4 }), { prompt: true, dirty: 0, unpushed: 4, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] })
+  assert.deepEqual(archivePlan({ managedRoot: '/w/c' }), { prompt: true, dirty: 0, unpushed: 0, stashes: 0, unknown: false, reasons: [], ignored: null, operations: [] })
 })

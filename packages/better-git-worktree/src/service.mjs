@@ -34,7 +34,7 @@ import {
   worktreesIgnored,
 } from './working-copy.mjs'
 import { assertRemovable } from './removal.mjs'
-import { archivePlan, decorationOf, statusSummary } from './status.mjs'
+import { archivePlan, confirmationMatches, decorationOf, planAtRisk, statusSummary } from './status.mjs'
 import { findOpener as defaultFindOpener, openFolder as defaultOpenFolder } from './open-folder.mjs'
 
 export const STATUS_TTL_MS = 4000
@@ -43,7 +43,7 @@ export const FETCH_INTERVAL_MS = 90000
 
 const message = (error) => (error instanceof Error ? error.message : String(error))
 
-const fail = (code, text) => ({ ok: false, error: { code, message: text, details: {} } })
+const fail = (code, text, details = {}) => ({ ok: false, error: { code, message: text, details } })
 
 /**
  * @param {object} deps
@@ -124,7 +124,13 @@ export function createService(deps) {
     try {
       status = await cache.get(
         key,
-        () => readStatus(checkout.path, { baseBranch: checkout.baseBranch, baseOid: checkout.record?.baseOid }),
+        () => readStatus(checkout.path, {
+          baseBranch: checkout.baseBranch,
+          baseOid: checkout.record?.baseOid,
+          // A managed copy must be a repository of its own: git otherwise walks up to
+          // the enclosing source checkout and describes that instead.
+          requireOwnRepo: checkout.record !== undefined,
+        }),
         { ttlMs: STATUS_TTL_MS, force: options.force === true },
       )
     } catch (error) {
@@ -285,7 +291,7 @@ export function createService(deps) {
    * the authority, and the path must still sit under a managed root, so a
    * corrupted record can never turn this into an arbitrary `rm -rf`.
    */
-  async function removeWorkingCopy(record) {
+  async function removeWorkingCopy(record, options = {}) {
     const forget = () => {
       registry.remove(record.sessionId)
       cache.invalidatePrefix('status:')
@@ -297,6 +303,30 @@ export function createService(deps) {
       return { removed: false, managedRoot: record.managedRoot, reason: 'the working copy was already gone' }
     }
     const resolved = assertRemovable(record.managedRoot, record.repoRoot, home)
+    // The host is the last guard, whatever the browser showed: read the copy
+    // afresh (cache bypassed) and refuse unless it was verified, and either holds
+    // nothing at risk or the caller confirmed exactly this amount of work. A stale
+    // dialog or a direct request therefore cannot delete a dirty copy.
+    const entry = await statusFor(record.sessionId, { force: true })
+    const plan = entry?.archive
+    if (plan === undefined || plan.unknown) {
+      return {
+        refused: {
+          code: 'unverified',
+          message: `could not verify that ${resolved} has no unsaved work, so it was not removed${plan?.reasons?.length ? `: ${plan.reasons.join('; ')}` : ''}`,
+          plan,
+        },
+      }
+    }
+    if (planAtRisk(plan) && !confirmationMatches(options.confirmedPlan, plan)) {
+      return {
+        refused: {
+          code: 'unsaved-work',
+          message: `${resolved} holds unsaved work (${plan.dirty} uncommitted path(s), ${plan.unpushed} unpushed commit(s), ${plan.stashes} stash entries${plan.operations.length ? `; ${plan.operations.join(', ')}` : ''}) that was not confirmed as shown, so it was not removed`,
+          plan,
+        },
+      }
+    }
     // Resolve the Workspace registration *before* deleting the directory:
     // resolveByPath canonicalizes the path and rejects once it is gone.
     let workspace
@@ -425,9 +455,15 @@ export function createService(deps) {
       // pushed; the client asks before calling this.
       case 'remove': {
         if (sessionId === undefined) return fail('bad-request', 'remove needs a sessionId')
-        const record = registry.get(sessionId)
+        // A converted copy's record is keyed by the source session, and the session
+        // that lives in it is its `targetSessionId`: either may ask to remove it.
+        const record = registry.get(sessionId) ?? registry.list().find((entry) => entry.targetSessionId === sessionId)
         if (record === undefined) return fail('not-a-worktree-session', `session ${sessionId} is not a worktree session`)
-        return { ok: true, value: await removeWorkingCopy(record) }
+        const result = await removeWorkingCopy(record, { confirmedPlan: p.confirmedPlan })
+        if (result.refused !== undefined) {
+          return fail(result.refused.code, result.refused.message, { managedRoot: record.managedRoot, plan: result.refused.plan })
+        }
+        return { ok: true, value: result }
       }
       // Hand the checkout's folder to the desktop file manager.
       case 'open': {

@@ -264,7 +264,7 @@ test('unpublished commits are counted without origin refs: a fresh copy is clean
     writeFileSync(join(copy, 'tracked.txt'), 'dirty\n')
     status = await readWorktreeStatus(copy, options)
     assert.equal(status.unpublished, 1)
-    assert.deepEqual(archivePlan({ ...status, managedRoot: copy }), { prompt: true, dirty: 1, unpushed: 1, stashes: 0, unknown: false, reasons: [] })
+    assert.deepEqual(archivePlan({ ...status, managedRoot: copy }), { prompt: true, dirty: 1, unpushed: 1, stashes: 0, unknown: false, reasons: [], ignored: { count: 0, examples: [] }, operations: [] })
 
     // Pushed (no upstream configured, then fetched): the remote-tracking ref has it, so no false warning.
     git(copy, 'checkout', '-q', 'tracked.txt')
