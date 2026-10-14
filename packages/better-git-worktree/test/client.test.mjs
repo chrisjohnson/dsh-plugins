@@ -14,16 +14,59 @@ import { readFileSync } from 'node:fs'
 const source = readFileSync(new URL('../src/client.mjs', import.meta.url), 'utf8')
 
 function fakeReact() {
+  const stateLog = []
   return {
+    stateLog,
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
     Fragment: 'Fragment',
-    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    // State never re-renders here; every value a component sets is recorded instead.
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, (value) => stateLog.push(typeof value === 'function' ? value(initial) : value)],
     useEffect: () => {},
     useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
   }
 }
 
-const primitives = new Proxy({}, { get: (_t, name) => (name === 'then' ? undefined : function Primitive() {}) })
+// Primitives are stable named stand-ins that render to nothing; `expand` below
+// stops at them, so a test can look at the props the browser half gave them.
+const primitiveCache = {}
+const primitives = new Proxy({}, {
+  get: (_t, name) => {
+    if (name === 'then') return undefined
+    primitiveCache[name] ??= Object.assign(function Primitive() { return null }, { displayName: String(name) })
+    return primitiveCache[name]
+  },
+})
+
+/** Expand function components (with the fake hooks) down to primitives and plain elements. */
+function expand(node) {
+  if (node === null || node === undefined || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(expand)
+  const { type, props, children } = node
+  if (typeof type === 'function' && type.displayName === undefined) return expand(type({ ...props, children }))
+  return { type, props, children: (children ?? []).map(expand) }
+}
+
+/** The first node in a tree matching `predicate`. */
+function find(node, predicate) {
+  if (node === null || node === undefined || typeof node !== 'object') return undefined
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = find(item, predicate)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  if (predicate(node)) return node
+  for (const child of [...(node.children ?? []), ...Object.values(node.props ?? {}).filter((v) => v && typeof v === 'object')]) {
+    const hit = find(child, predicate)
+    if (hit) return hit
+  }
+  return undefined
+}
+const named = (name) => (node) => node.type?.displayName === name
+const button = (tree, variant) => find(tree, (n) => n.type?.displayName === 'Button' && n.props.variant === variant)
+/** The overlay seat's rendered tree. */
+const overlay = (t) => expand(t.slots.winners('shell.overlay')[0].component({}))
 
 /** A slot ledger with the real shadowing rule: per id, the lowest priority wins. */
 function fakeSlots() {
@@ -68,8 +111,9 @@ function fakeSlots() {
   return slots
 }
 
-function load({ snapshot, betterSidebar } = {}) {
+function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard } = {}) {
   const slots = fakeSlots()
+  const flags = { failRemove: false }
   const fetched = []
   const created = []
   const effects = []
@@ -83,24 +127,37 @@ function load({ snapshot, betterSidebar } = {}) {
   const fetchStub = async (url, init) => {
     fetched.push({ url, body: JSON.parse(init.body) })
     const endpoint = url.split('/').pop()
-    const value = endpoint === 'snapshot' ? snapshot : { status: null }
+    if (endpoint === 'remove' && flags.failRemove) {
+      return { ok: true, json: async () => ({ ok: false, error: { message: 'refusing to remove' } }) }
+    }
+    const value = endpoint === 'snapshot' ? snapshot : endpoint === 'remove' ? { removed: true } : { status: null }
     return { ok: true, json: async () => ({ ok: true, value }) }
   }
   const react = fakeReact()
   const require = (id) => (id === 'react' ? react : primitives)
-  new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', source)(window, document, fetchStub, undefined, { ...console, warn() {}, error() {} }, () => 0, () => {})
+  const warnings = []
+  // Timers: polling never fires; one-shot timeouts run at once (recording their delay) when a test asks to see them.
+  const setTimeoutStub = (fn, ms) => {
+    timeouts?.push(ms)
+    queueMicrotask(fn)
+    return 0
+  }
+  const navigatorStub = clipboard === undefined ? undefined : { clipboard }
+  new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', 'setTimeout', source)(
+    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, () => 0, () => {}, setTimeoutStub,
+  )
   const exports = loaded.factory(require)
   const sidebarTabs = []
   const ctx = {
     slots,
     effect: (fn, label) => effects.push({ run: fn, label }),
-    get: () => undefined,
+    get: (name) => services[name],
     inject: (names, callback) => {
       injected.push(names)
       if (betterSidebar !== undefined) callback({ betterSidebar, effect: (fn, label) => effects.push({ run: fn, label }) })
     },
   }
-  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react }
+  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, failRemove: () => { flags.failRemove = true } }
 }
 
 const DECLARED = [
@@ -253,20 +310,19 @@ test('a worktree session asks first: the official archive runs only after the di
   assert.deepEqual(official.calls, [], 'nothing was archived behind the dialog')
 
   // The dialog component reads the pending request: render it and look at what it shows.
-  const dialog = t.slots.winners('shell.overlay')[0].component
-  const tree = dialog()
-  assert.ok(tree, 'the dialog is open')
-  assert.equal(tree.props.open, true)
-  assert.equal(tree.props.title, "Remove this session's worktree?")
+  const tree = overlay(t)
+  const modal = find(tree, named('Modal'))
+  assert.ok(modal, 'the dialog is open')
+  assert.equal(modal.props.open, true)
+  assert.equal(modal.props.title, "Remove this session's worktree?")
   const text = JSON.stringify(tree)
   assert.match(text, /brave-otter/)
   assert.match(text, /2 uncommitted path\(s\) will be lost with it\./)
   assert.match(text, /1 commit\(s\) are not pushed anywhere/)
+  assert.match(text, /does nothing while the session is still running/)
 
   // "Keep" archives without removing the copy.
-  const footer = tree.props.footer
-  const keep = footer.children.find((c) => c.props.variant === 'outline')
-  keep.props.onClick()
+  button(tree, 'outline').props.onClick()
   assert.deepEqual(official.calls, [['sidebar.workspaces.session.row.action', 'session-wt']])
   assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false)
 })
@@ -277,26 +333,69 @@ test('Cancel closes the dialog and archives nothing', async () => {
   await flush()
   await flush()
   t.slots.winners('sidebar.workspaces.session.menu.item').find((e) => e.options.id === 'archive').inject().archiveSession('session-wt')
-  const dialog = t.slots.winners('shell.overlay')[0].component
-  dialog().props.onClose()
-  assert.equal(dialog(), null)
+  find(overlay(t), named('Modal')).props.onClose()
+  assert.equal(find(overlay(t), named('Modal')), undefined, 'the dialog is closed')
   assert.deepEqual(official.calls, [])
 })
 
-test('Remove asks the host to delete the copy and only then runs the official archive', async () => {
-  const t = mountClient({ snapshot: SNAPSHOT })
-  const official = registerOfficialArchive(t)
+function archivingServices(archive) {
+  const order = []
+  const services = {
+    uiWorkspace: { archiveSession: async (id) => { order.push(['archive', id]); return archive(id) } },
+    workspaces: {},
+  }
+  return { order, services }
+}
+
+async function openRemoveDialog(t) {
+  registerOfficialArchive(t)
   await flush()
   await flush()
   t.slots.winners('sidebar.workspaces.session.row.action').find((e) => e.options.id === 'archive').inject().archiveSession('session-wt')
-  const tree = t.slots.winners('shell.overlay')[0].component()
-  const remove = tree.props.footer.children.find((c) => c.props.variant === 'primary')
-  remove.props.onClick()
+  return overlay(t)
+}
+
+test('Remove archives first and deletes the copy only after the archive succeeded', async () => {
+  const { order, services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot: SNAPSHOT, services })
+  const tree = await openRemoveDialog(t)
+  button(tree, 'primary').props.onClick()
   await flush()
   await flush()
   const removal = t.fetched.find((f) => f.url === '/betterGitWorktree/remove')
   assert.deepEqual(removal.body, { sessionId: 'session-wt' })
-  assert.deepEqual(official.calls, [['sidebar.workspaces.session.row.action', 'session-wt']])
+  assert.deepEqual(order, [['archive', 'session-wt']])
+  assert.ok(t.fetched.indexOf(removal) > -1)
+})
+
+test('a session that is still running cannot reach the destructive path: the archive is refused, so nothing is removed', async () => {
+  const { order, services } = archivingServices(async () => {
+    throw Object.assign(new Error('session has running work'), { name: 'WorkspaceArchiveError' })
+  })
+  const t = mountClient({ snapshot: SNAPSHOT, services })
+  const tree = await openRemoveDialog(t)
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  assert.deepEqual(order, [['archive', 'session-wt']], 'the archive was attempted first')
+  assert.equal(t.fetched.some((f) => f.url.endsWith('/remove')), false, 'the working copy was never touched')
+  const shown = t.react.stateLog.at(-1)
+  assert.match(shown.error, /could not be archived, so the worktree was not touched/)
+  assert.match(shown.error, /stop it first/)
+})
+
+test('if the copy cannot be removed after the archive, the dialog says the session was already archived', async () => {
+  const { services } = archivingServices(async () => {})
+  const t = mountClient({ snapshot: SNAPSHOT, services })
+  const tree = await openRemoveDialog(t)
+  const realFetch = t.fetched
+  // The fake route answers `remove` with a failure for this test only.
+  t.failRemove()
+  button(tree, 'primary').props.onClick()
+  await flush()
+  await flush()
+  assert.ok(realFetch.some((f) => f.url.endsWith('/remove')))
+  assert.match(t.react.stateLog.at(-1).error, /The session was archived but its worktree could not be removed/)
 })
 
 test('row seats: the badge and the hover line render only for a session with a decoration', async () => {
@@ -325,6 +424,103 @@ test('row menu items are for sessions with a live managed copy only', async () =
     assert.equal(entry.component({ sessionId: 'session-gone', useMenuOpenState }), null, 'a missing copy has nothing to open')
     assert.ok(entry.component({ sessionId: 'session-wt', useMenuOpenState }))
   }
+})
+
+// After the agent's own worktree_convert the host marks the record `activated: false`
+// and the browser opens the continuation, then archives the (still running) source.
+function conversionFixture({ archive }) {
+  const calls = { archive: [], opened: [] }
+  const snapshot = {
+    worktrees: [{
+      sessionId: 'session-src',
+      targetSessionId: 'session-new',
+      managedRoot: '/work/project/.dsh-worktrees/calm-heron',
+      activated: false,
+      conversationCarried: true,
+      decoration: { state: 'progressing', label: 'Progressing', needsRebase: false, tooltip: 't', name: 'calm-heron', title: 'calm-heron - Progressing' },
+      archive: { prompt: true, dirty: 0, unpushed: 0 },
+    }],
+    capabilities: {},
+    at: 1,
+  }
+  const services = {
+    workspaces: {
+      create: async ({ path }) => ({ path, workspaceId: 'workspace-1' }),
+      archiveSession: async (id) => {
+        calls.archive.push(id)
+        return archive(calls.archive.length)
+      },
+    },
+    sessions: {
+      create: async ({ sessionId }) => sessionId,
+      using: async (_id, _options, operation) => operation({ binding: { ctx: { get: () => ({ input: { for: () => ({ setDraft() {} }) } }) } } }),
+    },
+    uiWorkspace: { openSession: (id) => calls.opened.push(id) },
+  }
+  return { calls, snapshot, services }
+}
+
+const settle = async () => {
+  for (let i = 0; i < 12; i += 1) await flush()
+}
+
+test('the source of an agent-triggered conversion is archived once its turn has ended: refused attempts are retried with back-off', async () => {
+  const timeouts = []
+  const { calls, snapshot, services } = conversionFixture({
+    archive: (attempt) => {
+      if (attempt < 3) throw Object.assign(new Error('workspace/session-active'), { name: 'WorkspaceArchiveError' })
+    },
+  })
+  const t = mountClient({ snapshot, services, timeouts })
+  await settle()
+  assert.deepEqual(calls.opened, ['session-new'], 'the continuation was opened')
+  assert.deepEqual(calls.archive, ['session-src', 'session-src', 'session-src'], 'two refusals, then success, then no more attempts')
+  assert.deepEqual(timeouts, [0, 3000, 8000])
+  assert.deepEqual(t.warnings, [])
+})
+
+test('an archive that never succeeds is retried a bounded number of times and then logged, not swallowed', async () => {
+  const timeouts = []
+  const { calls, snapshot, services } = conversionFixture({
+    archive: () => {
+      throw new Error('workspace/session-active')
+    },
+  })
+  const t = mountClient({ snapshot, services, timeouts })
+  await settle()
+  assert.equal(calls.archive.length, 6)
+  assert.deepEqual(timeouts, [0, 3000, 8000, 20000, 45000, 90000])
+  assert.equal(t.warnings.length, 1)
+  assert.match(t.warnings[0], /gave up archiving the source session session-src after 6 attempts: workspace\/session-active/)
+  assert.deepEqual(calls.opened, ['session-new'], 'the activation itself was not failed by the archive')
+})
+
+test('the Open folder row is hidden when the host has no folder opener, and a missing clipboard is reported', async () => {
+  const noOpener = mountClient({ snapshot: { ...SNAPSHOT, capabilities: { folderOpener: null } } })
+  await flush()
+  await flush()
+  const useMenuOpenState = () => [true, () => {}]
+  const [copy, open] = ['better-git-worktree.copy-path', 'better-git-worktree.open-folder']
+    .map((id) => noOpener.slots.winners('sidebar.workspaces.session.menu.item').find((e) => e.options.id === id))
+  assert.ok(copy.component({ sessionId: 'session-wt', useMenuOpenState }))
+  assert.equal(open.component({ sessionId: 'session-wt', useMenuOpenState }), null)
+
+  // No clipboard: selecting "Copy worktree path" shows a notice instead of doing nothing.
+  const item = expand(copy.component({ sessionId: 'session-wt', useMenuOpenState }))
+  item.props.onSelect()
+  const shown = find(overlay(noOpener), named('Modal'))
+  assert.ok(shown, 'a notice dialog is open')
+  assert.match(JSON.stringify(shown), /Clipboard access is unavailable here\./)
+})
+
+test('a clipboard failure is reported too', async () => {
+  const t = mountClient({ snapshot: SNAPSHOT, clipboard: { writeText: async () => { throw new Error('denied') } } })
+  await flush()
+  await flush()
+  const copy = t.slots.winners('sidebar.workspaces.session.menu.item').find((e) => e.options.id === 'better-git-worktree.copy-path')
+  copy.component({ sessionId: 'session-wt', useMenuOpenState: () => [true, () => {}] }).props.onSelect()
+  await flush()
+  assert.match(JSON.stringify(find(overlay(t), named('Modal'))), /Could not copy the path: denied/)
 })
 
 test('with dsh-better-sidebar the Branch tab is registered, and disposed with the plugin', () => {

@@ -296,7 +296,64 @@ window.__ModuleLoader__.load({
 			return pair[0];
 		}
 
-		function ArchiveWorktreePrompt() {
+		/** A short message for something a menu row could not do (a row has no room of its own). */
+		var notice = {
+			message: null,
+			listeners: new Set(),
+			subscribe: function (listener) {
+				this.listeners.add(listener);
+				var self = this;
+				return function () {
+					self.listeners.delete(listener);
+				};
+			},
+			show: function (message) {
+				this.message = message;
+				for (var listener of Array.from(this.listeners)) listener();
+			},
+		};
+
+		function useNoticeVersion() {
+			var pair = React.useState(0);
+			var setVersion = pair[1];
+			React.useEffect(function () {
+				return notice.subscribe(function () {
+					setVersion(function (value) {
+						return value + 1;
+					});
+				});
+			}, []);
+			return pair[0];
+		}
+
+		/** Archive through the official service, which refuses a session that is still running. */
+		function archiveNow(services, sessionId) {
+			if (services.uiWorkspace && typeof services.uiWorkspace.archiveSession === "function") {
+				return Promise.resolve(services.uiWorkspace.archiveSession(sessionId));
+			}
+			return Promise.resolve(services.workspaces.archiveSession(sessionId));
+		}
+
+		/** The shell overlay: the archive dialog, and a notice for what a menu row could not do. */
+		function WorktreeOverlay(props) {
+			return h(React.Fragment, null, h(ArchiveWorktreePrompt, props), h(NoticeDialog, null));
+		}
+
+		function NoticeDialog() {
+			useNoticeVersion();
+			if (notice.message === null) return null;
+			return h(primitives.Modal, {
+				open: true,
+				onClose: function () {
+					notice.show(null);
+				},
+				title: "Worktree",
+				closeLabel: "Close",
+			}, h("p", { className: "bgw-menu-error" }, notice.message));
+		}
+
+		function ArchiveWorktreePrompt(props) {
+			var services = props.services;
 			useArchivePromptVersion();
 			var pair = React.useState({ busy: null, error: null });
 			var state = pair[0];
@@ -320,6 +377,21 @@ window.__ModuleLoader__.load({
 			var removeThenArchive = async function () {
 				var request = pending;
 				setState({ busy: "remove", error: null });
+				// Archive first, delete second. The harness refuses to archive a session
+				// with running work, and a session left running in a deleted directory is
+				// the one outcome that cannot be undone, so nothing is removed until the
+				// archive has actually succeeded.
+				try {
+					await archiveNow(services, request.sessionId);
+				} catch (error) {
+					setState({
+						busy: null,
+						error: "The session could not be archived, so the worktree was not touched: "
+							+ String((error && error.message) || error)
+							+ " If it is still running, stop it first and archive it again.",
+					});
+					return;
+				}
 				try {
 					var result = await rpc("remove", { sessionId: request.sessionId });
 					if (!result || result.ok !== true) throw new Error(failureOf(result, "the worktree could not be removed"));
@@ -327,9 +399,11 @@ window.__ModuleLoader__.load({
 					await statusStore.refresh(true);
 					setState({ busy: null, error: null });
 					archivePrompt.close();
-					await request.proceed(request.sessionId);
 				} catch (error) {
-					setState({ busy: null, error: String((error && error.message) || error) });
+					setState({
+						busy: null,
+						error: "The session was archived but its worktree could not be removed: " + String((error && error.message) || error),
+					});
 				}
 			};
 
@@ -359,6 +433,7 @@ window.__ModuleLoader__.load({
 					plan.unpushed > 0
 						? h("div", { className: "bgw-warn" }, String(plan.unpushed) + " commit(s) are not pushed anywhere; removing the copy discards them.")
 						: null,
+					h("div", { className: "bgw-note" }, "Remove archives the session first, so it does nothing while the session is still running: stop it, then archive again."),
 					state.error !== null ? h("div", { className: "bgw-menu-error" }, state.error) : null));
 		}
 
@@ -505,6 +580,37 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		// Delays before each archive attempt of a converted session's source. After
+		// the agent's own `worktree_convert` the source turn is still running when
+		// the continuation opens, and the harness refuses to archive running work,
+		// so the first attempt fails and a later one succeeds once the turn ends.
+		var ARCHIVE_RETRY_MS = [0, 3000, 8000, 20000, 45000, 90000];
+
+		function archiveSourceWithRetry(services, sessionId) {
+			if (services.workspaces === undefined || typeof services.workspaces.archiveSession !== "function") return;
+			var attempt = 0;
+			function next() {
+				var outcome;
+				try {
+					outcome = Promise.resolve(services.workspaces.archiveSession(sessionId));
+				} catch (error) {
+					outcome = Promise.reject(error);
+				}
+				outcome.then(function () {}, function (error) {
+					attempt += 1;
+					if (attempt >= ARCHIVE_RETRY_MS.length) {
+						console.warn(
+							"[better-git-worktree] gave up archiving the source session " + sessionId + " after "
+							+ String(attempt) + " attempts: " + String((error && error.message) || error),
+						);
+						return;
+					}
+					setTimeout(next, ARCHIVE_RETRY_MS[attempt]);
+				});
+			}
+			setTimeout(next, ARCHIVE_RETRY_MS[0]);
+		}
+
 		/**
 		 * Create the working-copy-rooted Session for a prepared working copy and hand
 		 * the current draft over to it. Mirrors the harness's own new-session flow:
@@ -547,11 +653,9 @@ window.__ModuleLoader__.load({
 			});
 			if (options.archiveSourceSessionId !== undefined && services.workspaces !== undefined
 				&& typeof services.workspaces.archiveSession === "function") {
-				try {
-					await services.workspaces.archiveSession(options.archiveSourceSessionId);
-				} catch (error) {
-					/* the target handoff already owns the draft; archiving is cosmetic */
-				}
+				// The target handoff already owns the draft, so archiving the source is
+				// housekeeping, and it must not block (or fail) the activation.
+				archiveSourceWithRetry(services, options.archiveSourceSessionId);
 			}
 			// The registry record is keyed by the session it was created for, which
 			// is the target only in the pre-session flow; a converted session keeps
@@ -599,12 +703,13 @@ window.__ModuleLoader__.load({
 		}
 
 		/** A "..." menu row that exists only for a session with a managed working copy. */
-		function makeRowMenuItem(label, iconName, run) {
+		function makeRowMenuItem(label, iconName, run, supported) {
 			return function RowMenuItem(props) {
 				var menuOpen = props.useMenuOpenState();
 				useStatusVersion();
 				var entry = statusStore.entryFor(props.sessionId);
 				if (entry === undefined || entry.missing === true || typeof entry.managedRoot !== "string") return null;
+				if (supported !== undefined && !supported(statusStore.get())) return null;
 				return h(primitives.MenuItemButton, {
 					icon: icon(iconName, 14),
 					onSelect: function () {
@@ -616,19 +721,24 @@ window.__ModuleLoader__.load({
 		}
 
 		var CopyPathMenuItem = makeRowMenuItem("Copy worktree path", "IconCopyOutlineRegular", function (entry) {
-			if (typeof navigator !== "undefined" && navigator.clipboard !== undefined) {
-				navigator.clipboard.writeText(entry.managedRoot).catch(function (error) {
-					console.warn("[better-git-worktree] could not copy the path", error);
-				});
+			if (typeof navigator === "undefined" || navigator.clipboard === undefined) {
+				notice.show("Clipboard access is unavailable here.");
+				return;
 			}
+			navigator.clipboard.writeText(entry.managedRoot).catch(function (error) {
+				notice.show("Could not copy the path: " + String((error && error.message) || error));
+			});
 		});
 
+		// Only offered when the host reports a folder opener, as in the header menu.
 		var OpenFolderMenuItem = makeRowMenuItem("Open worktree folder", "IconFolderOpenOutlineRegular", function (_entry, sessionId) {
 			rpc("open", { sessionId: sessionId }).then(function (result) {
-				if (!result || result.ok !== true) console.warn("[better-git-worktree] " + failureOf(result, "the folder could not be opened"));
+				if (!result || result.ok !== true) notice.show(failureOf(result, "the folder could not be opened"));
 			}).catch(function (error) {
-				console.warn("[better-git-worktree] could not open the folder", error);
+				notice.show("Could not open the folder: " + String((error && error.message) || error));
 			});
+		}, function (store) {
+			return Boolean(store.capabilities && store.capabilities.folderOpener);
 		});
 
 		// ================================================================
@@ -1086,7 +1196,9 @@ window.__ModuleLoader__.load({
 			seat("conversation.session.header.actions", "better-git-worktree.actions", 30, function WorktreeActionsSlot(props) {
 				return h(WorktreeActionsMenu, Object.assign({}, props, { services: services }));
 			}, "header menu");
-			seat("shell.overlay", "better-git-worktree.archive-prompt", 5, ArchiveWorktreePrompt, "archive dialog");
+			seat("shell.overlay", "better-git-worktree.archive-prompt", 5, function WorktreeOverlaySlot() {
+				return h(WorktreeOverlay, { services: services });
+			}, "archive dialog");
 
 			ctx.effect(function () { return shadowOfficialArchive(ctx, "sidebar.workspaces.session.row.action"); }, "dsh-better-git-worktree: archive button");
 			ctx.effect(function () { return shadowOfficialArchive(ctx, "sidebar.workspaces.session.menu.item"); }, "dsh-better-git-worktree: archive menu item");
