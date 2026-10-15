@@ -1,6 +1,6 @@
 {
   "name": "dsh-continue-kicker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automatically resumes a DeepSeek Harness session whose turn halted on the output-token limit (or after a crash, or on a reasoning-only empty stop), with a per-session runaway guard so a task too big for its budget surfaces instead of burning GPU-hours.",
   "type": "module",
   "license": "MIT",

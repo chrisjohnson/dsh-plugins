@@ -10,9 +10,10 @@ A host-plane plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 | --- | --- | --- |
 | Output budget exhausted | last `turn/end` reason `max-tokens` | "Do NOT re-derive your thinking: state your conclusion, then act. Be succinct." |
 | Reasoning-only empty stop | `completed` turn whose final assistant message has no text and no tool call, with at least `emptyCompletionMinReasoningChars` of reasoning | Same "be decisive" framing |
+| Failed turn (opt-in: `kickOnError`) | last `turn/end` reason `error` (the model backend dropped, a provider error) | "The previous turn failed with an error and was cut off before it finished. Please continue from where you left off." |
 | Crash-orphaned turn | last `turn/end` reason `interrupted` (synthesized when a session is loaded) | "Please continue from where you left off." |
 
-It never kicks over `aborted` (an explicit Stop), `error` (blind retry loops against a broken backend), `blocked`, `forked`, a completed turn with real content, or a tail already followed by a user or assistant message.
+It never kicks over `aborted` (an explicit Stop, a parent or hook cancel, a disposal), `error` unless `kickOnError` is on, `blocked`, `forked`, a completed turn with real content, or a tail already followed by a user or assistant message.
 
 Two doors feed one decision: `agent/created` (reopening a session, crash recovery) and a live watcher that re-analyses the tail `liveKickDelayMs` after every turn end, so an unattended halt is caught without anyone reopening the session.
 
@@ -46,11 +47,13 @@ Set these on the plugin's row in your own profile patch (`config:` block). **A t
 | `kickOnInterrupted` | `true` | Kick crash-orphaned turns. |
 | `kickOnMaxTokens` | `true` | Kick output-token-limit halts. |
 | `kickOnEmptyCompletion` | `true` | Kick reasoning-only completed turns. |
+| `kickOnError` | `false` | Kick turns that ended with `reason.kind: 'error'`. Off by default because blindly retrying a failing backend can loop; the runaway guard and cooldown bound it. You would want it for unattended work on a backend that drops now and then (a gateway restart, a network blip): the session resumes by itself once the backend is back instead of sitting dead until someone notices. |
 | `includeSubagents` | `false` | Also kick delegated child sessions (`origin: subagent` or `delegationDepth > 0`). Off by default: auto-kicking a child fights the parent's own delegation and retry flow. |
 | `emptyCompletionMinReasoningChars` | `500` | Reasoning length below which a content-empty completed turn is left alone. |
 | `interruptedKickText` | built in | Text sent for an interrupted turn. |
 | `maxTokensKickText` | built in | Text sent for a max-tokens halt. Forbids re-deriving the lost reasoning; a plain "please continue" invites another long think straight back into the wall. |
 | `emptyCompletionKickText` | built in | Text sent for a reasoning-only empty stop. |
+| `errorKickText` | built in | Text sent for a failed turn when `kickOnError` is on. |
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). An unknown key, a string where a number belongs, or an empty text prints one warning at boot and falls back to the default.
 
@@ -66,12 +69,27 @@ Example row (the default for `maxConsecutiveKicks` is 5; 3 here is just an examp
     kickOnInterrupted: true
     kickOnMaxTokens: true
     kickOnEmptyCompletion: true
+    kickOnError: true
     includeSubagents: false
 ```
 
+## Which turn-end reasons kick
+
+From `TurnEndReasonMap` in `@deepseek-ai/dsh-session`:
+
+| `reason.kind` | Meaning | Kicked? |
+| --- | --- | --- |
+| `max-tokens` | output budget hit | yes, `kickOnMaxTokens` |
+| `interrupted` | crash-orphaned turn closed on load | yes, `kickOnInterrupted` |
+| `completed` | model stopped itself | only a reasoning-only empty one, `kickOnEmptyCompletion` |
+| `error` | the turn failed (`error` holds message and code) | yes, only with `kickOnError` |
+| `aborted` | cancelled on purpose (`user`, `parent`, `hook`, `disposed`, `legacy`) | never |
+| `blocked` | a step was rejected before running | never |
+| `forked` | fork-seed marker, never emitted live | never |
+
 ## The runaway guard
 
-A kick can itself end in the same halt. The plugin counts kicks per session (max-tokens and empty-completion flavors; an interrupted-turn kick does not count). The counter resets when a **completed turn** or a **genuine user message** is observed at the tail. "Genuine" means a message whose source is `user`: the plugin's own kick (source kind `plugin:continue-kicker`) and any other producer's user-role message (goals, other plugins) never reset it. At `maxConsecutiveKicks` the plugin logs an error naming the session and stops until a reset signal arrives.
+A kick can itself end in the same halt. The plugin counts kicks per session (max-tokens, empty-completion and error flavors share one counter; an interrupted-turn kick does not count). The counter resets when a **completed turn** or a **genuine user message** is observed at the tail. "Genuine" means a message whose source is `user`: the plugin's own kick (source kind `plugin:continue-kicker`) and any other producer's user-role message (goals, other plugins) never reset it. At `maxConsecutiveKicks` the plugin logs an error naming the session and stops until a reset signal arrives.
 
 The kick is written with source kind `plugin:continue-kicker`. Session format V4 refuses the bare kind `plugin`, so a session carrying such a message could not be reopened after a restart.
 

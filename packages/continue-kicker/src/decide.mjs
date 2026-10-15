@@ -10,7 +10,10 @@
 //                      @deepseek-ai/dsh-tool-goal reads event.data.source.kind === 'user'.)
 //   assistant/message  { turn, step, message:{ role:'assistant', content:[...] }, ... }
 //   turn/end           { turn, reason:{ kind } }; kind is one of completed, aborted,
-//                      blocked, error, max-tokens, interrupted, forked.
+//                      blocked, error, max-tokens, interrupted, forked. An error
+//                      reason is { kind:'error', error:{ message, code, status?, ... } }
+//                      (LlmFailure, @deepseek-ai/dsh-llm types.d.ts; TurnEndReasonMap in
+//                      @deepseek-ai/dsh-session types.d.ts).
 //   content blocks     { type:'text' | 'reasoning' | 'tool-call' | ... }
 //                      (@deepseek-ai/dsh-llm types.d.ts).
 
@@ -24,7 +27,7 @@ export const USER_SOURCE_KIND = 'user'
 const KICKABLE_KINDS = ['interrupted', 'max-tokens']
 
 /** Flavors whose kicks count toward the runaway guard. */
-const COUNTED_FLAVORS = ['max-tokens', 'empty-completion']
+const COUNTED_FLAVORS = ['max-tokens', 'empty-completion', 'error']
 
 /**
  * Walks backward from just before `idx` for the assistant message that belongs
@@ -107,7 +110,14 @@ export function analyzeTail(events, settings) {
     return { action: 'none', why: 'last turn completed', completedTurn: true }
   }
   if (kind === 'aborted') return { action: 'none', why: 'last turn aborted by user' }
-  if (kind === 'error') return { action: 'none', why: 'last turn errored' }
+  if (kind === 'error') {
+    // A failed turn (`reason.error` is the LlmFailure: message, code, ...). The
+    // other non-completing kinds are deliberate or have their own flavor and
+    // never reach this branch: aborted is a user or system cancel, blocked is a
+    // pre-step rejection, forked is a fork-seed marker.
+    if (!settings.kickOnError) return { action: 'none', why: 'last turn errored (kickOnError disabled)' }
+    return { action: 'kick', flavor: 'error' }
+  }
   if (!KICKABLE_KINDS.includes(kind)) return { action: 'none', why: `unhandled reason kind '${kind}'` }
 
   if (kind === 'interrupted') {
@@ -123,6 +133,7 @@ export function analyzeTail(events, settings) {
 function kickText(flavor, settings) {
   if (flavor === 'max-tokens') return settings.maxTokensKickText
   if (flavor === 'empty-completion') return settings.emptyCompletionKickText
+  if (flavor === 'error') return settings.errorKickText
   return settings.interruptedKickText
 }
 
@@ -136,6 +147,7 @@ export function boundSummary(summary) {
 function kickSummary(flavor, count, max) {
   if (flavor === 'max-tokens') return boundSummary(`Auto-resumed after a max-tokens halt (${count}/${max})`)
   if (flavor === 'empty-completion') return boundSummary(`Auto-resumed after a reasoning-only completion with no answer (${count}/${max})`)
+  if (flavor === 'error') return boundSummary(`Auto-resumed after a failed turn (${count}/${max})`)
   return 'Auto-resumed after an interrupted turn'
 }
 

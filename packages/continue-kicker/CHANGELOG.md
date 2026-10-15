@@ -5,6 +5,12 @@
 
 ## Unreleased
 
+## 0.2.0
+
+### Added
+
+- `kickOnError` (default `false`, so behaviour is unchanged): resume a turn that ended with `reason.kind === 'error'`, for example when the model backend dropped mid-turn. Error kicks use the new `errorKickText` key, count toward `maxConsecutiveKicks`, and follow the same cooldown, subagent and live-timer rules as the other flavors.
+
 ## 0.1.0
 
 First public release, extracted from a running dsh deployment's in-tree plugin and ported to dsh 0.2.0-rc.2 (session format V4).

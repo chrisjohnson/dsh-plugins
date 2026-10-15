@@ -27,6 +27,16 @@ const assistant = (content) => ({
 const text = (t) => ({ type: 'text', text: t })
 const reasoning = (t) => ({ type: 'reasoning', text: t })
 
+// Real V4 shapes: TurnEndReasonMap in @deepseek-ai/dsh-session types.d.ts;
+// error carries an LlmFailure ({ message, code }, @deepseek-ai/dsh-llm types.d.ts);
+// aborted carries an AgentCancelCause.
+const errorEnd = () => ({
+  type: 'turn/end',
+  data: { turn, reason: { kind: 'error', error: { message: 'litellm.APIConnectionError: Connection error.', code: 'UNKNOWN' } } },
+})
+const abortedEnd = (cause = { kind: 'user' }) => ({ type: 'turn/end', data: { turn, reason: { kind: 'aborted', reason: cause } } })
+const errorTurn = () => [turnStart(), assistant([text('partial')]), errorEnd()]
+
 const maxTokensTurn = () => [turnStart(), assistant([reasoning('thinking'), text('partial')]), turnEnd('max-tokens')]
 const completedTurn = () => [turnStart(), assistant([text('done')]), turnEnd('completed')]
 
@@ -143,4 +153,73 @@ test('summaries are bounded to 120 characters', () => {
 test('a configured kick text replaces the built-in one', () => {
   const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxTokensKickText: 'go on' } })
   assert.equal(d.text, 'go on')
+})
+
+const withError = { ...settings, kickOnError: true }
+
+test('error halt with kickOnError off (the default) does not kick', () => {
+  assert.equal(DEFAULT_CONFIG.kickOnError, false)
+  const d = decide({ ...base, events: errorTurn() })
+  assert.equal(d.action, 'skip')
+  assert.match(d.why, /kickOnError disabled/)
+})
+
+test('error halt with kickOnError on kicks once, with the error text and a bounded summary', () => {
+  const events = [userMessage('user'), ...errorTurn()]
+  const d = decide({ ...base, events, settings: withError })
+  assert.equal(d.action, 'kick')
+  assert.equal(d.flavor, 'error')
+  assert.equal(d.consecutive, 1)
+  assert.equal(d.text, DEFAULT_CONFIG.errorKickText)
+  assert.ok(d.summary.length <= 120)
+  const again = decide({ ...base, events: [...events, kickMessage()], settings: withError, consecutive: 1, lastKickAt: base.now, now: base.now + 5 })
+  assert.equal(again.action, 'skip')
+})
+
+test('errors after three kicks stop at the cap', () => {
+  let events = [userMessage('user'), ...errorTurn()]
+  let consecutive = 0
+  const actions = []
+  for (let i = 0; i < 4; i++) {
+    const d = decide({ ...base, events, settings: withError, consecutive, lastKickAt: 0 })
+    actions.push(d.action)
+    consecutive = d.consecutive
+    if (d.action !== 'kick') {
+      assert.match(d.why, /runaway guard/)
+      break
+    }
+    events = [...events, kickMessage(), ...errorTurn()]
+  }
+  assert.deepEqual(actions, ['kick', 'kick', 'kick', 'stop'])
+})
+
+test('aborted turns never kick, whatever the cause', () => {
+  for (const cause of [{ kind: 'user' }, { kind: 'parent' }, { kind: 'hook', reason: 'x' }, { kind: 'disposed' }, { kind: 'legacy' }]) {
+    const d = decide({ ...base, events: [turnStart(), abortedEnd(cause)], settings: withError })
+    assert.equal(d.action, 'skip', cause.kind)
+  }
+  assert.equal(decide({ ...base, events: [turnStart(), turnEnd('blocked')], settings: withError }).action, 'skip')
+})
+
+test('error kicks honour the cooldown and the subagent scope', () => {
+  const events = errorTurn()
+  assert.match(decide({ ...base, events, settings: { ...withError, cooldownMs: 60000 }, lastKickAt: base.now - 1000 }).why, /cooldown/)
+  assert.equal(decide({ ...base, events, settings: withError, isSubagent: true }).scopeSkipped, true)
+})
+
+test('mixed flavors share one counter', () => {
+  const afterMaxTokens = decide({ ...base, events: maxTokensTurn(), settings: withError })
+  assert.equal(afterMaxTokens.consecutive, 1)
+  const afterError = decide({ ...base, events: [...maxTokensTurn(), kickMessage(), ...errorTurn()], settings: withError, consecutive: 1 })
+  assert.equal(afterError.flavor, 'error')
+  assert.equal(afterError.consecutive, 2)
+  const capped = decide({ ...base, events: [...errorTurn(), kickMessage(), ...maxTokensTurn()], settings: { ...withError, maxConsecutiveKicks: 2 }, consecutive: 2 })
+  assert.equal(capped.action, 'stop')
+})
+
+test('a genuine user message resets the counter after error kicks', () => {
+  const d = decide({ ...base, events: [...errorTurn(), kickMessage(), ...errorTurn(), userMessage('user')], settings: withError, consecutive: 3 })
+  assert.equal(d.consecutive, 0)
+  const next = decide({ ...base, events: [...errorTurn(), userMessage('user'), ...errorTurn()], settings: withError, consecutive: d.consecutive })
+  assert.equal(next.action, 'kick')
 })
