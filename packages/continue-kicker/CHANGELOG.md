@@ -10,6 +10,17 @@
 ### Added
 
 - `kickOnError` (default `false`, so behaviour is unchanged): resume a turn that ended with `reason.kind === 'error'`, for example when the model backend dropped mid-turn. Error kicks use the new `errorKickText` key, count toward `maxConsecutiveKicks`, and follow the same cooldown, subagent and live-timer rules as the other flavors.
+- `logToStderr` (default `false`): forwards this plugin's own log lines to stderr. dsh 0.2.0-rc.2 installs no console or file exporter, so without it the lines go only to an unread in-memory buffer. The README says where the lines go.
+
+### Fixed
+
+- The runaway counter now resets live on a genuine user message. 0.1.0 reset only when the genuine user message was the last event in the log, but a halted turn always ends in `turn/end`, so a new prompt after the cap halted again and was refused.
+- The cap now survives restarts. 0.1.0 kept the count in memory, so repeated process restarts each allowed a fresh run of kicks.
+
+### Changed
+
+- The consecutive-kick count is derived from the session's event log (kick messages since the last genuine user message or normally completed turn) instead of memory, so the live and reopen paths agree.
+- Interrupted kicks now count toward `maxConsecutiveKicks` (0.1.0 did not count them), so the cap also bounds crash loops. A reasoning-only completion is not a reset.
 
 ## 0.1.0
 

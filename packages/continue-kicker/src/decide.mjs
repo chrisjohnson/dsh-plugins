@@ -17,6 +17,8 @@
 //   content blocks     { type:'text' | 'reasoning' | 'tool-call' | ... }
 //                      (@deepseek-ai/dsh-llm types.d.ts).
 
+import { DEFAULT_CONFIG } from './config.mjs'
+
 /** V4 rejects the bare `plugin` kind; a plugin-owned source is `plugin:<name>`. */
 export const PLUGIN_SOURCE_KIND = 'plugin:continue-kicker'
 
@@ -26,8 +28,6 @@ export const USER_SOURCE_KIND = 'user'
 /** Turn-end kinds the plugin may kick on. */
 const KICKABLE_KINDS = ['interrupted', 'max-tokens']
 
-/** Flavors whose kicks count toward the runaway guard. */
-const COUNTED_FLAVORS = ['max-tokens', 'empty-completion', 'error']
 
 /**
  * Walks backward from just before `idx` for the assistant message that belongs
@@ -61,14 +61,62 @@ export function reasoningCharCount(assistantEvent) {
   return contentOf(assistantEvent).reduce((sum, b) => (b?.type === 'reasoning' ? sum + (b.text ?? '').length : sum), 0)
 }
 
+/** True for a completed turn whose final assistant message is reasoning only (a kickable halt). */
+function isEmptyCompletion(events, turnEndIdx, settings) {
+  if (!settings.kickOnEmptyCompletion) return false
+  const msg = lastAssistantMessageBefore(events, turnEndIdx)
+  return Boolean(msg) && !hasRealContent(msg) && reasoningCharCount(msg) >= settings.emptyCompletionMinReasoningChars
+}
+
+function firstText(message) {
+  const block = Array.isArray(message?.content) ? message.content.find((b) => b?.type === 'text') : undefined
+  return block?.text
+}
+
+/**
+ * True for a user/message event this plugin sent. Current kicks carry source
+ * kind PLUGIN_SOURCE_KIND. The retired bare kind 'plugin' (written before
+ * session format V4) counts only when it names this plugin and carries one of
+ * the known kick texts, so another plugin's bare-kind message is never miscounted.
+ */
+export function isKickMessage(event, settings) {
+  if (event?.type !== 'user/message') return false
+  const source = event.data?.source
+  if (source?.kind === PLUGIN_SOURCE_KIND) return true
+  if (source?.kind !== 'plugin' || source.plugin !== 'continue-kicker') return false
+  const text = firstText(event.data)
+  const known = [settings, DEFAULT_CONFIG].flatMap((c) => [c.interruptedKickText, c.maxTokensKickText, c.emptyCompletionKickText, c.errorKickText])
+  return known.includes(text)
+}
+
+/**
+ * Consecutive kicks this plugin has sent, derived from the session's own events
+ * so it survives restarts and agrees between the live and reopen paths. Walks
+ * back from the tail counting kick messages (every flavor together) and stops
+ * at the nearest reset signal: a genuine user message (source kind 'user'), or
+ * a turn that completed normally. A reasoning-only completion is a kickable
+ * halt, not progress, so it does not reset.
+ */
+export function countConsecutiveKicks(events, settings) {
+  let count = 0
+  for (let i = (events?.length ?? 0) - 1; i >= 0; i--) {
+    const e = events[i]
+    if (e.type === 'user/message') {
+      if (e.data?.source?.kind === USER_SOURCE_KIND) break
+      if (isKickMessage(e, settings)) count += 1
+    } else if (e.type === 'turn/end' && e.data?.reason?.kind === 'completed' && !isEmptyCompletion(events, i, settings)) {
+      break
+    }
+  }
+  return count
+}
+
 /**
  * Classifies the tail of a session's event array.
- * Returns { action:'kick', flavor } or { action:'none', why }, plus:
- *   completedTurn       the tail boundary is a completed turn (counter reset)
- *   genuineUserActivity a message the human typed sits at the tail (counter
- *                       reset, and the "already recovered" exclusion)
- * A tail user-role message from any other producer (this plugin's own kick, a
- * goal, another plugin) is not genuine and never resets the counter.
+ * Returns { action:'kick', flavor } or { action:'none', why }. A tail
+ * user-role message means the session was already recovered (or a kick is
+ * awaiting its result), so nothing is kicked. Reset signals are not decided
+ * here; see countConsecutiveKicks.
  */
 export function analyzeTail(events, settings) {
   if (!events || events.length === 0) return { action: 'none', why: 'empty session' }
@@ -80,12 +128,11 @@ export function analyzeTail(events, settings) {
     if (e.type === 'user/message') {
       const kind = e.data?.source?.kind
       if (kind === USER_SOURCE_KIND) {
-        return { action: 'none', why: 'tail has a genuine user message (recovered or active)', genuineUserActivity: true }
+        return { action: 'none', why: 'tail has a genuine user message (recovered or active)' }
       }
       return {
         action: 'none',
         why: kind === PLUGIN_SOURCE_KIND ? 'tail has a plugin kick awaiting its result' : `tail has a user-role message from source '${kind}'`,
-        genuineUserActivity: false,
       }
     }
     if (e.type === 'assistant/message') {
@@ -101,13 +148,8 @@ export function analyzeTail(events, settings) {
 
   const kind = boundary.data?.reason?.kind
   if (kind === 'completed') {
-    if (settings.kickOnEmptyCompletion) {
-      const msg = lastAssistantMessageBefore(events, boundaryIdx)
-      if (msg && !hasRealContent(msg) && reasoningCharCount(msg) >= settings.emptyCompletionMinReasoningChars) {
-        return { action: 'kick', flavor: 'empty-completion' }
-      }
-    }
-    return { action: 'none', why: 'last turn completed', completedTurn: true }
+    if (isEmptyCompletion(events, boundaryIdx, settings)) return { action: 'kick', flavor: 'empty-completion' }
+    return { action: 'none', why: 'last turn completed' }
   }
   if (kind === 'aborted') return { action: 'none', why: 'last turn aborted by user' }
   if (kind === 'error') {
@@ -152,25 +194,23 @@ function kickSummary(flavor, count, max) {
 }
 
 /**
- * The whole decision for one analysis of one session.
+ * The whole decision for one analysis of one session. Stateless apart from the
+ * cooldown: the consecutive-kick count comes from the events themselves.
  *
  * @param {object} input
  * @param {readonly object[]} input.events - the session's event snapshot.
  * @param {object} input.settings - resolved settings (src/config.mjs).
- * @param {number} input.consecutive - kicks counted since the last reset signal.
- * @param {number} input.lastKickAt - timestamp of this session's last kick (0 if none).
+ * @param {number} input.lastKickAt - timestamp of this process's last kick for the session (0 if none).
  * @param {number} input.now - current timestamp.
  * @param {boolean} input.isSubagent - the session is a delegated child.
  * @returns {{ action:'kick'|'skip'|'stop', why:string, consecutive:number,
  *             flavor?:string, text?:string, summary?:string, scopeSkipped?:true }}
- *   `consecutive` is the counter the caller must store; on 'kick' the caller
- *   also stores `now` as the session's lastKickAt.
+ *   `consecutive` is the count including the kick being sent; on 'kick' the
+ *   caller records `now` as the session's lastKickAt.
  */
-export function decide({ events, settings, consecutive, lastKickAt, now, isSubagent }) {
+export function decide({ events, settings, lastKickAt, now, isSubagent }) {
   const verdict = analyzeTail(events, settings)
-
-  let count = consecutive ?? 0
-  if (verdict.completedTurn || verdict.genuineUserActivity) count = 0
+  const count = countConsecutiveKicks(events, settings)
 
   if (isSubagent && !settings.includeSubagents) {
     return { action: 'skip', why: 'subagent session excluded (includeSubagents=false)', consecutive: count, scopeSkipped: true }
@@ -194,13 +234,12 @@ export function decide({ events, settings, consecutive, lastKickAt, now, isSubag
     return { action: 'skip', why: `within cooldown (${settings.cooldownMs - sinceLast}ms remaining)`, consecutive: count }
   }
 
-  if (COUNTED_FLAVORS.includes(flavor)) count += 1
   return {
     action: 'kick',
     why: `halt flavor ${flavor}`,
     flavor,
-    consecutive: count,
+    consecutive: count + 1,
     text: kickText(flavor, settings),
-    summary: kickSummary(flavor, count, settings.maxConsecutiveKicks),
+    summary: kickSummary(flavor, count + 1, settings.maxConsecutiveKicks),
   }
 }

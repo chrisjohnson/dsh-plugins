@@ -18,7 +18,13 @@
 //     persist ordering. It fires on EVERY turn/end, not only kickable ones, so
 //     a completed turn also reaches the decision and resets the runaway counter.
 //
-// Every decision, kick or skip, is logged with its reason.
+// Every decision, kick or skip, is logged with its reason (see README, "Logging", for where the lines go).
+//
+// The consecutive-kick count is derived from the session's events on every
+// analysis (decide.mjs), so the reopen and live paths agree and a restart does
+// not lose it. Only the cooldown timestamp lives in memory.
+
+import { format } from 'node:util'
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
@@ -32,9 +38,21 @@ export default function continueKicker(ctx, config = {}) {
   const { settings, warnings } = resolveSettings(config)
   for (const warning of warnings) log.warn('%s', warning)
 
+  // dsh 0.2.0-rc.2 installs no console or file exporter on the host logger: a
+  // plugin's log lines only reach an in-memory ring buffer nothing reads. This
+  // opt-in exporter forwards this plugin's own lines (and no one else's) to
+  // stderr, which a service manager captures.
+  if (settings.logToStderr) {
+    ctx.logger.exporter({
+      levels: { default: -1,[PLUGIN_NAME]: 3 },
+      export: ({ ts, type, name, args }) => {
+        process.stderr.write(`${new Date(ts).toISOString()} ${type.toUpperCase()} ${name} ${format(...args)}\n`)
+      },
+    })
+  }
+
   const liveAgents = new Set() // session ids with a live watcher
   const lastKick = new Map() // sessionId -> timestamp of last kick
-  const consecutive = new Map() // sessionId -> kicks since the last reset signal
   const pendingTimers = new Map() // sessionId -> scheduled re-analysis timer
   const scopeSkipped = new Set() // sessionIds already logged as scope-excluded
 
@@ -49,12 +67,10 @@ export default function continueKicker(ctx, config = {}) {
       const decision = decide({
         events: agent.session?.snapshotEvents(),
         settings,
-        consecutive: consecutive.get(sessionId) ?? 0,
         lastKickAt: lastKick.get(sessionId) ?? 0,
         now: Date.now(),
         isSubagent: isSubagent(agent),
       })
-      consecutive.set(sessionId, decision.consecutive)
 
       if (decision.action === 'skip') {
         if (decision.scopeSkipped) {
@@ -118,13 +134,12 @@ export default function continueKicker(ctx, config = {}) {
     pendingTimers.delete(sessionId)
     liveAgents.delete(sessionId)
     lastKick.delete(sessionId)
-    consecutive.delete(sessionId)
     scopeSkipped.delete(sessionId)
   })
 
   log.info(
-    'continue-kicker active (cooldownMs=%d, liveKickDelayMs=%d, maxConsecutiveKicks=%d, kickOnInterrupted=%s, kickOnMaxTokens=%s, kickOnEmptyCompletion=%s, includeSubagents=%s)',
-    settings.cooldownMs, settings.liveKickDelayMs, settings.maxConsecutiveKicks,
-    settings.kickOnInterrupted, settings.kickOnMaxTokens, settings.kickOnEmptyCompletion, settings.includeSubagents,
+    'continue-kicker active (logToStderr=%s, cooldownMs=%d, liveKickDelayMs=%d, maxConsecutiveKicks=%d, kickOnInterrupted=%s, kickOnMaxTokens=%s, kickOnEmptyCompletion=%s, kickOnError=%s, includeSubagents=%s)',
+    settings.logToStderr, settings.cooldownMs, settings.liveKickDelayMs, settings.maxConsecutiveKicks,
+    settings.kickOnInterrupted, settings.kickOnMaxTokens, settings.kickOnEmptyCompletion, settings.kickOnError, settings.includeSubagents,
   )
 }

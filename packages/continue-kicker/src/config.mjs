@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   kickOnEmptyCompletion: true,
   kickOnError: false,
   includeSubagents: false,
+  logToStderr: false,
   emptyCompletionMinReasoningChars: 500,
   interruptedKickText:
     'The previous turn was interrupted before producing a response. Please continue from where you left off.',
@@ -25,7 +26,7 @@ export const DEFAULT_CONFIG = Object.freeze({
 })
 
 const NON_NEGATIVE_INTEGERS = ['cooldownMs', 'liveKickDelayMs', 'maxConsecutiveKicks', 'emptyCompletionMinReasoningChars']
-const BOOLEANS = ['kickOnInterrupted', 'kickOnMaxTokens', 'kickOnEmptyCompletion', 'kickOnError', 'includeSubagents']
+const BOOLEANS = ['kickOnInterrupted', 'kickOnMaxTokens', 'kickOnEmptyCompletion', 'kickOnError', 'includeSubagents', 'logToStderr']
 const TEXTS = ['interruptedKickText', 'maxTokensKickText', 'emptyCompletionKickText', 'errorKickText']
 
 /**
