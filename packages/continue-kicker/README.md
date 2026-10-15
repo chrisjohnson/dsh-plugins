@@ -10,9 +10,10 @@ A host-plane plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 | --- | --- | --- |
 | Output budget exhausted | last `turn/end` reason `max-tokens` | "Do NOT re-derive your thinking: state your conclusion, then act. Be succinct." |
 | Reasoning-only empty stop | `completed` turn whose final assistant message has no text and no tool call, with at least `emptyCompletionMinReasoningChars` of reasoning | Same "be decisive" framing |
+| Failed turn (opt-in: `kickOnError`) | last `turn/end` reason `error` (the model backend dropped, a provider error) | "The previous turn failed with an error and was cut off before it finished. Please continue from where you left off." |
 | Crash-orphaned turn | last `turn/end` reason `interrupted` (synthesized when a session is loaded) | "Please continue from where you left off." |
 
-It never kicks over `aborted` (an explicit Stop), `error` (blind retry loops against a broken backend), `blocked`, `forked`, a completed turn with real content, or a tail already followed by a user or assistant message.
+It never kicks over `aborted` (an explicit Stop, a parent or hook cancel, a disposal), `error` unless `kickOnError` is on, `blocked`, `forked`, a completed turn with real content, or a tail already followed by a user or assistant message.
 
 Two doors feed one decision: `agent/created` (reopening a session, crash recovery) and a live watcher that re-analyses the tail `liveKickDelayMs` after every turn end, so an unattended halt is caught without anyone reopening the session.
 
@@ -42,15 +43,18 @@ Set these on the plugin's row in your own profile patch (`config:` block). **A t
 | --- | --- | --- |
 | `cooldownMs` | `60000` | Minimum time between kicks for the same session. |
 | `liveKickDelayMs` | `3000` | Delay between a live turn end and the tail re-analysis. Lets a fast manual recovery land first. |
-| `maxConsecutiveKicks` | `5` | Runaway guard: after this many kicks with no completed turn and no genuine user message in between, the plugin stops kicking that session and logs an error. `0` disables kicking entirely, quietly (the `kickOn*` flags are the finer-grained off switches). |
+| `maxConsecutiveKicks` | `5` | Runaway guard: after this many kicks (all flavors together, counted from the session's event log) with no normally completed turn and no genuine user message in between, the plugin stops kicking that session and logs an error. `0` disables kicking entirely, quietly (the `kickOn*` flags are the finer-grained off switches). |
 | `kickOnInterrupted` | `true` | Kick crash-orphaned turns. |
 | `kickOnMaxTokens` | `true` | Kick output-token-limit halts. |
 | `kickOnEmptyCompletion` | `true` | Kick reasoning-only completed turns. |
+| `kickOnError` | `false` | Kick turns that ended with `reason.kind: 'error'`. Off by default because blindly retrying a failing backend can loop; the runaway guard and cooldown bound it. You would want it for unattended work on a backend that drops now and then (a gateway restart, a network blip): the session resumes by itself once the backend is back instead of sitting dead until someone notices. |
 | `includeSubagents` | `false` | Also kick delegated child sessions (`origin: subagent` or `delegationDepth > 0`). Off by default: auto-kicking a child fights the parent's own delegation and retry flow. |
+| `logToStderr` | `false` | Write this plugin's log lines to stderr (see Logging). Needed to see them at all on dsh 0.2.0-rc.2. |
 | `emptyCompletionMinReasoningChars` | `500` | Reasoning length below which a content-empty completed turn is left alone. |
 | `interruptedKickText` | built in | Text sent for an interrupted turn. |
 | `maxTokensKickText` | built in | Text sent for a max-tokens halt. Forbids re-deriving the lost reasoning; a plain "please continue" invites another long think straight back into the wall. |
 | `emptyCompletionKickText` | built in | Text sent for a reasoning-only empty stop. |
+| `errorKickText` | built in | Text sent for a failed turn when `kickOnError` is on. |
 
 Resolution lives in [`src/config.mjs`](./src/config.mjs) and is [tested](./test/config.test.mjs). An unknown key, a string where a number belongs, or an empty text prints one warning at boot and falls back to the default.
 
@@ -66,18 +70,51 @@ Example row (the default for `maxConsecutiveKicks` is 5; 3 here is just an examp
     kickOnInterrupted: true
     kickOnMaxTokens: true
     kickOnEmptyCompletion: true
+    kickOnError: true
     includeSubagents: false
+    logToStderr: true
 ```
+
+## Which turn-end reasons kick
+
+From `TurnEndReasonMap` in `@deepseek-ai/dsh-session`:
+
+| `reason.kind` | Meaning | Kicked? |
+| --- | --- | --- |
+| `max-tokens` | output budget hit | yes, `kickOnMaxTokens` |
+| `interrupted` | crash-orphaned turn closed on load | yes, `kickOnInterrupted` |
+| `completed` | model stopped itself | only a reasoning-only empty one, `kickOnEmptyCompletion` |
+| `error` | the turn failed (`error` holds message and code) | yes, only with `kickOnError` |
+| `aborted` | cancelled on purpose (`user`, `parent`, `hook`, `disposed`, `legacy`) | never |
+| `blocked` | a step was rejected before running | never |
+| `forked` | fork-seed marker, never emitted live | never |
 
 ## The runaway guard
 
-A kick can itself end in the same halt. The plugin counts kicks per session (max-tokens and empty-completion flavors; an interrupted-turn kick does not count). The counter resets when a **completed turn** or a **genuine user message** is observed at the tail. "Genuine" means a message whose source is `user`: the plugin's own kick (source kind `plugin:continue-kicker`) and any other producer's user-role message (goals, other plugins) never reset it. At `maxConsecutiveKicks` the plugin logs an error naming the session and stops until a reset signal arrives.
+A kick can itself end in the same halt, so the plugin counts kicks and stops at `maxConsecutiveKicks`.
+
+The count is derived from the session's own event log on every analysis, not kept in memory, so it survives a dsh restart and the live and reopen paths always agree. It is the number of this plugin's kick messages (source kind `plugin:continue-kicker`; the retired bare `plugin` kind counts only when it names this plugin and carries one of the known kick texts) found walking back from the end of the log, up to the nearest reset signal:
+
+- a **genuine user message**: source kind `user` and nothing else. The plugin's own kicks and any other producer's user-role messages (goals, other plugins) neither reset nor count.
+- a turn that **completed normally**. A reasoning-only completion is a kickable halt, not progress, so it does not reset.
+
+Every flavor counts together: max-tokens, empty-completion, error and interrupted. So the cap also bounds a crash loop: a session that keeps getting killed mid-turn and resumed stops being resumed after `maxConsecutiveKicks` kicks until a user message or a completed turn arrives. At the cap the plugin logs an error naming the session ("needs human attention") and does not kick. Only the cooldown timestamp is in memory; a restart forgets it, which at worst allows one extra kick that the stateless cap still bounds.
+
+Changed from 0.1.0: the old reset fired only when a genuine user message was the *last* event, but a halted turn always ends in `turn/end`, so a new prompt after the cap never reset it; the count lived in memory and was lost on restart; and interrupted kicks were not counted at all.
 
 The kick is written with source kind `plugin:continue-kicker`. Session format V4 refuses the bare kind `plugin`, so a session carrying such a message could not be reopened after a restart.
 
 ## Logging
 
-Every decision, kick or skip, is logged with its reason: `journalctl -u dsh | grep continue-kicker` answers "why didn't it fire".
+Every decision, kick or skip, is logged with its reason, through the host logger under the name `continue-kicker`.
+
+**Where those lines go (dsh 0.2.0-rc.2):** nowhere you can read. The harness registers no console or file exporter on the logger; plugin lines only land in an in-memory ring buffer (`ctx.logger.buffer`, 1000 entries) that nothing displays, and only startup warnings and errors are surfaced, inside a startup failure. So `journalctl -u dsh | grep continue-kicker` finds nothing by default. Set `logToStderr: true` and the plugin registers its own exporter that writes only its own lines to stderr, which a service manager (journald under systemd) captures:
+
+```
+2026-10-15T18:28:05.590Z INFO continue-kicker created: kicked session s1 (flavor=max-tokens, consecutive=1)
+```
+
+The kick itself is also visible in the conversation as a notice row ("Auto-resumed after a max-tokens halt (2/5)"), but the "needs human attention" error at the cap appears only in the log. A general fix (surface plugin logs in the harness) belongs upstream or in a separate plugin.
 
 ## Compatibility
 

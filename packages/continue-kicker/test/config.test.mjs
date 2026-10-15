@@ -12,6 +12,7 @@ test('defaults: no config at all resolves to the documented defaults without war
   assert.equal(settings.liveKickDelayMs, 3000)
   assert.equal(settings.kickOnEmptyCompletion, true)
   assert.equal(settings.includeSubagents, false)
+  assert.equal(settings.logToStderr, false)
 })
 
 test('valid values override; unspecified keys keep their defaults', () => {
