@@ -1,0 +1,49 @@
+{
+  "name": "dsh-session-cost",
+  "version": "0.1.0",
+  "description": "A compact estimated-cost badge in the composer stats bar for DeepSeek Harness: it reads the session's billed token buckets from the contextTimeline projection and draws a $ total next to the token/cache stats, hidden while the session is at $0.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cost",
+    "billing",
+    "token-usage",
+    "stats",
+    "composer"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/session-cost"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/session-cost#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
