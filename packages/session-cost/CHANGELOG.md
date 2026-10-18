@@ -4,6 +4,26 @@ All notable changes to `dsh-session-cost` are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package ships as git
 tags, not npm versions.
 
+## [0.3.0]
+
+### Added
+- **Agent Network total, not just the current session.** The badge now sums the
+  billed cost of the session *and every descendant subagent session* — the same
+  figure the `dsh-context` Context tab shows as "Agent Network" (current agent +
+  all subagents, every level of the subtree). On a subagent-less session this is
+  just the session's own cost, so existing sessions are unchanged.
+- **Interactive pill that opens the Context tab.** The badge is now a real button
+  with the core StatsPills hover (interactive background + secondary label) and
+  pointer cursor. Clicking it switches the session to the **Context** tab, where
+  the full Agent Network breakdown (per-model rates, current agent vs. subagents)
+  lives.
+
+### Changed
+- The composer number now reflects the whole agent family. A session whose current
+  agent is cheap but whose subagents did real work now shows the family total
+  (e.g. `$0.74` = `$0.29` current + `$0.45` across 14 subagents) instead of only
+  the current agent's `$0.29`.
+
 ## [0.2.0]
 
 ### Changed

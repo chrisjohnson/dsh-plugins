@@ -2,21 +2,27 @@
 //
 // Registers ONE entry into `conversation.composer.dock` (a list, session-scoped
 // slot; the core StatsPills "14.6M tok · Cache hit 97%" pill sits at id "stats",
-// order 0). This entry draws a compact `$` total in that stats row, reading the
-// session's own `contextTimeline.cost` projection - the per-turn billed token
-// buckets dsh-context folds on every settlement - and pricing them against the
-// live models.dev catalog, the SAME source and formula dsh-context uses, so the
-// badge covers every model the Context page prices and shows the same number.
-// It is hidden while the session's cost is $0, so the composer row is unchanged
-// on idle or all-local sessions.
+// order 0). This entry draws a compact `$` total in that stats row.
+//
+// The figure is the AGENT NETWORK total: the current session plus every
+// descendant subagent session's billed cost, summed. It is computed the same
+// way dsh-context computes the Context tab's "Agent Network" card - walk the
+// parent->child session tree (each session item in the `useSessions` store
+// carries its parent link and its `contextTimeline.cost` projection) and sum
+// each node's billed token buckets, pricing them against the live models.dev
+// catalog (the SAME source and formula dsh-context uses), so the badge covers
+// every model the Context page prices and shows the same number. On a
+// subagent-less session this is just the session's own cost; it is hidden while
+// that total is $0, so the composer row is unchanged on idle or all-local work.
+//
+// The pill is a real <button> styled with the core StatsPills look (same
+// tertiary label color, inherited font, tabular numerals, pill shape) plus the
+// core's interactive hover (background + secondary label), and clicking it opens
+// the session's Context tab (where the full Agent Network breakdown lives).
 //
 // The module loader hands this file React as a shared external; it cannot import
 // a sibling module, so the cost math below is a byte-for-byte mirror of
 // src/prices.mjs (the tested source of truth). Keep them in lockstep.
-//
-// The pill reuses the core StatsPills look (same `--dsw-alias-label-tertiary`
-// color, inherited font, tabular numerals, pill shape) so it reads as a peer
-// metric in the row rather than a foreign element.
 
 window.__ModuleLoader__.load({
 	id: "dsh-session-cost",
@@ -227,38 +233,119 @@ window.__ModuleLoader__.load({
 		}
 		if (typeof fetch === "function") loadCatalog();
 
-		// Native StatsPills look: same tertiary label color, inherited font and
-		// tabular numerals as the core pills, so the badge reads as a peer metric.
+		// ---- Agent Network cost: walk the session subtree --------------------
+		// A `useSessions` store item carries its parent link (parentSessionId,
+		// aliased parentId in the byId view) and its projection values
+		// (projectionValues.contextTimeline, possibly wrapped as {ver,seq,val}).
+		// We build a parent->children index once per render, then BFS from the
+		// current session, summing each node's billed cost. Pricing is linear in
+		// the buckets, so summing per-node USD equals pricing the summed total.
+		function costOf(item) {
+			if (!plainObject(item)) return null;
+			var pv = item.projectionValues;
+			if (!plainObject(pv)) return null;
+			var ct = pv.contextTimeline;
+			if (!ct) return null;
+			var val = (plainObject(ct) && "val" in ct && plainObject(ct.val)) ? ct.val : ct;
+			return plainObject(val) && plainObject(val.cost) ? val.cost : null;
+		}
+		function parentOf(item) {
+			if (!plainObject(item)) return null;
+			if (typeof item.parentId === "string" && item.parentId) return item.parentId;
+			if (typeof item.parentSessionId === "string" && item.parentSessionId) return item.parentSessionId;
+			return null;
+		}
+		function agentNetworkUsd(byId, currentId, book) {
+			if (!plainObject(byId) || !currentId) return null;
+			var children = Object.create(null);
+			var ids = Object.keys(byId);
+			for (var i = 0; i < ids.length; i++) {
+				var pid = parentOf(byId[ids[i]]);
+				if (pid) (children[pid] || (children[pid] = [])).push(ids[i]);
+			}
+			var usd = 0;
+			var seen = Object.create(null);
+			seen[currentId] = true;
+			var queue = [currentId];
+			for (var q = 0; q < queue.length; q++) {
+				var cid = queue[q];
+				var c = costOf(byId[cid]);
+				if (c) usd += estimateCostUsd(c, book);
+				var kids = children[cid];
+				if (kids) for (var k = 0; k < kids.length; k++) {
+					if (!seen[kids[k]]) { seen[kids[k]] = true; queue.push(kids[k]); }
+				}
+			}
+			return usd;
+		}
+
+		// Click -> open the session's Context tab. There is no plugin-facing API
+		// to switch the session view, so we drive the tab bar the user would:
+		// find the conversation tab list and click its "Context" tab (a real DOM
+		// click, which React's delegated handler turns into the view switch).
+		// Degrades to a no-op if the tab isn't found (e.g. a non-English label).
+		function openContextTab() {
+			if (typeof document === "undefined") return;
+			var lists = document.querySelectorAll("[data-conversation-tabs]");
+			if (!lists.length) lists = document.querySelectorAll('[role="tablist"]');
+			for (var li = 0; li < lists.length; li++) {
+				var tabs = lists[li].querySelectorAll('button[role="tab"]');
+				for (var t = 0; t < tabs.length; t++) {
+					var label = (tabs[t].textContent || "").trim();
+					if (/^context$/i.test(label)) { tabs[t].click(); return; }
+				}
+			}
+		}
+
+		// Native StatsPills look as an interactive pill: same tertiary label
+		// color, inherited font and tabular numerals as the core pills, plus the
+		// core's button hover (interactive-bg + secondary label) and pointer.
 		var CSS =
-			".dsc-pill{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;" +
+			".dsc-pill{box-sizing:border-box;corner-shape:round;max-width:100%;display:inline-flex;align-items:center;gap:6px;" +
 			"color:var(--dsw-alias-label-tertiary);font:inherit;" +
 			"font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);" +
-			"font-variant-numeric:tabular-nums;line-height:inherit;white-space:nowrap;" +
-			"background:transparent;border:none;border-radius:999px;padding:1px 8px;user-select:none}";
+			"font-variant-numeric:tabular-nums;line-height:inherit;white-space:nowrap;user-select:none;" +
+			"background:transparent;border:none;border-radius:999px;padding:1px 8px;cursor:pointer}" +
+			".dsc-pill:hover,.dsc-pill[aria-expanded=true]{" +
+			"background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}";
 
-		// Standard seats arrive as hook-valued props; call the seat over a stable
+		// Standard seats arrive as hook-valued props; call each seat over a stable
 		// module-scope fallback and branch on the RESULT (Rules-of-Hooks - a
 		// conditional guard or early return above a hook is the #311 bug). All
-		// hooks (the projection seat, useState, useEffect) run unconditionally.
+		// hooks (the projection + sessions seats, useState, useEffect) run
+		// unconditionally on every render.
 		var NO_PROJECTION = function () { return null; };
+		var NO_SESSIONS = function () { return null; };
 		var CostPill = React.memo(function CostPill(props) {
 			var timeline = (props.useProjection || NO_PROJECTION)("contextTimeline");
-			var cost = timeline && timeline.cost;
+			var store = (props.useSessions || NO_SESSIONS)(function (s) { return s; });
+			var currentId = typeof props.sessionId === "string" && props.sessionId
+				? props.sessionId
+				: (store && typeof store.current === "string" ? store.current : null);
+			var byId = plainObject(store) && plainObject(store.byId) ? store.byId : null;
 			var [, force] = React.useState(0);
 			React.useEffect(function () {
 				var fn = function () { force(function (t) { return t + 1; }); };
 				catalog.listeners.add(fn);
 				return function () { catalog.listeners.delete(fn); };
 			}, []);
-			var usd = cost ? estimateCostUsd(cost, catalog.book) : 0;
+			// Prefer the subtree total (Agent Network). If the store isn't in the
+			// expected shape, fall back to the current session's own cost only.
+			var usd = agentNetworkUsd(byId, currentId, catalog.book);
+			if (usd === null) {
+				var own = timeline && timeline.cost;
+				usd = own ? estimateCostUsd(own, catalog.book) : 0;
+			}
 			var text = costText(usd);
 			if (!text) return null;
 			return h(
-				"span",
+				"button",
 				{
+					type: "button",
 					className: "dsc-pill",
-					title: "Estimated session cost: billed tokens \u00d7 live models.dev rates (same basis as dsh-context Context Insights; for reference)",
+					title: "Estimated cost for this agent and every descendant subagent (the Context tab's Agent Network). Billed tokens \u00d7 live models.dev rates, same basis as dsh-context; for reference. Click to open the Context tab.",
 					"data-session-cost": true,
+					onClick: openContextTab,
 				},
 				text
 			);
