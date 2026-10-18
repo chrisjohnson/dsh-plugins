@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-cost",
-  "version": "0.1.0",
-  "description": "A compact estimated-cost badge in the composer stats bar for DeepSeek Harness: it reads the session's billed token buckets from the contextTimeline projection and draws a $ total next to the token/cache stats, hidden while the session is at $0.",
+  "version": "0.2.0",
+  "description": "A compact estimated-cost badge in the composer stats bar for DeepSeek Harness: it reads the session's billed token buckets from the contextTimeline projection and prices them against the live models.dev catalog (the same source and formula dsh-context uses), drawing a $ total in the stats row, hidden while the session is at $0.",
   "type": "module",
   "license": "MIT",
   "main": "./index.mjs",
