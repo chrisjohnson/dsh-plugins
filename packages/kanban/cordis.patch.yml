@@ -1,0 +1,13 @@
+# Bundle layer for dsh-kanban.
+#
+# `dsh plugin --profile web add <spec>` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so the deployment owns its complete
+# config section in its own profile patch. Defaults and the meaning of every key
+# live in src/config.mjs and are documented in README.md.
+- insert:
+    - id: kanban
+      name: dsh-kanban
