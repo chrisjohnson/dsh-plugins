@@ -133,3 +133,45 @@ event, not as spans.
 - **Config reload implementation.** Watched through `ctx.get('configEditor')`
   (host-owned, already parses the profile patch) rather than a raw YAML file
   watcher, so a reload cannot race the loader or half-apply.
+
+## Verification evidence
+
+Environment: the default lab at `~/dsh-lab/default` (port 3099), linked to this
+checkout with `--preserve-symlinks`, provider route `local-ai-machine` with
+`maxConcurrent: 3`.
+
+- **Real end-to-end runs.** Two tickets (KAN-1, KAN-2 in the lab database) were
+  created through the HTTP surface, auto-promoted, planned, implemented,
+  independently verified and reviewed by real `medium-dense` sessions, and both
+  reached `done`/`closed` at attempt 1. Their workspaces contain the committed
+  edit; `npm test` in the demo workspace passes. The spans table has the full
+  chain: `grill-judgement` (judge), `plan` (planner) with `read/glob/bash` tool
+  children, `coverage` (judge), `implement` with `read/edit/bash` children,
+  `verify` with `read/bash` children, and `review` with `read` children.
+- **Mechanical branches.** `test/engine.test.mjs` exercises every row of the §9
+  table with a fake driver and fake judge: pass, unmet claim → adjudication →
+  second attempt → done, no-JSON → continuation → done, blocked → needs_attention,
+  questions → orchestrator answer → same attempt continues, verifier failure →
+  attempt exhaustion + packet, paid refusal, capacity hold, grill Q&A, restart
+  recovery.
+- **Concurrency.** A test launches six tickets against a provider with
+  `maxConcurrent: 2` and records the maximum overlapping implementer turns and
+  live leases: both are ≤ 2, and all six finish. The lab config's local route is
+  declared with `maxConcurrent: 3`; no run exceeded it.
+- **Restart mid-run.** The lab was killed and restarted several times during real
+  planning/implementation turns. Each time the running span was marked
+  `abandoned`, its lease released, and the ticket requeued; a later attempt
+  completed it. No duplicate attempt for the same span and no orphan lease
+  remained.
+- **Config reload.** Editing `wipCap` in the lab profile YAML changed the live
+  `/api/kanban/config` value from 2 to 3 and back without a restart; an invalid
+  reload path is covered by the config tests (it keeps the previous config).
+- **Forced verification failure on real models was attempted but not completed
+  in the lab.** A third ticket was created and the workspace was reverted right
+  after its implementer span finished; by then the local backend had degraded to
+  roughly 0.5 output tokens/second and the verifier turn stalled. That branch is
+  covered deterministically by `test/engine.test.mjs` (verifier fails → retry →
+  exhaustion packet). The attempt was discarded rather than left stalling.
+
+Visual verification used the accessibility tree, not screenshots: the active
+model route in the implementing session does not accept image input.

@@ -156,7 +156,7 @@ counted as an attempt.
 ## Checks
 
 ```sh
-node --test test/*.test.mjs        # pure modules + engine pipeline with fakes
+node --test test/*.test.mjs        # 54 tests: pure modules + engine pipeline with fakes
 node scripts/verify.mjs            # repository release contract
 ```
 

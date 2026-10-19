@@ -498,6 +498,14 @@ window.__ModuleLoader__.load({
 								return h("tr", { key: c.id }, h("td", null, h("code", { children: c.id })), h("td", { children: c.statement }), h("td", { children: c.howVerified }), h("td", { children: c.source }));
 							})))
 				),
+				d.review ? h("div", { className: "kb-panel" },
+					h("h3", { children: "Review" }),
+					h("div", { className: "kb-row" }, h("span", { className: "kb-chip" + (d.review.verdict === "pass" ? " ok" : " err"), children: d.review.verdict }), h("span", { className: "kb-hint", children: "scope: " + (d.review.scope_drift || "—") })),
+					(d.review.reasons || []).length > 0 ? h("ul", { style: { margin: "6px 0 0", paddingLeft: 18 } }, d.review.reasons.map(function (r, i) { return h("li", { key: i, children: r }); })) : null,
+					(d.review.acceptance_coverage || []).length > 0 ? h("table", { className: "kb-table", style: { marginTop: 8 } },
+						h("thead", null, h("tr", null, h("th", { children: "condition" }), h("th", { children: "acceptance phrase it serves" }))),
+						h("tbody", null, d.review.acceptance_coverage.map(function (row, i) { return h("tr", { key: i }, h("td", null, h("code", { children: row.condition })), h("td", { children: row.acceptance })); }))) : null
+				) : null,
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "Token and cost rollup" }),
 					h("div", { className: "kb-row", style: { gap: 18, marginBottom: 8 } },
@@ -582,6 +590,7 @@ window.__ModuleLoader__.load({
 				table("Attempts to done", a.attemptsToDone, [["attempts", "attempts"], ["tickets", "tickets"]]),
 				table("Model success rate", a.modelSuccessRate, [["provider", "provider"], ["model", "model"], ["tickets", "tickets"], ["done", "done"], ["rate", "rate", function (r) { return r.rate === null ? "—" : Math.round(r.rate * 100) + "%"; }]]),
 				table("Confidence calibration", a.calibration, [["verdict", "verdict"], ["bucket", "confidence"], ["n", "n"], ["done", "done"]]),
+				table("Time in phase", a.timeInPhase, [["phase", "phase"], ["transitions", "completed stays"], ["avgMs", "avg time", function (r) { return fmtDur(r.avgMs); }]]),
 				table("Cost per ticket", a.costPerTicket, [["key", "ticket"], ["inputTokens", "in"], ["outputTokens", "out"], ["costUsd", "cost", function (r) { return r.unpricedRows > 0 ? "unpriced" : fmtUsd(r.costUsd); }]]),
 				table("Stall rate by role", a.stallRate, [["role", "role"], ["spans", "spans"], ["abandoned", "abandoned"], ["rate", "rate", function (r) { return r.rate === null ? "—" : Math.round(r.rate * 100) + "%"; }]])
 			);

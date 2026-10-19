@@ -811,7 +811,7 @@ export class KanbanStore {
     return this.db
       .prepare(
         `SELECT s.provider, s.model, COUNT(DISTINCT s.ticket_id) AS tickets,
-           SUM(CASE WHEN t.col = 'done' THEN 1 ELSE 0 END) AS done
+           COUNT(DISTINCT CASE WHEN t.col = 'done' THEN s.ticket_id END) AS done
          FROM spans s JOIN tickets t ON t.id = s.ticket_id
          WHERE s.kind = 'agent' AND s.status = 'ok' AND s.provider IS NOT NULL
          GROUP BY s.provider, s.model ORDER BY tickets DESC`,
@@ -840,15 +840,21 @@ export class KanbanStore {
       .map((row) => ({ verdict: row.verdict, bucket: Number(row.bucket), n: Number(row.n), done: Number(row.done) }));
   }
 
-  /** Time per phase from the event log (wall clock, for reporting only). */
+  /** Average wall-clock time spent in each phase, from the phase_changed event chain. */
   timeInPhase() {
     return this.db
       .prepare(
-        `SELECT phase_to AS phase, COUNT(*) AS transitions FROM events
-         WHERE kind = 'phase_changed' AND phase_to IS NOT NULL GROUP BY phase_to ORDER BY transitions DESC`,
+        `WITH steps AS (
+           SELECT ticket_id, phase_to AS phase, at,
+             LEAD(at) OVER (PARTITION BY ticket_id ORDER BY id) AS next_at
+           FROM events WHERE kind = 'phase_changed' AND phase_to IS NOT NULL
+         )
+         SELECT phase, COUNT(*) AS transitions,
+           AVG((julianday(next_at) - julianday(at)) * 86400000.0) AS avg_ms
+         FROM steps WHERE next_at IS NOT NULL GROUP BY phase ORDER BY phase`,
       )
       .all()
-      .map((row) => ({ phase: row.phase, transitions: Number(row.transitions) }));
+      .map((row) => ({ phase: row.phase, transitions: Number(row.transitions), avgMs: row.avg_ms === null ? null : Math.round(Number(row.avg_ms)) }));
   }
 
   costPerTicket() {
