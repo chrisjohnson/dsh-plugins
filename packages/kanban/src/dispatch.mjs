@@ -16,6 +16,8 @@ import { mkdir } from 'node:fs/promises';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
+import { roleToolGuard } from './tools.mjs';
+
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
     super(message);
@@ -152,11 +154,7 @@ export class SessionDriver {
         } catch (error) {
           this.log.warn('role %s: tool mask could not be applied: %s', role, String(error?.message ?? error));
         }
-        agentCtx.tools.guard((execution) => {
-          const name = execution?.name;
-          if (typeof name !== 'string') return 'kanban: unnamed tool call denied';
-          return allow.includes(name) ? undefined : `kanban: role "${role}" may not call "${name}"`;
-        });
+        agentCtx.tools.guard(roleToolGuard(role, allow));
       },
     });
     this.live.set(sessionId, { handle, role, preset: resolved.id, ticketId: ticket.id });

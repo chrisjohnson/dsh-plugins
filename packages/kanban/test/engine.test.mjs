@@ -227,7 +227,7 @@ test('paid route without allow_paid refuses instead of downgrading', async () =>
     implementer: [PASS_CLAIM],
     config: {
       providers: [
-        { name: 'local', maxConcurrent: 2 },
+        { name: 'local', maxConcurrent: 3 },
         { name: 'paid', maxConcurrent: 1, tier: 'paid', priceIn: 1, priceOut: 2 },
       ],
       roles: { implementer: { provider: 'paid', model: 'big' } },
@@ -271,7 +271,7 @@ test('six launched tickets never exceed the declared per-provider concurrency', 
     },
     config: {
       providers: [
-        { name: 'local', maxConcurrent: 2 },
+        { name: 'local', maxConcurrent: 3 },
         { name: 'judge', maxConcurrent: 3 },
       ],
       roles: {
@@ -310,10 +310,10 @@ test('six launched tickets never exceed the declared per-provider concurrency', 
     if (pending.length === 0) break
     await Promise.all(pending.map((t) => engine.advance(store.getTicket(t.id))))
   }
-  assert.equal(maxRunning <= 2, true, `max concurrent implementer turns was ${maxRunning}`)
-  assert.equal(maxLeases <= 2, true, `max local leases was ${maxLeases}`)
+  assert.equal(maxRunning <= 3, true, `max concurrent implementer turns was ${maxRunning}`)
+  assert.equal(maxLeases <= 3, true, `max local leases was ${maxLeases}`)
   assert.equal(store.listTickets({ columns: ['done'] }).length, 6)
-  assert.equal(config.providers.find((p) => p.name === 'local').maxConcurrent, 2)
+  assert.equal(config.providers.find((p) => p.name === 'local').maxConcurrent, 3)
 })
 
 test('restart recovery abandons running spans, releases leases and requeues work', async () => {

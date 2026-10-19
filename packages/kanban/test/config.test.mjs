@@ -64,3 +64,15 @@ test('the two illegal intake combos are not config errors but store errors', () 
 test('orchestrator may not carry tool permissions', () => {
   assert.throws(() => resolveConfig({ roles: { orchestrator: { allowTools: ['bash'] } } }), /orchestrator/)
 })
+
+test('the role guard denies everything outside the allow-list', async () => {
+  const { roleToolGuard } = await import('../src/tools.mjs')
+  const implementer = roleToolGuard('implementer', ['read', 'edit', 'bash'])
+  assert.equal(implementer({ name: 'edit' }), undefined)
+  assert.equal(implementer({ name: 'bash' }), undefined)
+  assert.match(implementer({ name: 'kanban_move' }), /may not call "kanban_move"/)
+  assert.match(implementer({ name: 'subagent' }), /may not call "subagent"/)
+  assert.match(implementer({}), /unnamed tool/)
+  const verifier = roleToolGuard('verifier', ['read', 'bash'])
+  assert.match(verifier({ name: 'edit' }), /may not call "edit"/)
+})
