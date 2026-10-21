@@ -485,3 +485,42 @@ mismatch, not a lookup bug.
 
 Verified: 29 capacity tests pass, hooks gate clean, `verify.mjs` 0/0, lab boot
 clean. Commit `98fd33c` on `feat/kanban`.
+
+### 2026-10-21 14:40 — three provider queues; cloud unlimited
+
+The deployment actually has three provider routes, not two: **APU**, **eGPU**,
+and the **cloud proxy**. The lab had only the combined `local-ai-machine` route,
+which is why earlier reviews saw one/two queues.
+
+Changes:
+
+- `model-capacity` supports `{provider, unlimited: true}`. An unlimited route
+  never enters the FIFO and never rejects a subagent reservation; the panel shows
+  `N / unlimited`.
+- Lab `llm-pi-ai` now exposes `local-ai-machine (apu)` and
+  `local-ai-machine (eGPU)` (duplicated model lists for the test-only split) plus
+  `local-ai-machine-cloud`.
+- Lab capacity config:
+  - APU `maxConcurrent: 2`
+  - eGPU `maxConcurrent: 2`
+  - cloud `unlimited: true`
+- Kanban provider/role references moved to `local-ai-machine (apu)`.
+
+Live demonstration (currently visible in the lab Capacity panel):
+
+| Provider | Limit | Active | Waiting |
+|---|---|---|---|
+| `local-ai-machine (apu)` | 2 | 2 | 1 |
+| `local-ai-machine (eGPU)` | 2 | 0 | 0 |
+| `local-ai-machine-cloud` | unlimited | 2+ | 0 |
+
+The three APU sessions use titled, workspace-matched sessions:
+`CAPACITY DEMO UI session. Reply`, `Write a very long, detailed`, and
+`Reply with the single word ok`; the third waits at position 1 while two run.
+Three cloud sessions were launched concurrently and all ran with zero waiting,
+proving the proxy does not queue.
+
+The lab provider split duplicates the model list across APU/eGPU for this test;
+production's actual APU/eGPU model split (APU `big-moe`, eGPU `medium-moe` /
+`medium-dense`) is unchanged in the deploy config and should be mirrored if the
+lab split is kept.
