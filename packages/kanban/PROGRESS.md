@@ -419,3 +419,42 @@ The kanban row no longer has `maxConcurrent`.
   release tags, then both packages pinned and the service restarted in a planned
   window.
 - Workflow fan-out is deliberately not preflighted; its children queue normally.
+
+### 2026-10-21 follow-up — two visible queues + live UI walkthrough
+
+The first panel version only created a bucket for providers named in
+`limits`, so the lab showed one queue (the cloud provider was lazily absent).
+Fixed by:
+
+- seeding a bucket for every configured limit and for the deployment's current
+  default-model provider;
+- declaring both lab provider routes explicitly in the `limits` list.
+
+Both queues now render at `0/limit` before any call. Lab demo config (lab only):
+
+```yaml
+limits:
+  - provider: local-ai-machine
+    maxConcurrent: 1
+  - provider: local-ai-machine-cloud
+    maxConcurrent: 1
+```
+
+Live walkthrough performed with four fresh API-created sessions plus one UI
+session:
+
+- cloud A active, cloud B queued; local A active, local B queued; each provider
+  `1/1 in use` with its own FIFO (plus title-call entries).
+- A selected UI session showed the dock: “Waiting for model capacity
+  local-ai-machine/medium-dense · position 4 of 5 · waiting 1s. Inference has
+  not started.” with **Cancel turn**.
+- The Capacity panel showed both provider cards, active leases, waiters by
+  position/kind, and reservation sections.
+- Verified `Cancel turn` and limit live-reload earlier; the panel’s reservation
+  dismiss/force-release paths are unit-tested, with no live stuck reservation to
+  demonstrate at the time.
+
+The lab is intentionally left at 1/1 for both providers so the queues remain
+visible; restore the production intent (local 3, cloud 1) by editing the
+`model-capacity` row and waiting for the 5 s reload. The session default model
+was restored to `local-ai-machine-cloud/deepseek-flash` after the demo.
