@@ -561,3 +561,25 @@ Sidebar badges restyled to match the better-git-worktree badge language:
 
 Verified live: APU `4/2` (2 active, 2 queued), eGPU `0/2`, cloud `0/∞`.
 Commit `e93498d`; hooks/verify clean.
+
+### 2026-10-21 15:15 — badges after label, dock width, turn wait history
+
+- Sidebar pills are now visually after the word **Capacity**. The sidebar renders
+  only the glyph before its hard-coded label, so the pill cluster is absolutely
+  positioned `calc(100% + 68px)` from the glyph; OCR of the rendered row confirms
+  `Capacity 0/1 0/2 0/∞`. The collapsed 36 px rail hides the pills rather than
+  overlapping the icon.
+- The queued-session composer banner now uses the same width formula as the core
+  composer dock (`--dsh-composer-side-clearance` and
+  `--dsh-composer-card-max-width`), so it no longer spans the full viewport.
+- Capacity waits are recorded in the Host (in memory): main calls that waited
+  >250 ms get `{sessionId, turn, provider, model, waitedMs}`. A
+  `conversation.chat.turnTail` card renders them under the turn:
+  `Waited for capacity  24s  1 wait` → `local-ai-machine (apu)/medium-dense 24s`.
+  This is client-only and never part of session context. Verified live on the
+  queued `Reply with the single word ok` session: 23.6 s wait, turn 6, card
+  visible with the route and duration.
+- History is per Host process (restart clears it) and covers main `call` leases
+  only, not title/compaction or judge calls.
+
+32 capacity tests pass; hooks gate clean; `verify.mjs` 0/0. Commit `31f453f`.
