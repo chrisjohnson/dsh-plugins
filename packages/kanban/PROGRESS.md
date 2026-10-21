@@ -458,3 +458,30 @@ The lab is intentionally left at 1/1 for both providers so the queues remain
 visible; restore the production intent (local 3, cloud 1) by editing the
 `model-capacity` row and waiting for the 5 s reload. The session default model
 was restored to `local-ai-machine-cloud/deepseek-flash` after the demo.
+
+### 2026-10-21 14:25 — panel identifies sessions by title + workspace
+
+The Capacity panel previously showed raw session ids, so a queue could not be
+mapped to real work. It now decorates every active lease, waiter and reservation
+with:
+
+- **session title** — read from the live session's `title` projection
+  (`ctx.get('sessionTitle').get(session)`), falling back to the cached
+  `session/list` row and then to the short session id;
+- **workspace title** — matched from `workspaceRegistry.list()` by the session's
+  `cwd`;
+- model, call kind (`call` / `session-title` / judge), position and wait time.
+
+The live lab demo now shows, on each of the two `1/1` provider queues, entries
+such as `CAPACITY DEMO UI session. Reply · lab-wt-repo · medium-dense` and
+`Write a very long, detailed · lab-wt-repo · deepseek-flash`; queued entries
+show `Convert OK · lab-wt-repo · big-moe`.
+
+API-created demo sessions that pointed at `/home/dsh/dsh-lab/lab-wt-repo` show
+`no workspace` because the registered workspace path is
+`/home/dsh/dsh-lab/default/.lab/home/lab-wt-repo`; sessions created through the
+UI under the `lab-wt-repo` workspace resolve correctly. This is a demo-data path
+mismatch, not a lookup bug.
+
+Verified: 29 capacity tests pass, hooks gate clean, `verify.mjs` 0/0, lab boot
+clean. Commit `98fd33c` on `feat/kanban`.
