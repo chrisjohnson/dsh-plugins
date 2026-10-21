@@ -78,11 +78,15 @@ window.__ModuleLoader__.load({
 			+ ".mc-session{font-weight:600;color:var(--dsw-alias-label-primary,#111)}"
 			+ ".mc-nav{display:inline-flex;align-items:center;gap:4px;min-width:0}"
 			+ ".mc-nav-badges{display:inline-flex;align-items:center;gap:2px;min-width:0}"
-			+ ".mc-badge{font:600 8px/12px ui-monospace,monospace;padding:0 3px;border-radius:3px;color:#fff;white-space:nowrap;letter-spacing:-.02em}"
-			+ ".mc-badge.ok,.mc-dot.ok{background:#1d6b32}"
-			+ ".mc-badge.full,.mc-dot.full{background:#a16207}"
-			+ ".mc-badge.waiting,.mc-dot.waiting{background:#c2410c}"
+			+ ".mc-badge{display:inline-flex;align-items:center;justify-content:center;height:14px;padding:0 6px;border-radius:999px;border:1px solid;box-sizing:border-box;font:600 9px/12px ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.02em}"
+			+ ".mc-badge.ok{color:#15803d;background:rgba(34,160,74,.12);border-color:rgba(34,160,74,.35)}"
+			+ ".mc-badge.full{color:#854d0e;background:rgba(234,179,8,.14);border-color:rgba(161,98,7,.38)}"
+			+ ".mc-badge.waiting{color:#b91c1c;background:rgba(185,28,28,.12);border-color:rgba(185,28,28,.35)}"
+			+ ".mc-dot.ok{background:#15803d}"
+			+ ".mc-dot.full{background:#a16207}"
+			+ ".mc-dot.waiting{background:#b91c1c}"
 			+ ".mc-dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex:none}"
+			+ "@media (prefers-color-scheme:dark){.mc-badge.ok{color:#86efac}.mc-badge.full{color:#fcd34d}.mc-badge.waiting{color:#fca5a5}}"
 			+ "@media (max-width:700px){.mc-root{font-size:12px}}";
 
 		function ensureStyles() {
@@ -93,19 +97,26 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 
+		function badgeDemand(provider) {
+			// The left number is demand: calls that hold a slot plus calls queued
+			// behind them. It can exceed the limit while work is waiting, which is
+			// exactly the state the orange/red pill is meant to make obvious.
+			return provider.active.length + provider.waiters.length;
+		}
+
 		function badgeState(provider) {
 			if (provider.waiters.length > 0) return "waiting";
-			if (!provider.unlimited && provider.used >= provider.limit) return "full";
+			if (!provider.unlimited && badgeDemand(provider) >= provider.limit) return "full";
 			return "ok";
 		}
 
 		function badgeCount(provider) {
-			return provider.used + "/" + (provider.unlimited ? "\u221e" : provider.limit);
+			return badgeDemand(provider) + "/" + (provider.unlimited ? "\u221e" : provider.limit);
 		}
 
 		function badgeTitle(provider) {
-			return provider.name + ": " + provider.used + "/" + (provider.unlimited ? "unlimited" : provider.limit) +
-				" \u00b7 " + provider.active.length + " active \u00b7 " + provider.waiters.length + " waiting";
+			return provider.name + ": " + badgeDemand(provider) + "/" + (provider.unlimited ? "unlimited" : provider.limit) +
+				" \u00b7 " + provider.active.length + " active \u00b7 " + provider.waiters.length + " queued";
 		}
 
 		function CapacityIcon(props) {
