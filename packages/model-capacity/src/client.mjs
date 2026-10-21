@@ -188,6 +188,7 @@ window.__ModuleLoader__.load({
 					p.waiters.map(function (waiter) {
 						return h("div", { className: "mc-row", key: waiter.waiterId },
 							h("span", { className: "mc-key", children: "#" + waiter.position }),
+							h("span", { className: "mc-chip", children: waiter.kind || "call" }),
 							h("span", { className: "mc-grow", children: (waiter.model || "?") + " · " + (waiter.sessionId || "no session") }),
 							h("span", { className: "mc-dim mc-mono", children: fmtMs(waiter.waitedMs) }),
 							h("button", { className: "mc-btn", disabled: !waiter.sessionId, onClick: function () { props.onCancelSession(waiter.sessionId); }, children: "Cancel" })
