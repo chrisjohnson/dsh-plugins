@@ -524,3 +524,21 @@ The lab provider split duplicates the model list across APU/eGPU for this test;
 production's actual APU/eGPU model split (APU `big-moe`, eGPU `medium-moe` /
 `medium-dense`) is unchanged in the deploy config and should be mirrored if the
 lab split is kept.
+
+### 2026-10-21 14:55 — live per-provider badges on the Capacity sidebar entry
+
+The sidebar **Capacity** row now polls the capacity snapshot every 1.5 s and
+renders one tiny badge per provider next to the icon, before the label:
+
+- `0/2`, `2/2`, `3/∞` (Unicode infinity) using the provider's own limit;
+- green when there is free capacity, yellow when `used == limit` and nothing is
+  waiting, dark orange when at least one call is waiting;
+- the badge's native tooltip names the provider and gives the counts:
+  `local-ai-machine (apu): 2/2 · 2 active · 1 waiting`;
+- the collapsed rail (`size` 18) shows one colored dot per provider with the same
+  tooltip; expanded (`size` 16) shows the counts.
+
+Current demo: APU `2/2` with a waiting call (orange), eGPU `0/2` (green), cloud
+`0/∞` (green). Relay polling makes it update without a page reload.
+
+Commit `5e2ecfe`; 31 capacity tests pass, hooks gate clean, `verify.mjs` 0/0.
