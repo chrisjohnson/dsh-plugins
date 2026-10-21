@@ -656,7 +656,7 @@ window.__ModuleLoader__.load({
 			}
 
 			var columns = board ? board.columns : { backlog: [], now: [], blocked: [], needs_attention: [], done: [], discarded: [] };
-			var nowGroups = board ? board.now : { active: [], waiting: [], pending_capacity: [], blocked: [] };
+			var nowGroups = board ? board.now : { active: [], waiting: [], blocked: [] };
 			var counts = board ? board.counts : {};
 			return h("div", { className: "kb-root" },
 				h("div", { className: "kb-bar" },
@@ -698,10 +698,9 @@ window.__ModuleLoader__.load({
 							h("div", { className: "kb-grouphead", children: "Now · waiting on you" }),
 							nowGroups.waiting.length === 0 ? h("div", { className: "kb-hint", children: "Nothing waiting." }) : h("div", { className: "kb-list" }, nowGroups.waiting.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: open, onReorder: reorder }); })),
 							h("div", { className: "kb-grouphead", children: "Now · pending capacity" }),
-							nowGroups.pending_capacity.length === 0 ? h("div", { className: "kb-hint", children: "No queued tickets." }) : h("div", { className: "kb-list" }, nowGroups.pending_capacity.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: open, onReorder: reorder }); })),
 							h("div", { className: "kb-grouphead", children: "Capacity" }),
 							h("div", { className: "kb-row" }, (board.capacity || []).map(function (c) {
-								return h("span", { key: c.name, className: "kb-chip" + (c.used >= c.maxConcurrent ? " warn" : ""), children: c.name + " " + c.used + "/" + c.maxConcurrent });
+								return h("span", { key: c.name, className: "kb-chip" + (c.waiting > 0 ? " warn" : ""), children: c.name + " " + c.used + "/" + (c.maxConcurrent ?? "?") + (c.waiting > 0 ? " · " + c.waiting + " queued" : "") });
 							}))
 						) : null
 					)

@@ -77,7 +77,6 @@ export class Engine {
         this.recovered = true;
         await this.recover();
       }
-      this.reclaimLeases();
       this.driver.reconcileTurns();
       await this.autoPromote();
       const now = this.store.listTickets({ columns: ['now'] });
@@ -114,21 +113,7 @@ export class Engine {
 
   // ------------------------------------------------------------- recovery
 
-  reclaimLeases() {
-    const config = this.getConfig();
-    const cutoff = new Date(Date.now() - config.leaseTtlMs).toISOString();
-    const reclaimed = this.store.reclaimStaleLeases(cutoff);
-    for (const lease of reclaimed) {
-      const span = this.store.getSpan(lease.holderSpanId);
-      if (span !== undefined && span.status === 'running') {
-        this.store.endSpan(span.id, { status: 'abandoned', error: 'lease expired' });
-        this.appendEvent(span.ticketId, 'lease_reclaimed', {
-          payload: { provider: lease.provider, slot: lease.slot, spanId: span.id },
-        });
-      }
-      this.log.warn('reclaimed stale lease %s/%d from span %s', lease.provider, lease.slot, lease.holderSpanId);
-    }
-  }
+
 
   /**
    * Restart safety. A host killed mid-turn leaves `running` spans and live
@@ -157,10 +142,6 @@ export class Engine {
       } else if (ticket.phase === 'grill') {
         this.appendEvent(ticket.id, 'recovered', { phaseFrom: 'grill', phaseTo: 'grill', payload: { spanId: span.id } });
       }
-    }
-    // No lease can outlive the process that held it.
-    for (const lease of this.store.activeLeases()) {
-      this.store.releaseLeaseSlot(lease.provider, lease.slot, lease.holderSpanId);
     }
     this.log.info('restart recovery complete');
   }
@@ -231,9 +212,6 @@ export class Engine {
       if (ticket.phase === 'intake' || ticket.phase === 'triage') {
         if (ticket.grillMode === 'now' || ticket.planMode === 'now') continue;
       }
-      const route = this.resolveRoute('implementer', ticket.attemptCount + 1);
-      const policy = providerPolicy(config, route.provider);
-      if (!this.hasCapacity(route.provider, policy.maxConcurrent)) continue;
       this.store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'engine', reason: 'auto_promote' });
       this.appendEvent(ticket.id, 'auto_promoted', { payload: { priorColumn: 'backlog' } });
       const updated = this.store.getTicket(ticket.id);
@@ -339,10 +317,6 @@ export class Engine {
       // Judgement is evaluated exactly when the sibling plan work would fire.
       const judged = await this.shouldGrill(ticket);
       if (!judged.ok) {
-        if (judged.reason === 'capacity') {
-          this.appendEvent(ticket.id, 'pending_capacity', { payload: { role: 'orchestrator', reason: 'no free slot' } });
-          return { kind: 'wait' };
-        }
         return this.needsAttention(ticket, `grill judgement failed: ${judged.error}`);
       }
       grill = judged.grill;
@@ -435,10 +409,6 @@ export class Engine {
       runId,
     });
     if (!coverage.ok) {
-      if (coverage.reason === 'capacity') {
-        this.appendEvent(ticket.id, 'pending_capacity', { payload: { role: 'orchestrator', reason: 'no free slot' } });
-        return { kind: 'wait' };
-      }
       return this.needsAttention(ticket, `intent-coverage judgement failed: ${coverage.error}`);
     }
     if (coverage.value.covers === false) {
@@ -714,10 +684,6 @@ export class Engine {
       maxAttempts: config.maxAdjudications > 0 ? 2 : 1,
     });
     if (!adjudicated.ok) {
-      if (adjudicated.reason === 'capacity') {
-        this.appendEvent(ticket.id, 'pending_capacity', { payload: { role: 'orchestrator', reason: 'no free slot' } });
-        return { kind: 'wait' };
-      }
       if (adjudicated.reason === 'budget' || adjudicated.reason === 'needs_attention') {
         return this.needsAttention(ticket, `adjudication unavailable: ${adjudicated.error}`);
       }
@@ -952,8 +918,7 @@ export class Engine {
     if (admission.reason === 'paid_not_allowed') {
       return this.needsAttention(ticket, admission.message, { budget: true });
     }
-    this.appendEvent(ticket.id, 'pending_capacity', { payload: { provider: admission.provider, reason: 'no free slot' } });
-    return { kind: 'wait' };
+    return this.needsAttention(ticket, admission.message ?? 'dispatch refused');
   }
 
   needsAttention(ticket, reason, payload = {}) {
@@ -997,29 +962,11 @@ export class Engine {
         return { ok: false, reason: 'budget', message: `budget exhausted: spent $${ticket.spentUsd.toFixed(2)} + estimate $${estimate.toFixed(2)} > $${ticket.budgetUsd.toFixed(2)}` };
       }
     }
-    if (!this.hasCapacity(route.provider, policy.maxConcurrent)) {
-      return { ok: false, reason: 'capacity', provider: route.provider };
-    }
     return { ok: true, policy, attempt };
   }
 
-  hasCapacity(provider, maxConcurrent) {
-    return this.store.activeLeases().filter((lease) => lease.provider === provider).length < maxConcurrent;
-  }
-
   async roleTurn({ ticket, role, route, prompt, spanName, attempt, runId }) {
-    const policy = providerPolicy(this.getConfig(), route.provider);
     const spanId = randomUUID();
-    const lease = this.store.acquireLease(route.provider, policy.maxConcurrent, spanId);
-    if (lease === null) return { kind: 'no_capacity', provider: route.provider };
-    const heartbeat = setInterval(() => {
-      try {
-        this.store.heartbeatLease(spanId);
-      } catch {
-        // best effort; the tick reclaims a lease whose heartbeat really stopped
-      }
-    }, this.getConfig().leaseHeartbeatMs);
-    if (typeof heartbeat.unref === 'function') heartbeat.unref();
     const promptHash = shortHash(hashText(prompt));
     const span = this.store.startSpan({
       id: spanId,
@@ -1076,25 +1023,11 @@ export class Engine {
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });
       return { kind: 'failed', error: String(error?.message ?? error), spanId: span.id };
-    } finally {
-      clearInterval(heartbeat);
-      this.store.releaseLease(spanId);
     }
   }
 
   async continueTurn({ ticket, role, route, sessionId, prompt, runId, spanName, attempt }) {
-    const policy = providerPolicy(this.getConfig(), route.provider);
     const spanId = randomUUID();
-    const lease = this.store.acquireLease(route.provider, policy.maxConcurrent, spanId);
-    if (lease === null) return { kind: 'no_capacity', provider: route.provider };
-    const heartbeat = setInterval(() => {
-      try {
-        this.store.heartbeatLease(spanId);
-      } catch {
-        /* best effort */
-      }
-    }, this.getConfig().leaseHeartbeatMs);
-    if (typeof heartbeat.unref === 'function') heartbeat.unref();
     const span = this.store.startSpan({
       id: spanId,
       ticketId: ticket.id,
@@ -1121,9 +1054,6 @@ export class Engine {
     } catch (error) {
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error) });
       return { kind: 'failed', error: String(error?.message ?? error), spanId: span.id };
-    } finally {
-      clearInterval(heartbeat);
-      this.store.releaseLease(spanId);
     }
   }
 
@@ -1176,7 +1106,7 @@ export class Engine {
     if (priced.costUsd !== null && priced.costUsd > 0) this.store.addSpend(ticket.id, priced.costUsd);
   }
 
-  /** One out-of-band judgement, with its own span, capacity lease and usage. */
+  /** One out-of-band judgement, with its own span and usage. */
   async judgeCall({ ticket, task, taskText, payload, schema, validate, spanName, runId, maxAttempts = 2 }) {
     const config = this.getConfig();
     const route = this.resolveRoute('orchestrator', 1);
@@ -1184,16 +1114,6 @@ export class Engine {
     if (!admission.ok) return { ok: false, error: admission.message ?? admission.reason, reason: admission.reason };
     const policy = providerPolicy(config, route.provider);
     const spanId = randomUUID();
-    const lease = this.store.acquireLease(route.provider, policy.maxConcurrent, spanId);
-    if (lease === null) return { ok: false, error: 'no capacity', reason: 'capacity' };
-    const heartbeat = setInterval(() => {
-      try {
-        this.store.heartbeatLease(spanId);
-      } catch {
-        /* best effort */
-      }
-    }, config.leaseHeartbeatMs);
-    if (typeof heartbeat.unref === 'function') heartbeat.unref();
     const span = this.store.startSpan({
       id: spanId,
       ticketId: ticket.id,
@@ -1242,9 +1162,6 @@ export class Engine {
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });
       return { ok: false, error: String(error?.message ?? error), code: error?.code, spanId: span.id };
-    } finally {
-      clearInterval(heartbeat);
-      this.store.releaseLease(spanId);
     }
   }
 

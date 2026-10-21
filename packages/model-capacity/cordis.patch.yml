@@ -1,0 +1,9 @@
+# Bundle layer for dsh-model-capacity.
+#
+# The row carries NO config: a patch layer replaces a row's whole `config`
+# object instead of deep-merging, so the deployment owns its complete section
+# in its own profile patch. Defaults live in src/config.mjs and are documented
+# in README.md.
+- insert:
+    - id: model-capacity
+      name: dsh-model-capacity

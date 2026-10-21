@@ -87,7 +87,12 @@ export default async function kanban(ctx, config = {}) {
       return { ok: true };
     },
   });
-  const driver = new SessionDriver({ ctx, log, getConfig });
+  const driver = new SessionDriver({
+    ctx,
+    log,
+    getConfig,
+    isWaitingForCapacity: (sessionId) => ctx.get('capacity')?.isWaitingForSession?.(sessionId) === true,
+  });
   const engine = new Engine({ ctx, store, driver, judge, getConfig, getPrompts, log });
   engine.configHash = configHash;
   engine.runInConfig = (snapshot, fn) => als.run({ ...snapshot, __prompts: prompts }, fn);
@@ -165,14 +170,14 @@ export default async function kanban(ctx, config = {}) {
         const waiting = latest?.kind === 'awaiting_human' || full.phase === 'grill';
         return { ...ticket, group: nowGroup(full, { active: active.has(ticket.id), waiting }) };
       });
-      const groups = { active: [], waiting: [], pending_capacity: [], blocked: [] };
+      const groups = { active: [], waiting: [], blocked: [] };
       for (const ticket of now) groups[ticket.group]?.push(ticket);
       return {
         counts: store.counts(),
         columns: byColumn,
         now: groups,
         inFlight: now.filter((t) => t.group === 'active' || t.group === 'waiting'),
-        capacity: capacityView(live, store),
+        capacity: capacityView(ctx, live),
       };
     };
 
@@ -451,17 +456,19 @@ function tree(spans) {
   return roots;
 }
 
-function capacityView(config, store) {
-  const leases = store.activeLeases();
-  const rows = config.providers.map((provider) => ({ name: provider.name, maxConcurrent: provider.maxConcurrent, tier: provider.tier ?? 'local' }));
-  const declared = new Set(rows.map((row) => row.name));
-  for (const role of Object.values(config.roles)) {
-    if (typeof role.provider === 'string' && role.provider !== '' && !declared.has(role.provider)) {
-      declared.add(role.provider);
-      rows.push({ name: role.provider, maxConcurrent: 1, tier: 'local' });
-    }
+function capacityView(ctx, config) {
+  const cap = ctx.get('capacity')?.snapshot?.();
+  if (cap !== undefined) {
+    return cap.providers.map((provider) => ({
+      name: provider.name,
+      maxConcurrent: provider.limit,
+      used: provider.used,
+      waiting: provider.waiters.length,
+      reservations: provider.reservations.length,
+      tier: 'global',
+    }));
   }
-  return rows.map((row) => ({ ...row, used: leases.filter((lease) => lease.provider === row.name).length }));
+  return config.providers.map((provider) => ({ name: provider.name, maxConcurrent: null, used: 0, waiting: 0, reservations: 0, tier: provider.tier ?? 'local' }));
 }
 
 function safeJson(text) {

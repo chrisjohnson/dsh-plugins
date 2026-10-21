@@ -39,17 +39,16 @@ impossible values refuse to start.
 |---|---|
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no `workspace_cwd`. |
-| `providers[]` | `{name, maxConcurrent, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. Prices are USD per million tokens. A provider not listed here is admitted **one turn at a time** and priced `unpriced`. |
+| `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. Prices are USD per million tokens; an unlisted provider is priced `unpriced`. Concurrency is owned by `dsh-model-capacity`, not this config; a legacy `maxConcurrent` is accepted with a warning and ignored. |
 | `roles{}` | per role: `preset`, `provider`, `model`, `reasoningEffort`, `prompt` (file name), `allowTools[]`. A `null` provider/model falls back to the host's default model selection. |
 | `confidenceThreshold` | default `0.70`; a condition below it is not proven. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
 | `maxAttempts` | implement → verify → review cycles before `needs_attention` (default 3). |
 | `escalationLadder[]` | `{rung, provider?, model?, reasoningEffort?, paid?}`. Attempts 1–2 use rung 0, attempt 3 uses rung 1, and so on. |
 | `tickIntervalMs` | worker tick (default 5000). |
-| `leaseHeartbeatMs` / `leaseTtlMs` | per-turn lease heartbeat and stale-reclaim window. |
 | `stallTimeoutMs` | a turn with no event for this long is abandoned (default 10 min). |
 | `wipCap` | tickets allowed to hold `now` at once; enforced on drag and auto-promote. |
-| `autoPromote`, `autoPromotePerTick` | promote backlog tickets when capacity and WIP allow. |
+| `autoPromote`, `autoPromotePerTick` | promote backlog tickets when the WIP cap allows. |
 | `defaultBudgetUsd`, `retentionDays`, `promptsDir`, `allowAgentModelSwitch`, `reuseSessionOnRetry`, `maxContinuations`, `maxAdjudications`, `defaultGrillMode`, `defaultPlanMode`, `promptOverrides` | see `src/config.mjs`. |
 
 Every role prompt is a markdown file under `prompts/` (or `promptsDir`), or an
@@ -135,12 +134,12 @@ cost per ticket, stall rate by role.
 
 ## Restart safety
 
-Boot recovery marks every `running` span abandoned, releases every lease (a lease
-cannot outlive its process), and returns affected tickets to `implement` or
-`needs_attention`. The SQLite store uses WAL, `busy_timeout`, and
-`BEGIN IMMEDIATE` for every mutation, with a row `version` and a post-commit
-event. A stale lease is reclaimed after `leaseTtlMs`; the turn is abandoned and
-counted as an attempt.
+Boot recovery marks every `running` span abandoned and returns affected tickets
+to `implement` or `needs_attention`. The SQLite store uses WAL, `busy_timeout`,
+and `BEGIN IMMEDIATE` for every mutation, with a row `version` and a post-commit
+event. Kanban no longer owns concurrency leases: the process-wide
+`dsh-model-capacity` gate queues model calls, so a restart clears the queue and
+its in-memory leases automatically.
 
 ## What this plugin is not
 
@@ -156,10 +155,11 @@ counted as an attempt.
 ## Checks
 
 ```sh
-node --test test/*.test.mjs        # 59 tests: pure modules + engine pipeline with fakes
+node --test test/*.test.mjs        # 57 tests: pure modules + engine pipeline with fakes
 node scripts/verify.mjs            # repository release contract
 ```
 
-The lab run that produced the demo used a local provider with `maxConcurrent: 3`;
-six queued tickets never exceeded three live turns. See `DECISIONS.md` for the
+Concurrency is enforced by the separate `dsh-model-capacity` host plugin. This
+package dispatches role turns and lets every model call queue there; `wipCap`
+still bounds how many tickets are in `Now`. See `DECISIONS.md` for the
 measurement and for resolved design choices.

@@ -114,8 +114,6 @@ export const DEFAULT_CONFIG = {
 
   /** Worker tick and lease timings (milliseconds). */
   tickIntervalMs: 5000,
-  leaseHeartbeatMs: 15000,
-  leaseTtlMs: 30000,
   /** A turn with no observable progress for this long is abandoned. */
   stallTimeoutMs: 600000,
 
@@ -154,12 +152,14 @@ const TOP_LEVEL_KEYS = new Set(Object.keys(DEFAULT_CONFIG));
 const ROLE_KEYS = new Set(['preset', 'provider', 'model', 'reasoningEffort', 'prompt', 'allowTools']);
 const PROVIDER_KEYS = new Set([
   'name',
-  'maxConcurrent',
   'tier',
   'priceIn',
   'priceOut',
   'priceCacheRead',
   'priceCacheWrite',
+  // Legacy from before global capacity; accepted so an old row boots with a
+  // warning instead of an unknown-key surprise, but the value is ignored.
+  'maxConcurrent',
 ]);
 const LADDER_KEYS = new Set(['rung', 'provider', 'model', 'reasoningEffort', 'paid']);
 
@@ -209,7 +209,7 @@ function merge(target, source) {
   return target;
 }
 
-function validateProviders(providers, errors) {
+function validateProviders(providers, errors, warnings) {
   if (!Array.isArray(providers)) {
     errors.push(new ConfigError('providers must be an array', 'providers'));
     return;
@@ -227,8 +227,12 @@ function validateProviders(providers, errors) {
     if (!isNonEmptyString(provider.name)) errors.push(new ConfigError('name must be a non-empty string', at));
     else if (seen.has(provider.name)) errors.push(new ConfigError(`duplicate provider "${provider.name}"`, at));
     else seen.add(provider.name);
-    if (!Number.isInteger(provider.maxConcurrent) || provider.maxConcurrent < 1) {
-      errors.push(new ConfigError('maxConcurrent must be an integer >= 1', `${at}.maxConcurrent`));
+    if (provider.maxConcurrent !== undefined) {
+      if (!Number.isInteger(provider.maxConcurrent) || provider.maxConcurrent < 1) {
+        errors.push(new ConfigError('maxConcurrent must be an integer >= 1', `${at}.maxConcurrent`));
+      } else {
+        warnings.push(`providers[${index}].maxConcurrent is ignored: concurrency is owned by dsh-model-capacity`);
+      }
     }
     if (provider.tier !== undefined && provider.tier !== 'local' && provider.tier !== 'paid') {
       errors.push(new ConfigError('tier must be "local" or "paid"', `${at}.tier`));
@@ -323,7 +327,7 @@ export function resolveConfig(input = {}) {
 
   optionalString(config.dbPath, 'dbPath', errors);
   optionalString(config.defaultWorkspaceCwd, 'defaultWorkspaceCwd', errors);
-  validateProviders(config.providers, errors);
+  validateProviders(config.providers, errors, warnings);
   validateRoles(config.roles, errors);
   validateLadder(config.escalationLadder, errors);
 
@@ -337,12 +341,8 @@ export function resolveConfig(input = {}) {
     errors.push(new ConfigError('must be an integer >= 1', 'maxAttempts'));
   }
   positiveNumber(config.tickIntervalMs, 'tickIntervalMs', errors);
-  positiveNumber(config.leaseHeartbeatMs, 'leaseHeartbeatMs', errors);
-  positiveNumber(config.leaseTtlMs, 'leaseTtlMs', errors);
+
   positiveNumber(config.stallTimeoutMs, 'stallTimeoutMs', errors);
-  if (config.leaseTtlMs < config.leaseHeartbeatMs * 2) {
-    errors.push(new ConfigError('must be at least 2x leaseHeartbeatMs', 'leaseTtlMs'));
-  }
   if (!Number.isInteger(config.wipCap) || config.wipCap < 1) {
     errors.push(new ConfigError('must be an integer >= 1', 'wipCap'));
   }
@@ -395,7 +395,6 @@ export function providerPolicy(config, provider) {
   if (found !== undefined) {
     return {
       name: provider,
-      maxConcurrent: found.maxConcurrent,
       tier: found.tier ?? (found.priceIn > 0 || found.priceOut > 0 ? 'paid' : 'local'),
       priceIn: found.priceIn ?? null,
       priceOut: found.priceOut ?? null,
@@ -408,7 +407,6 @@ export function providerPolicy(config, provider) {
   // treated as unpriced, never as free.
   return {
     name: provider,
-    maxConcurrent: 1,
     tier: 'local',
     priceIn: null,
     priceOut: null,

@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -171,10 +171,21 @@ CREATE INDEX IF NOT EXISTS artifacts_ticket ON artifacts(ticket_id, id);
 CREATE INDEX IF NOT EXISTS artifacts_created ON artifacts(created_at);
 `;
 
+const V2 = `
+-- Concurrency moved to the process-wide dsh-model-capacity service. The old
+-- per-turn lease rows are no longer read or written.
+DROP TABLE IF EXISTS leases;
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
     name: 'initial',
     sql: V1,
+  },
+  {
+    version: 2,
+    name: 'drop-local-leases',
+    sql: V2,
   },
 ];

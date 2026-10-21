@@ -144,14 +144,14 @@ export function assertTransition(from, to, { actor = 'engine', reason = '' } = {
 }
 
 /**
- * The Now view groups. `pending_capacity` is a group, never a column; the
- * ticket stays `now` while it waits for a slot.
+ * The Now view groups. Global capacity is a process-wide queue now, so kanban
+ * no longer has a per-ticket `pending_capacity` state: a ticket in `now` is
+ * active (its session may be queued), waiting on a human, or blocked.
  */
-export function nowGroup(ticket, { active = false, waiting = false } = {}) {
-  if (active) return 'active';
-  if (waiting || ticket.phase === 'grill' || ticket.needsAttentionReason !== null) return 'waiting';
+export function nowGroup(ticket, { waiting = false } = {}) {
   if (ticket.column === 'blocked') return 'blocked';
-  return 'pending_capacity';
+  if (waiting || ticket.phase === 'grill' || ticket.needsAttentionReason !== null) return 'waiting';
+  return 'active';
 }
 
 /** Priority ordering: higher priority first, then FIFO by creation/order. */

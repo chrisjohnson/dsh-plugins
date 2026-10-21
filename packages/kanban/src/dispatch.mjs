@@ -44,11 +44,12 @@ const PRESET_PLUGINS = [
 
 /** Existing sessions can be reused for a continuation, but never across tickets. */
 export class SessionDriver {
-  constructor({ ctx, log, getConfig }) {
+  constructor({ ctx, log, getConfig, isWaitingForCapacity = () => false }) {
     this.ctx = ctx;
     this.agents = ctx.get('agents');
     this.log = log;
     this.getConfig = getConfig;
+    this.isWaitingForCapacity = isWaitingForCapacity;
     this.waiters = new Map();
     /** sessionId -> {handle, role, preset, ticketId} */
     this.live = new Map();
@@ -83,7 +84,7 @@ export class SessionDriver {
       this.offEvent = null;
     }
     for (const waiter of this.waiters.values()) {
-      clearTimeout(waiter.timer);
+      clearInterval(waiter.timer);
       waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'plugin stopped' });
     }
     this.waiters.clear();
@@ -165,7 +166,7 @@ export class SessionDriver {
 
   #settleTurn(session, event, waiter) {
     this.waiters.delete(session.id);
-    clearTimeout(waiter.timer);
+    clearInterval(waiter.timer);
     const turn = event.data.turn;
     const events = session.snapshotEvents ? session.snapshotEvents() : [];
     const turnEvents = events.filter((e) => e.data !== null && typeof e.data === 'object' && e.data.turn === turn);
@@ -203,20 +204,26 @@ export class SessionDriver {
     if (this.waiters.has(sessionId)) return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     const startedMono = process.hrtime.bigint();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const waiter = this.waiters.get(sessionId);
-        if (waiter === undefined) return;
+      // A turn can legitimately wait in the global capacity queue for a long
+      // time. The stall watchdog must not count that wait as a hung model call.
+      const waiter = { resolve, reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId };
+      const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
+      const timer = setInterval(() => {
+        if (this.waiters.get(sessionId) !== waiter) return;
+        if (this.isWaitingForCapacity(sessionId)) return;
+        if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
         this.waiters.delete(sessionId);
+        clearInterval(timer);
         waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'no turn event within stallTimeoutMs', startedMono });
-      }, stallTimeoutMs);
+      }, interval);
       if (typeof timer.unref === 'function') timer.unref();
-      const waiter = { resolve, reject, timer, lastEventAt: Date.now(), startedMono, sessionId };
+      waiter.timer = timer;
       this.waiters.set(sessionId, waiter);
       try {
         live.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }));
       } catch (error) {
         this.waiters.delete(sessionId);
-        clearTimeout(timer);
+        clearInterval(timer);
         reject(new DispatchError(`could not admit prompt: ${error?.message ?? error}`, { code: 'PROMPT_REJECTED' }));
       }
     });
@@ -231,9 +238,9 @@ export class SessionDriver {
     for (const [sessionId, waiter] of [...this.waiters]) {
       const live = this.live.get(sessionId);
       if (live === undefined) continue;
-      if (now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
+      if (!this.isWaitingForCapacity(sessionId) && now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
         this.waiters.delete(sessionId);
-        clearTimeout(waiter.timer);
+        clearInterval(waiter.timer);
         waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'stalled', startedMono: waiter.startedMono });
         continue;
       }
@@ -260,7 +267,7 @@ export class SessionDriver {
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
       this.waiters.delete(sessionId);
-      clearTimeout(waiter.timer);
+      clearInterval(waiter.timer);
       waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'session closed' });
     }
     if (dispose) {

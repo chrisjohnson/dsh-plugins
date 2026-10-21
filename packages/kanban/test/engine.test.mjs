@@ -74,7 +74,7 @@ function setup({ implementer = [], verifier = [], reviewer = [], planner = [PLAN
     autoPromote: false,
     ...config,
     roles: { ...baseRoles, ...(config.roles ?? {}) },
-    providers: config.providers ?? [{ name: 'local', maxConcurrent: 3 }],
+    providers: config.providers ?? [{ name: 'local' }],
   })
   const db = new DatabaseSync(':memory:')
   migrate(db)
@@ -227,8 +227,8 @@ test('paid route without allow_paid refuses instead of downgrading', async () =>
     implementer: [PASS_CLAIM],
     config: {
       providers: [
-        { name: 'local', maxConcurrent: 3 },
-        { name: 'paid', maxConcurrent: 1, tier: 'paid', priceIn: 1, priceOut: 2 },
+        { name: 'local' },
+        { name: 'paid', tier: 'paid', priceIn: 1, priceOut: 2 },
       ],
       roles: { implementer: { provider: 'paid', model: 'big' } },
     },
@@ -240,92 +240,14 @@ test('paid route without allow_paid refuses instead of downgrading', async () =>
   assert.match(t.needsAttentionReason, /allow_paid/)
 })
 
-test('capacity holds the ticket at its current phase', async () => {
-  const { store, engine } = setup({ implementer: [PASS_CLAIM], verifier: [VERIFY_PASS], reviewer: [REVIEW_PASS], config: { providers: [{ name: 'local', maxConcurrent: 1 }] } })
-  const ticket = pickedUp(store)
-  // Occupy the only local slot.
-  assert.ok(store.acquireLease('local', 1, 'outsider'))
-  await engine.advance(ticket)
-  let t = store.getTicket(ticket.id)
-  assert.equal(t.phase, 'triage')
-  assert.ok(store.listEvents(ticket.id).some((e) => e.kind === 'pending_capacity'))
-  store.releaseLease('outsider')
-  await engine.advance(t)
-  t = store.getTicket(ticket.id)
-  assert.equal(t.column, 'done')
-})
-
-test('six launched tickets never exceed the declared per-provider concurrency', async () => {
-  const { store, engine, driver, config } = setup({
-    implementer: Array.from({ length: 12 }, () => PASS_CLAIM),
-    verifier: Array.from({ length: 12 }, () => VERIFY_PASS),
-    reviewer: Array.from({ length: 12 }, () => REVIEW_PASS),
-    judge: {
-      triage: {
-        checkable: true,
-        done_when: [
-          { id: 'compiles', statement: 'project compiles', how_verified: 'npm run build' },
-          { id: 'tests', statement: 'tests pass', how_verified: 'npm test' },
-        ],
-      },
-    },
-    config: {
-      providers: [
-        { name: 'local', maxConcurrent: 3 },
-        { name: 'judge', maxConcurrent: 3 },
-      ],
-      roles: {
-        orchestrator: { provider: 'judge', model: 'm' },
-        planner: { provider: 'local', model: 'm' },
-        implementer: { provider: 'local', model: 'm' },
-        verifier: { provider: 'local', model: 'm' },
-        reviewer: { provider: 'local', model: 'm' },
-      },
-    },
-  })
-  const tickets = []
-  for (let i = 0; i < 6; i += 1) {
-    const ticket = store.createTicket({ title: `concurrency ${i}`, acceptance: ['it builds'], planMode: 'one_shot', grillMode: 'judgement', workspaceCwd: CWD })
-    store.transitionTicket(ticket.id, { column: 'now', phase: 'triage' }, { actor: 'human' })
-    tickets.push(store.getTicket(ticket.id))
-  }
-  // The fake driver measures overlap: only the local implementer turns block.
-  let running = 0
-  let maxRunning = 0
-  let maxLeases = 0
-  const originalSend = driver.sendTurn.bind(driver)
-  driver.sendTurn = async (request) => {
-    const live = driver.sessions.get(request.sessionId)
-    if (live?.role === 'implementer') {
-      running += 1
-      maxRunning = Math.max(maxRunning, running)
-      maxLeases = Math.max(maxLeases, store.activeLeases().filter((l) => l.provider === 'local').length)
-      await new Promise((resolve) => setTimeout(resolve, 40))
-      running -= 1
-    }
-    return originalSend(request)
-  }
-  for (let round = 0; round < 20; round += 1) {
-    const pending = tickets.filter((t) => !['done', 'needs_attention', 'discarded'].includes(store.getTicket(t.id).column))
-    if (pending.length === 0) break
-    await Promise.all(pending.map((t) => engine.advance(store.getTicket(t.id))))
-  }
-  assert.equal(maxRunning <= 3, true, `max concurrent implementer turns was ${maxRunning}`)
-  assert.equal(maxLeases <= 3, true, `max local leases was ${maxLeases}`)
-  assert.equal(store.listTickets({ columns: ['done'] }).length, 6)
-  assert.equal(config.providers.find((p) => p.name === 'local').maxConcurrent, 3)
-})
-
 test('restart recovery abandons running spans, releases leases and requeues work', async () => {
   const { store, engine } = setup({ implementer: [PASS_CLAIM], verifier: [VERIFY_PASS], reviewer: [REVIEW_PASS] })
   const ticket = pickedUp(store)
   store.transitionTicket(ticket.id, { phase: 'plan' })
   store.transitionTicket(ticket.id, { phase: 'implement' })
   const span = store.startSpan({ ticketId: ticket.id, kind: 'agent', name: 'implement', role: 'implementer' })
-  store.acquireLease('local', 3, span.id)
   await engine.recover()
   assert.equal(store.getSpan(span.id).status, 'abandoned')
-  assert.equal(store.activeLeases().length, 0)
   assert.equal(store.getTicket(ticket.id).phase, 'implement')
 })
 

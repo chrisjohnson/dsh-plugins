@@ -1,5 +1,14 @@
 # Decisions
 
+> **2026-10-21 — concurrency moved out of this package.** The per-turn SQLite
+> leases, the `maxConcurrent` field, the `pending_capacity` event and the
+> `leases` table described below are historical. A new host plugin,
+> `dsh-model-capacity`, now gates every `llm/stream` call process-wide, per
+> provider, with a FIFO queue; kanban dispatches role turns and lets their model
+> calls queue there. `wipCap` still bounds how many tickets are in `Now`.
+> Schema migration v2 drops `leases`. The sections below are kept as the design
+> history that led here.
+
 Resolved during implementation. Each one is a choice the specification left open
 under §20, or an environment fact found while building.
 
@@ -175,3 +184,29 @@ checkout with `--preserve-symlinks`, provider route `local-ai-machine` with
 
 Visual verification used the accessibility tree, not screenshots: the active
 model route in the implementing session does not accept image input.
+
+## Global capacity refactor (2026-10-21)
+
+- **Where it lives:** `dsh-model-capacity`, a separate host plugin. It registers
+  one `llm/stream` waterfall listener (`{global:true, prepend:true}`) and one
+  global `tools.guard`. It is not per-session and not in the browser.
+- **Per-call, not per-turn:** the gate acquires a lease before `next()` reaches
+  the adapter and releases it when the stream ends/fails/aborts. A tool-heavy
+  turn does not hold a slot, so sessions interleave inference and tool time.
+- **Kanban:** all lease code, `maxConcurrent`, capacity admission, the
+  `pending_capacity` group and the `leases` table are gone. A role turn creates
+  its span and sends the prompt; the first model call queues globally. The role
+  stall watchdog asks `ctx.capacity.isWaitingForSession(sessionId)` and does not
+  count queue time as a stall, so hours-long queues are safe.
+- **Subagents:** `subagent`, `subagent_fork` and `spawn_teammate` preflight in
+  the tool guard. A reservation is bound to the child on `session/created` and
+  consumed by the child's first **main** call (title/compaction calls do not
+  consume it). Tool errors cancel their reservation by `callId`; a TTL and
+  `session/disposed` clean up the rest. `workflow` is deliberately excluded:
+  its fan-out is not declared, so its children queue normally.
+- **Timeouts:** no plugin queue timeout. The wait occurs before the adapter's
+  `streamIdleTimeoutMs` starts; the only plugin timer is reservation cleanup.
+- **UI:** a session dock in `conversation.input.dock` shows the queued main call
+  with position/wait and a cancel action; a global `Capacity` panel in
+  `sidebar.panellist`/`main` shows active leases, waiters and reservations with
+  cancel/dismiss/force-release.

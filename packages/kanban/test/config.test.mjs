@@ -24,19 +24,24 @@ test('wrong types and impossible values refuse to start', () => {
   assert.throws(() => resolveConfig({ wipCap: 0 }), ConfigError)
   assert.throws(() => resolveConfig({ confidenceThreshold: 2 }), ConfigError)
   assert.throws(() => resolveConfig({ escalationLadder: [] }), ConfigError)
-  assert.throws(() => resolveConfig({ leaseTtlMs: 1000, leaseHeartbeatMs: 1000 }), ConfigError)
+})
+
+test('legacy maxConcurrent is accepted with a warning and ignored', () => {
+  const { config, warnings } = resolveConfig({ providers: [{ name: 'p', maxConcurrent: 2 }] })
+  assert.ok(warnings.some((w) => /maxConcurrent is ignored/.test(w)))
+  assert.equal('maxConcurrent' in providerPolicy(config, 'p'), false)
 })
 
 test('duplicate provider names are rejected', () => {
   assert.throws(() => resolveConfig({ providers: [{ name: 'p', maxConcurrent: 1 }, { name: 'p', maxConcurrent: 1 }] }), /duplicate/)
 })
 
-test('unknown provider is admitted one at a time and unpriced', () => {
+test('unknown provider is unpriced; concurrency is owned elsewhere', () => {
   const { config } = resolveConfig({})
   const policy = providerPolicy(config, 'mystery')
-  assert.equal(policy.maxConcurrent, 1)
   assert.equal(policy.priceIn, null)
   assert.equal(policy.known, false)
+  assert.equal('maxConcurrent' in policy, false)
 })
 
 test('escalation ladder maps attempts to rungs', () => {

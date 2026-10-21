@@ -106,20 +106,6 @@ test('sessions attach, detach and retro-attach once', () => {
   assert.equal(store.listSessions(t.id).length, 2)
 })
 
-test('leases enforce capacity and are reclaimable', () => {
-  const { store } = fresh()
-  const a = store.acquireLease('p', 2, 'span-a')
-  const b = store.acquireLease('p', 2, 'span-b')
-  assert.ok(a && b)
-  assert.equal(store.acquireLease('p', 2, 'span-c'), null)
-  store.releaseLease('span-a')
-  assert.deepEqual(store.acquireLease('p', 2, 'span-c'), { provider: 'p', slot: 1, holderSpanId: 'span-c', acquiredAt: store.activeLeases().find((l) => l.holderSpanId === 'span-c').heartbeatAt })
-  const old = new Date(Date.now() - 60_000).toISOString()
-  store.db.prepare('UPDATE leases SET heartbeat_at = ? WHERE released_at IS NULL').run(old)
-  assert.equal(store.reclaimStaleLeases(new Date(Date.now() - 30_000).toISOString()).length, 2)
-  assert.equal(store.activeLeases().length, 0)
-})
-
 test('usage rollup distinguishes unpriced from zero', () => {
   const { store } = fresh()
   const t = store.createTicket({ title: 'x' })
@@ -150,7 +136,7 @@ test('there is no config table in the schema', () => {
   for (const forbidden of ['providers', 'roles', 'prompts', 'settings', 'config', 'models', 'prices']) {
     assert.equal(names.includes(forbidden), false, `unexpected config table ${forbidden}`)
   }
-  for (const required of ['tickets', 'acceptance', 'conditions', 'sessions', 'events', 'spans', 'usage', 'verifications', 'leases', 'runs', 'artifacts']) {
+  for (const required of ['tickets', 'acceptance', 'conditions', 'sessions', 'events', 'spans', 'usage', 'verifications', 'runs', 'artifacts']) {
     assert.ok(names.includes(required), `missing ${required}`)
   }
 })

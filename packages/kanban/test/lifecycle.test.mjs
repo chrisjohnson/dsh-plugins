@@ -67,7 +67,8 @@ test('only engine or human may close', () => {
 test('now groups are explicit', () => {
   assert.equal(nowGroup({ column: 'now', phase: 'implement', needsAttentionReason: null }, { active: true }), 'active')
   assert.equal(nowGroup({ column: 'now', phase: 'grill', needsAttentionReason: null }), 'waiting')
-  assert.equal(nowGroup({ column: 'now', phase: 'implement', needsAttentionReason: null }), 'pending_capacity')
+  assert.equal(nowGroup({ column: 'now', phase: 'implement', needsAttentionReason: null }), 'active')
+  assert.equal(nowGroup({ column: 'blocked', phase: 'implement', needsAttentionReason: null }), 'blocked')
 })
 
 test('priority then FIFO', () => {
