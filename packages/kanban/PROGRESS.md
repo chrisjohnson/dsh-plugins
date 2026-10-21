@@ -542,3 +542,22 @@ Current demo: APU `2/2` with a waiting call (orange), eGPU `0/2` (green), cloud
 `0/∞` (green). Relay polling makes it update without a page reload.
 
 Commit `5e2ecfe`; 31 capacity tests pass, hooks gate clean, `verify.mjs` 0/0.
+
+### 2026-10-21 15:05 — worktree-style capacity pills; demand = active + queued
+
+Sidebar badges restyled to match the better-git-worktree badge language:
+
+- round pill (`border-radius: 999px`), 14px high, 9px tabular monospace;
+- light tinted fill + darker border + darker text:
+  - green `#15803d` / rgba(34,160,74,.12) / border .35 when capacity is free;
+  - yellow `#854d0e` / rgba(234,179,8,.14) / border `#a16207` at exact capacity;
+  - red `#b91c1c` / rgba(185,28,28,.12) / border .35 when anything is queued;
+  - dark-mode text overrides (`#86efac`, `#fcd34d`, `#fca5a5`);
+- the left number is **active + queued** demand, so 2 active + 2 queued on a
+  limit-2 provider renders `4/2` (red); unlimited renders `N/∞`;
+- tooltip names the provider and decomposes the number:
+  `local-ai-machine (apu): 4/2 · 2 active · 2 queued`;
+- collapsed rail still uses one colored dot per provider with the same tooltip.
+
+Verified live: APU `4/2` (2 active, 2 queued), eGPU `0/2`, cloud `0/∞`.
+Commit `e93498d`; hooks/verify clean.
