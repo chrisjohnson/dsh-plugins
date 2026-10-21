@@ -583,3 +583,24 @@ Commit `e93498d`; hooks/verify clean.
   only, not title/compaction or judge calls.
 
 32 capacity tests pass; hooks gate clean; `verify.mjs` 0/0. Commit `31f453f`.
+
+### 2026-10-21 15:30 — Context-style Capacity page, clickable session cards
+
+The Capacity panel was rebuilt in the visual language of the Context tab:
+
+- full-page layout with a 20px title, live `ENFORCING` pill, and KPI cards for
+  active / queued / reserved;
+- one colour-accented provider card per route (blue, violet, teal) with a
+  gradient capacity bar, `active + queued` numerator and `limit`/`∞`;
+- active and queued calls are session **cards**, showing live/queued status,
+  title, workspace, model, kind, elapsed/waited time and actions;
+- **clicking any session card opens that session** via
+  `uiWorkspace.openSession(sessionId)` — verified live against the running
+  `Write a very long, detailed` session;
+- active cards have a soft animated green border glow and a pulsing live dot;
+  hover lifts cards and reveals “Open ↗”;
+- subagent reservations are compact cards with parent → child title, tool and age;
+- the whole page uses light tinted cards, gradient accents, dark-mode fallbacks
+  and `prefers-reduced-motion` handling.
+
+32 capacity tests pass, hooks/verify clean. Commit `e160850`.
