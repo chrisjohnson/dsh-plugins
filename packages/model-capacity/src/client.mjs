@@ -76,6 +76,13 @@ window.__ModuleLoader__.load({
 			+ ".mc-notice{padding:7px 10px;border-radius:8px;background:#fff7e6;border:.5px solid #f0d39a;color:#7a5200;font-size:12px;margin-bottom:10px}"
 			+ ".mc-mono{font:11px/16px ui-monospace,monospace}"
 			+ ".mc-session{font-weight:600;color:var(--dsw-alias-label-primary,#111)}"
+			+ ".mc-nav{display:inline-flex;align-items:center;gap:4px;min-width:0}"
+			+ ".mc-nav-badges{display:inline-flex;align-items:center;gap:2px;min-width:0}"
+			+ ".mc-badge{font:600 8px/12px ui-monospace,monospace;padding:0 3px;border-radius:3px;color:#fff;white-space:nowrap;letter-spacing:-.02em}"
+			+ ".mc-badge.ok,.mc-dot.ok{background:#1d6b32}"
+			+ ".mc-badge.full,.mc-dot.full{background:#a16207}"
+			+ ".mc-badge.waiting,.mc-dot.waiting{background:#c2410c}"
+			+ ".mc-dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex:none}"
 			+ "@media (max-width:700px){.mc-root{font-size:12px}}";
 
 		function ensureStyles() {
@@ -86,12 +93,44 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 
+		function badgeState(provider) {
+			if (provider.waiters.length > 0) return "waiting";
+			if (!provider.unlimited && provider.used >= provider.limit) return "full";
+			return "ok";
+		}
+
+		function badgeCount(provider) {
+			return provider.used + "/" + (provider.unlimited ? "\u221e" : provider.limit);
+		}
+
+		function badgeTitle(provider) {
+			return provider.name + ": " + provider.used + "/" + (provider.unlimited ? "unlimited" : provider.limit) +
+				" \u00b7 " + provider.active.length + " active \u00b7 " + provider.waiters.length + " waiting";
+		}
+
 		function CapacityIcon(props) {
 			var size = props && props.size ? props.size : 16;
-			return h("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
-				h("rect", { x: 1.5, y: 9, width: 3, height: 5.5, rx: 1, fill: "currentColor", opacity: 0.5 }),
-				h("rect", { x: 6.5, y: 5.5, width: 3, height: 9, rx: 1, fill: "currentColor", opacity: 0.7 }),
-				h("rect", { x: 11.5, y: 2, width: 3, height: 12.5, rx: 1, fill: "currentColor", opacity: 0.9 })
+			var pair = useSnapshot(1500);
+			var snapshot = pair[0];
+			// The sidebar re-renders the glyph at 18px in the collapsed rail and
+			// 16px expanded. Full count badges only fit when expanded; the rail gets
+			// one colored dot per provider with the same tooltip.
+			var compact = size === 18;
+			var providers = snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : [];
+			return h("span", { className: "mc-nav" },
+				h("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+					h("rect", { x: 1.5, y: 9, width: 3, height: 5.5, rx: 1, fill: "currentColor", opacity: 0.5 }),
+					h("rect", { x: 6.5, y: 5.5, width: 3, height: 9, rx: 1, fill: "currentColor", opacity: 0.7 }),
+					h("rect", { x: 11.5, y: 2, width: 3, height: 12.5, rx: 1, fill: "currentColor", opacity: 0.9 })
+				),
+				providers.length > 0 ? h("span", { className: "mc-nav-badges" },
+					providers.map(function (provider) {
+						var state = badgeState(provider);
+						var title = badgeTitle(provider);
+						if (compact) return h("span", { key: provider.name, className: "mc-dot " + state, title: title });
+						return h("span", { key: provider.name, className: "mc-badge " + state, title: title, children: badgeCount(provider) });
+					})
+				) : null
 			);
 		}
 

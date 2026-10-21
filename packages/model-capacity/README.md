@@ -84,6 +84,11 @@ are already interrupted by the restart). No database is used.
 
 ## Panel
 
+- The **Capacity** sidebar entry carries one tiny badge per provider in real
+  time: `0/2`, `2/2`, `3/∞`, coloured green while there is free capacity, yellow
+  when exactly at capacity, and dark orange when anything is waiting. Hovering a
+  badge names the provider (`APU: 2/2 · 2 active · 1 waiting`). The collapsed rail
+  shows one coloured dot per provider with the same tooltip.
 - `sidebar.panellist` entry **Capacity** → `main` panel showing per provider:
   `used/limit`, active leases (session title, workspace, model, elapsed), FIFO
   waiters (position, session title, workspace, model, waited) and subagent
