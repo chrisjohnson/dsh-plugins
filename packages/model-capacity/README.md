@@ -80,9 +80,11 @@ are already interrupted by the restart). No database is used.
 ## Panel
 
 - `sidebar.panellist` entry **Capacity** → `main` panel showing per provider:
-  `used/limit`, active leases (session, model, elapsed), FIFO waiters
-  (position, session, model, waited) and subagent reservations (parent, child,
-  tool, age, state).
+  `used/limit`, active leases (session title, workspace, model, elapsed), FIFO
+  waiters (position, session title, workspace, model, waited) and subagent
+  reservations (parent/child titles, tool, age, state). Session titles come from
+  the session log's `title` projection; workspace names come from the workspace
+  registry, matched by the session's cwd.
 - `conversation.input.dock` on every session: appears only while that session has
   a queued call.
 - Controls: **Cancel turn** (safe; cancels the session's active turn, which

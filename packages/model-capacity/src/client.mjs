@@ -32,6 +32,14 @@ window.__ModuleLoader__.load({
 			return Math.floor(m / 60) + "h " + (m % 60) + "m";
 		}
 
+		function shortId(id) {
+			return typeof id === "string" && id.length > 14 ? id.slice(-8) : (id || "no session");
+		}
+
+		function sessionLabel(entry) {
+			return (entry && entry.sessionTitle) || shortId(entry && entry.sessionId);
+		}
+
 		function fmtTime(ms) {
 			if (!ms) return "—";
 			try { return new Date(ms).toLocaleTimeString(); } catch (e) { return "—"; }
@@ -67,6 +75,7 @@ window.__ModuleLoader__.load({
 			+ ".mc-dock-title{font-weight:600}"
 			+ ".mc-notice{padding:7px 10px;border-radius:8px;background:#fff7e6;border:.5px solid #f0d39a;color:#7a5200;font-size:12px;margin-bottom:10px}"
 			+ ".mc-mono{font:11px/16px ui-monospace,monospace}"
+			+ ".mc-session{font-weight:600;color:var(--dsw-alias-label-primary,#111)}"
 			+ "@media (max-width:700px){.mc-root{font-size:12px}}";
 
 		function ensureStyles() {
@@ -170,7 +179,9 @@ window.__ModuleLoader__.load({
 					p.active.map(function (lease) {
 						return h("div", { className: "mc-row", key: lease.leaseId },
 							h("span", { className: "mc-key", children: lease.kind }),
-							h("span", { className: "mc-grow", children: (lease.model || "?") + " · " + (lease.sessionId || "no session") }),
+							h("span", { className: "mc-grow", title: lease.sessionId || "" },
+								h("b", { className: "mc-session", children: sessionLabel(lease) }),
+								h("span", { className: "mc-dim", children: " · " + (lease.workspace || "no workspace") + " · " + (lease.model || "?") })),
 							h("span", { className: "mc-dim mc-mono", children: fmtMs(lease.elapsedMs) }),
 							h("button", { className: "mc-btn", disabled: busy === lease.leaseId, onClick: function () { props.onCancelSession(lease.sessionId); }, children: "Cancel turn" }),
 							h("button", {
@@ -189,7 +200,9 @@ window.__ModuleLoader__.load({
 						return h("div", { className: "mc-row", key: waiter.waiterId },
 							h("span", { className: "mc-key", children: "#" + waiter.position }),
 							h("span", { className: "mc-chip", children: waiter.kind || "call" }),
-							h("span", { className: "mc-grow", children: (waiter.model || "?") + " · " + (waiter.sessionId || "no session") }),
+							h("span", { className: "mc-grow", title: waiter.sessionId || "" },
+								h("b", { className: "mc-session", children: sessionLabel(waiter) }),
+								h("span", { className: "mc-dim", children: " · " + (waiter.workspace || "no workspace") + " · " + (waiter.model || "?") })),
 							h("span", { className: "mc-dim mc-mono", children: fmtMs(waiter.waitedMs) }),
 							h("button", { className: "mc-btn", disabled: !waiter.sessionId, onClick: function () { props.onCancelSession(waiter.sessionId); }, children: "Cancel" })
 						);
@@ -199,7 +212,9 @@ window.__ModuleLoader__.load({
 					p.reservations.map(function (reservation) {
 						return h("div", { className: "mc-row", key: reservation.reservationId },
 							h("span", { className: "mc-key", children: reservation.tool || "reservation" }),
-							h("span", { className: "mc-grow", children: (reservation.state || "pending") + " · parent " + (reservation.parentSession || "?") + (reservation.childSession ? " → child " + reservation.childSession : "") }),
+							h("span", { className: "mc-grow", title: reservation.parentSession || "" },
+								h("b", { className: "mc-session", children: (reservation.parent && reservation.parent.sessionTitle) || shortId(reservation.parentSession) }),
+								h("span", { className: "mc-dim", children: " · " + ((reservation.parent && reservation.parent.workspace) || "no workspace") + " · " + (reservation.state || "pending") + (reservation.childSession ? " → " + ((reservation.child && reservation.child.sessionTitle) || shortId(reservation.childSession)) : "") })),
 							h("span", { className: "mc-dim mc-mono", children: fmtMs(reservation.ageMs) }),
 							h("button", { className: "mc-btn danger", disabled: busy === reservation.reservationId, onClick: function () { props.onDismissReservation(reservation.reservationId); }, children: "Dismiss" })
 						);

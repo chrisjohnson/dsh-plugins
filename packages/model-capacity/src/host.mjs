@@ -30,6 +30,11 @@ export default class ModelCapacity extends Service {
       onEvent: (type, payload) => this.#event(type, payload),
     });
     this.catalog = [];
+    this.sessionMeta = new Map();
+    this.workspaceByPath = [];
+    this.metaError = null;
+    this.metaUpdatedAt = null;
+    this.metaTimer = null;
     this.refreshTimer = null;
     this.reloadTimer = null;
     this.gateDisposer = null;
@@ -142,6 +147,10 @@ export default class ModelCapacity extends Service {
     if (typeof expiry.unref === 'function') expiry.unref();
     this.expiryTimer = expiry;
     await this.refreshCatalog();
+    await this.refreshSessionMeta();
+    const metaTimer = setInterval(() => void this.refreshSessionMeta(), 10000);
+    if (typeof metaTimer.unref === 'function') metaTimer.unref();
+    this.metaTimer = metaTimer;
     this.#seedBuckets();
     this.#reportUnknownProviders();
     this.#installRoutes();
@@ -151,6 +160,7 @@ export default class ModelCapacity extends Service {
 
   stop() {
     if (this.expiryTimer !== null) clearInterval(this.expiryTimer);
+    if (this.metaTimer !== null) clearInterval(this.metaTimer);
     if (this.reloadTimer !== null) clearInterval(this.reloadTimer);
     if (this.gateDisposer !== null) {
       try {
@@ -192,10 +202,91 @@ export default class ModelCapacity extends Service {
     return entries;
   }
 
+  /**
+   * Cache `{title, cwd, workspace}` for every visible session. Titles are the
+   * session log's `title` projection; workspace names come from the workspace
+   * registry. Refreshed every 10 s so the panel can decorate synchronously
+   * without turning each poll into a full session scan.
+   */
+  async refreshSessionMeta() {
+    const controller = this.ctx.get('sessionController');
+    if (controller === undefined || typeof controller.list !== 'function') return;
+    let items = [];
+    try {
+      const listed = await controller.list({}, AbortSignal.timeout(5000));
+      items = listed?.items ?? [];
+    } catch (error) {
+      this.metaError = String(error?.message ?? error);
+      this.log.warn('capacity session metadata refresh failed: %s', this.metaError);
+      return;
+    }
+    const workspaces = this.ctx.get('workspaceRegistry')?.list?.() ?? [];
+    this.workspaceByPath = workspaces
+      .map((workspace) => ({ path: workspace.path, title: workspace.title }))
+      .sort((a, b) => b.path.length - a.path.length);
+    const next = new Map();
+    for (const item of items) {
+      const cwd = typeof item.cwd === 'string' ? item.cwd : null;
+      next.set(item.sessionId, {
+        title: item.projections?.values?.title ?? null,
+        cwd,
+        workspace: this.#workspaceFor(cwd),
+        running: item.running === true,
+      });
+    }
+    this.sessionMeta = next;
+    this.metaError = null;
+    this.metaUpdatedAt = Date.now();
+  }
+
+  #workspaceFor(cwd) {
+    if (typeof cwd !== 'string' || cwd === '') return null;
+    const match = this.workspaceByPath.find((workspace) => cwd === workspace.path || cwd.startsWith(workspace.path + '/'));
+    return match?.title ?? null;
+  }
+
+  /**
+   * Prefer the live session: the projection cache may not be mounted for cold
+   * sessions, but a live agent has its title fold and header cwd right here.
+   */
+  #describe(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '') return { sessionTitle: null, workspace: null, cwd: null };
+    const live = this.ctx.get('sessions')?.get?.(sessionId);
+    if (live !== undefined && live !== null) {
+      const title = this.ctx.get('sessionTitle')?.get?.(live)?.title ?? null;
+      const cwd = live.header?.cwd ?? null;
+      return { sessionTitle: title ?? this.sessionMeta.get(sessionId)?.title ?? null, workspace: this.#workspaceFor(cwd), cwd };
+    }
+    const meta = this.sessionMeta.get(sessionId);
+    return {
+      sessionTitle: meta?.title ?? null,
+      workspace: meta?.workspace ?? null,
+      cwd: meta?.cwd ?? null,
+    };
+  }
+
   // ------------------------------------------------------------------ panel API
 
   snapshot() {
-    return { enabled: isEnabled(this.config), ...this.manager.snapshot(), catalog: this.catalog };
+    const snap = this.manager.snapshot();
+    const providers = snap.providers.map((provider) => ({
+      ...provider,
+      active: provider.active.map((lease) => ({ ...lease, ...this.#describe(lease.sessionId) })),
+      waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.#describe(waiter.sessionId) })),
+      reservations: provider.reservations.map((reservation) => ({
+        ...reservation,
+        parent: this.#describe(reservation.parentSession),
+        child: this.#describe(reservation.childSession),
+      })),
+    }));
+    return {
+      enabled: isEnabled(this.config),
+      asOf: snap.asOf,
+      totals: snap.totals,
+      providers,
+      catalog: this.catalog,
+      metadata: { sessions: this.sessionMeta.size, updatedAt: this.metaUpdatedAt, error: this.metaError },
+    };
   }
 
   isWaitingForSession(sessionId) {
