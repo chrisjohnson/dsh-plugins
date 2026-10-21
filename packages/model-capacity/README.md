@@ -49,10 +49,16 @@ in your own profile patch (a patch layer replaces a row's whole `config`).
 | `reservationTtlMs` | Cleanup only: a subagent reservation whose child never starts is released after this long. This is **not** a queue timeout. |
 | `subagentTools` | Tools that preflight and fail immediately. `workflow` is deliberately excluded: its fan-out is not declared in the call, so there is no honest capacity statement; its children start sessions normally and queue. |
 
-Limits are validated against `ctx.llm.listProviders()` at boot; a limit naming a
-provider the host does not offer refuses to start. The config is watched through
-the host `configEditor` and swapped atomically; an invalid reload keeps the
-previous limits.
+Every provider named in `limits` has a visible queue even at `0/limit`, and the
+deployment's default model provider is seeded the same way; other providers
+appear on first use. Adding both of your provider routes to `limits` is the
+simplest way to see two queues in the panel.
+
+Limits are validated against `ctx.llm.listProviders()` when adapters register; a
+limit naming a route the host never offers is logged loudly (the configured limit
+still applies if it appears). The config is watched through the host
+`configEditor` and swapped atomically; an invalid reload keeps the previous
+limits.
 
 ## Behavior
 

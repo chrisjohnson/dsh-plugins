@@ -42,7 +42,7 @@ export default class ModelCapacity extends Service {
       throw new ConfigError('dsh-model-capacity needs the host LLM service (ctx.llm)');
     }
     this.llm = llm;
-    for (const limit of resolved.limits) this.manager.bucket(limit.provider);
+    this.#seedBuckets();
 
     ctx.effect(() => {
       void this.start().catch((error) => this.log.error('start failed: %s', String(error?.stack ?? error)));
@@ -55,6 +55,17 @@ export default class ModelCapacity extends Service {
    * so a missing route is a loud diagnostic rather than a construction throw.
    * The configured limit still applies the moment that provider appears.
    */
+  /**
+   * Make the panel honest before any call happens: a configured limit and the
+   * deployment's default model route each get a visible queue, even at 0/limit.
+   * Other providers appear lazily on first use.
+   */
+  #seedBuckets() {
+    for (const limit of this.config.limits) this.manager.bucket(limit.provider);
+    const selection = this.ctx.get('agentDefaultModel')?.currentSelection?.();
+    if (typeof selection?.provider === 'string' && selection.provider !== '') this.manager.bucket(selection.provider);
+  }
+
   #reportUnknownProviders() {
     const offered = new Set(this.llm.listProviders().map((provider) => provider.id));
     for (const limit of this.config.limits) {
@@ -121,13 +132,17 @@ export default class ModelCapacity extends Service {
     );
     this.eventDisposers.push(
       this.ctx.on('llm/adapters-updated', () => {
-        void this.refreshCatalog().then(() => this.#reportUnknownProviders());
+        void this.refreshCatalog().then(() => {
+          this.#seedBuckets();
+          this.#reportUnknownProviders();
+        });
       }, { global: true }),
     );
     const expiry = setInterval(() => this.manager.expireReservations(), 5000);
     if (typeof expiry.unref === 'function') expiry.unref();
     this.expiryTimer = expiry;
     await this.refreshCatalog();
+    this.#seedBuckets();
     this.#reportUnknownProviders();
     this.#installRoutes();
     this.#watchConfig();
@@ -292,6 +307,7 @@ export default class ModelCapacity extends Service {
         this.manager.reservationTtlMs = config.reservationTtlMs;
         this.manager.configure(config.limits);
         last = json;
+        this.#seedBuckets();
         this.#reportUnknownProviders();
         this.log.info('capacity config reloaded');
       } catch (error) {
