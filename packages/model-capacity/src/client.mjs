@@ -17,6 +17,7 @@ window.__ModuleLoader__.load({
 		var h = React.createElement;
 
 		var connection = null;
+		var openSessionById = null;
 
 		function rpc(method, payload) {
 			if (!connection) return Promise.reject(new Error("dsh-model-capacity: connection unavailable"));
@@ -46,26 +47,82 @@ window.__ModuleLoader__.load({
 		}
 
 		var CSS =
-			".mc-root{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);font:13px/1.45 Inter,system-ui,sans-serif}"
-			+ ".mc-bar{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:.5px solid var(--dsw-alias-border-l1,#e4e4e4);flex:none;flex-wrap:wrap}"
-			+ ".mc-title{font:600 16px/22px Inter,sans-serif;margin:0}"
-			+ ".mc-sub{color:var(--dsw-alias-label-tertiary,#888);font-size:12px}"
-			+ ".mc-spacer{flex:1}"
-			+ ".mc-body{flex:1;overflow:auto;padding:14px 18px 28px;display:flex;flex-direction:column;gap:12px;max-width:1100px}"
-			+ ".mc-card{border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:12px;background:var(--dsw-alias-bg-base,#fff);padding:12px 14px}"
-			+ ".mc-cardhead{display:flex;align-items:center;gap:8px;margin-bottom:8px}"
-			+ ".mc-cardtitle{font:600 13px/18px Inter,sans-serif}"
-			+ ".mc-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);font:500 10px/16px Inter,sans-serif;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap}"
-			+ ".mc-chip.on{background:var(--dsw-alias-bg-layer-2,#eef1f5);border-color:transparent;color:var(--dsw-alias-label-primary,#111)}"
-			+ ".mc-chip.warn{background:#fff4e5;border-color:#f0c987;color:#8a5300}"
-			+ ".mc-chip.err{background:#fdecea;border-color:#f3b3ac;color:#9b1c1c}"
-			+ ".mc-chip.ok{background:#e8f6ec;border-color:#a8d8b5;color:#1d6b32}"
+			".mc-root{height:100%;min-height:0;overflow-y:auto;background:radial-gradient(900px 420px at 8% -8%,color-mix(in srgb,#3b82f6 7%,transparent),transparent 62%),radial-gradient(760px 380px at 100% 0%,color-mix(in srgb,#8b5cf6 6%,transparent),transparent 58%),var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);font:13px/1.45 Inter,system-ui,sans-serif;scrollbar-gutter:stable}"
+			+ ".mc-page{box-sizing:border-box;max-width:1180px;margin:0 auto;padding:28px clamp(20px,4vw,48px) 56px}"
+			+ ".mc-pagehead{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap}"
+			+ ".mc-pagehead-main{flex:1;min-width:0}"
+			+ ".mc-title{margin:0;font:500 20px/28px Inter,sans-serif;letter-spacing:-.01em}"
+			+ ".mc-page-sub{margin-top:4px;color:var(--dsw-alias-label-tertiary,#888);font-size:12px}"
+			+ ".mc-status{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;border:1px solid color-mix(in srgb,#22c55e 35%,var(--dsw-alias-border-l2,#ddd));background:color-mix(in srgb,#22c55e 10%,transparent);color:#15803d;font:600 10px/16px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}"
+			+ ".mc-status i{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.5);animation:mc-pulse 1.9s ease-out infinite}"
+			+ ".mc-status.off{color:#6b7280;border-color:var(--dsw-alias-border-l2,#ddd);background:var(--dsw-alias-bg-layer-2,#f3f4f6)}.mc-status.off i{background:#9ca3af;animation:none;box-shadow:none}"
+			+ ".mc-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:18px}"
+			+ ".mc-kpi{position:relative;overflow:hidden;padding:12px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--mc-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));background:linear-gradient(135deg,color-mix(in srgb,var(--mc-accent) 9%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".mc-kpi::after{content:'';position:absolute;right:-18px;top:-24px;width:76px;height:76px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--mc-accent) 18%,transparent),transparent 68%)}"
+			+ ".mc-kpi-value{font:650 24px/28px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--mc-accent)}"
+			+ ".mc-kpi-label{margin-top:2px;font-weight:600;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".mc-kpi-hint{margin-top:2px;font-size:10px;color:var(--dsw-alias-label-tertiary,#999)}"
+			+ ".mc-tone-blue{--mc-accent:#3b82f6;--mc-accent-2:#06b6d4}"
+			+ ".mc-tone-violet{--mc-accent:#8b5cf6;--mc-accent-2:#d946ef}"
+			+ ".mc-tone-teal{--mc-accent:#0d9488;--mc-accent-2:#22c55e}"
+			+ ".mc-tone-amber{--mc-accent:#d97706;--mc-accent-2:#f59e0b}"
+			+ ".mc-provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;align-items:start}"
+			+ ".mc-provider{--mc-accent:#3b82f6;--mc-accent-2:#06b6d4;position:relative;overflow:hidden;box-sizing:border-box;border:1px solid color-mix(in srgb,var(--mc-accent) 20%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:14px;background:var(--dsw-alias-bg-layer-1,#fff);padding:14px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 10px 30px rgba(15,23,42,.04)}"
+			+ ".mc-provider::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--mc-accent),var(--mc-accent-2))}"
+			+ ".mc-provider.mc-tone-0{--mc-accent:#3b82f6;--mc-accent-2:#06b6d4}"
+			+ ".mc-provider.mc-tone-1{--mc-accent:#8b5cf6;--mc-accent-2:#d946ef}"
+			+ ".mc-provider.mc-tone-2{--mc-accent:#0d9488;--mc-accent-2:#22c55e}"
+			+ ".mc-provider::after{content:'';position:absolute;right:-40px;top:-50px;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--mc-accent) 10%,transparent),transparent 70%);pointer-events:none}"
+			+ ".mc-provider.is-waiting{border-color:color-mix(in srgb,var(--mc-accent) 34%,var(--dsw-alias-border-l2,#e5e7eb));box-shadow:0 1px 2px rgba(15,23,42,.04),0 12px 34px color-mix(in srgb,var(--mc-accent) 10%,transparent)}"
+			+ ".mc-provider-head{display:flex;align-items:flex-start;gap:12px;position:relative;z-index:1}"
+			+ ".mc-provider-name{font:600 14px/20px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);overflow-wrap:anywhere}"
+			+ ".mc-provider-sub{margin-top:2px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px}"
+			+ ".mc-util{text-align:right;flex:none;margin-left:auto}"
+			+ ".mc-util strong{font:650 21px/24px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--mc-accent)}"
+			+ ".mc-util span{color:var(--dsw-alias-label-tertiary,#999);font-size:12px}"
+			+ ".mc-util small{display:block;margin-top:1px;color:var(--dsw-alias-label-tertiary,#999);font-size:9px;letter-spacing:.05em;text-transform:uppercase}"
+			+ ".mc-capbar{height:6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 14%,transparent);overflow:hidden;margin:11px 0 14px;position:relative;z-index:1}"
+			+ ".mc-capbar>span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--mc-accent),var(--mc-accent-2));transition:width .55s cubic-bezier(.2,.8,.2,1)}"
+			+ ".mc-capbar.is-waiting>span{background:linear-gradient(90deg,#f59e0b,#ef4444)}"
+			+ ".mc-section+.mc-section{margin-top:14px}"
+			+ ".mc-section-head{display:flex;align-items:center;gap:7px;margin:0 0 7px;color:var(--dsw-alias-label-secondary,#666);font:600 10px/14px Inter,sans-serif;letter-spacing:.08em;text-transform:uppercase}"
+			+ ".mc-count{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:15px;padding:0 5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2,#f1f3f6);color:var(--dsw-alias-label-secondary,#555);font:600 10px/14px ui-monospace,monospace;letter-spacing:0}"
+			+ ".mc-empty-card{padding:12px;border:1px dashed var(--dsw-alias-border-l2,#dfe3e8);border-radius:10px;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;text-align:center;background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 60%,transparent)}"
+			+ ".mc-session-card{position:relative;display:flex;flex-direction:column;gap:6px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#fff);cursor:pointer;outline:none;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;overflow:hidden}"
+			+ ".mc-session-card+.mc-session-card{margin-top:7px}"
+			+ ".mc-session-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--mc-accent) 48%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--mc-accent) 14%,transparent)}"
+			+ ".mc-session-card:focus-visible{outline:2px solid var(--mc-accent);outline-offset:2px}"
+			+ ".mc-session-card.mc-live{border-color:color-mix(in srgb,#22c55e 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#22c55e 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:mc-glow 3.2s ease-in-out infinite}"
+			+ ".mc-session-card.mc-live::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#22c55e,#06b6d4)}"
+			+ ".mc-sc-top{display:flex;align-items:center;justify-content:space-between;gap:8px}"
+			+ ".mc-sc-state{display:inline-flex;align-items:center;gap:5px;padding:1px 6px;border-radius:999px;font:600 9px/14px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase}"
+			+ ".mc-sc-state i{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}"
+			+ ".mc-sc-state.live{color:#15803d;background:color-mix(in srgb,#22c55e 13%,transparent)}.mc-sc-state.live i{background:#22c55e;animation:mc-pulse 1.8s ease-out infinite}"
+			+ ".mc-sc-state.queued{color:#b45309;background:color-mix(in srgb,#f59e0b 14%,transparent)}.mc-sc-state.queued i{background:#f59e0b}"
+			+ ".mc-sc-time{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);font-variant-numeric:tabular-nums;white-space:nowrap}"
+			+ ".mc-sc-title{font:600 12.5px/17px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);overflow-wrap:anywhere}"
+			+ ".mc-sc-meta{display:flex;flex-wrap:wrap;gap:4px;min-width:0}"
+			+ ".mc-tag{display:inline-flex;align-items:center;max-width:100%;padding:0 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1,#e8e8e8);background:var(--dsw-alias-bg-layer-2,#f6f7f9);color:var(--dsw-alias-label-tertiary,#777);font:500 9px/15px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+			+ ".mc-tag.model{color:color-mix(in srgb,var(--mc-accent) 78%,var(--dsw-alias-label-primary,#111));border-color:color-mix(in srgb,var(--mc-accent) 25%,transparent);background:color-mix(in srgb,var(--mc-accent) 8%,transparent)}"
+			+ ".mc-sc-actions{display:flex;align-items:center;gap:6px;margin-top:2px}"
+			+ ".mc-sc-open{margin-left:auto;font:600 9px/14px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--mc-accent);opacity:0;transition:opacity .15s ease;white-space:nowrap}"
+			+ ".mc-session-card:hover .mc-sc-open,.mc-session-card:focus-visible .mc-sc-open{opacity:1}"
+			+ ".mc-res-card{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#f8f9fb);font-size:11px}"
+			+ ".mc-res-card+.mc-res-card{margin-top:6px}"
+			+ ".mc-res-tool{font:600 10px/14px ui-monospace,monospace;color:#7c3aed;white-space:nowrap}"
+			+ ".mc-res-route{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".mc-res-age{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap}"
 			+ ".mc-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:.5px solid var(--dsw-alias-border-l1,#f0f0f0);font-size:12px}"
 			+ ".mc-row:first-of-type{border-top:none}"
 			+ ".mc-key{font:600 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);min-width:64px}"
 			+ ".mc-grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
 			+ ".mc-dim{color:var(--dsw-alias-label-tertiary,#888)}"
-			+ ".mc-btn{height:26px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l3,#d0d0d0);border-radius:7px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);font:500 11px/16px Inter,sans-serif;cursor:pointer;flex:none}"
+			+ ".mc-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);font:500 10px/16px Inter,sans-serif;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap}"
+			+ ".mc-chip.on{background:var(--dsw-alias-bg-layer-2,#eef1f5);border-color:transparent;color:var(--dsw-alias-label-primary,#111)}"
+			+ ".mc-chip.warn{background:#fff4e5;border-color:#f0c987;color:#8a5300}"
+			+ ".mc-chip.err{background:#fdecea;border-color:#f3b3ac;color:#9b1c1c}"
+			+ ".mc-chip.ok{background:#e8f6ec;border-color:#a8d8b5;color:#1d6b32}"
+			+ ".mc-btn{height:24px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l3,#d0d0d0);border-radius:7px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);font:500 10px/14px Inter,sans-serif;cursor:pointer;flex:none;transition:background-color .15s ease,border-color .15s ease}"
 			+ ".mc-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#f2f2f2)}"
 			+ ".mc-btn.danger{color:#b42318;border-color:#e7b4ae}"
 			+ ".mc-btn:disabled{opacity:.4;cursor:default}"
@@ -82,24 +139,23 @@ window.__ModuleLoader__.load({
 			+ ".mc-wait-row{display:flex;align-items:center;gap:8px;padding:2px 0;font:11px/16px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#777)}"
 			+ ".mc-wait-route{font:11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
 			+ ".mc-wait-ms{margin-left:auto;font:600 10px/14px ui-monospace,monospace;color:#b45309;white-space:nowrap}"
-			+ ".mc-nav-icon-wrap{position:relative;display:inline-flex;align-items:center;flex:none}"
-			+ ".mc-nav-badges{position:absolute;left:calc(100% + 68px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
-			+ ".mc-dock-title{font-weight:600}"
 			+ ".mc-notice{padding:7px 10px;border-radius:8px;background:#fff7e6;border:.5px solid #f0d39a;color:#7a5200;font-size:12px;margin-bottom:10px}"
 			+ ".mc-mono{font:11px/16px ui-monospace,monospace}"
 			+ ".mc-session{font-weight:600;color:var(--dsw-alias-label-primary,#111)}"
-			+ ".mc-nav{display:inline-flex;align-items:center;gap:4px;min-width:0}"
-			+ ".mc-nav-badges{display:inline-flex;align-items:center;gap:2px;min-width:0}"
+			+ ".mc-nav-icon-wrap{position:relative;display:inline-flex;align-items:center;flex:none}"
+			+ ".mc-nav-badges{position:absolute;left:calc(100% + 68px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
 			+ ".mc-badge{display:inline-flex;align-items:center;justify-content:center;height:14px;padding:0 6px;border-radius:999px;border:1px solid;box-sizing:border-box;font:600 9px/12px ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.02em}"
 			+ ".mc-badge.ok{color:#15803d;background:rgba(34,160,74,.12);border-color:rgba(34,160,74,.35)}"
 			+ ".mc-badge.full{color:#854d0e;background:rgba(234,179,8,.14);border-color:rgba(161,98,7,.38)}"
 			+ ".mc-badge.waiting{color:#b91c1c;background:rgba(185,28,28,.12);border-color:rgba(185,28,28,.35)}"
-			+ ".mc-dot.ok{background:#15803d}"
-			+ ".mc-dot.full{background:#a16207}"
-			+ ".mc-dot.waiting{background:#b91c1c}"
+			+ ".mc-dot.ok{background:#15803d}.mc-dot.full{background:#a16207}.mc-dot.waiting{background:#b91c1c}"
 			+ ".mc-dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex:none}"
-			+ "@media (prefers-color-scheme:dark){.mc-badge.ok{color:#86efac}.mc-badge.full{color:#fcd34d}.mc-badge.waiting{color:#fca5a5}}"
-			+ "@media (max-width:700px){.mc-root{font-size:12px}}";
+			+ "@keyframes mc-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
+			+ "@keyframes mc-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
+			+ "@media (prefers-color-scheme:dark){.mc-provider,.mc-session-card,.mc-kpi{background:var(--dsw-alias-bg-layer-1,#16181d)}.mc-session-card.mc-live{background:linear-gradient(135deg,rgba(34,197,94,.08),var(--dsw-alias-bg-layer-1,#16181d))}.mc-tag{background:rgba(255,255,255,.06)}.mc-empty-card{background:rgba(255,255,255,.02)}}"
+			+ "@media (prefers-reduced-motion:reduce){.mc-session-card.mc-live,.mc-sc-state.live i,.mc-status i{animation:none}.mc-capbar>span{transition:none}}"
+			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-provider-grid{grid-template-columns:1fr}}";
+
 
 		function ensureStyles() {
 			if (document.getElementById("model-capacity-styles")) return;
@@ -224,62 +280,115 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function CapacityKpi(props) {
+			return h("div", { className: "mc-kpi " + props.tone },
+				h("div", { className: "mc-kpi-value", children: props.value }),
+				h("div", { className: "mc-kpi-label", children: props.label }),
+				h("div", { className: "mc-kpi-hint", children: props.hint })
+			);
+		}
+
+		function SessionCard(props) {
+			var e = props.entry;
+			var active = props.state === "active";
+			var busy = props.busy === (active ? e.leaseId : e.waiterId) || props.busy === e.sessionId;
+			function open() {
+				if (props.onOpen) props.onOpen(e.sessionId);
+			}
+			function stop(event) { event.stopPropagation(); }
+			return h("div", {
+				className: "mc-session-card " + (active ? "mc-live" : "mc-queued"),
+				role: "button",
+				tabIndex: 0,
+				"aria-label": "Open session " + sessionLabel(e),
+				title: "Open session " + (e.sessionId || ""),
+				onClick: function (event) { if (!event.target.closest("button")) open(); },
+				onKeyDown: function (event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } },
+			},
+				h("div", { className: "mc-sc-top" },
+					h("span", { className: "mc-sc-state " + (active ? "live" : "queued") },
+						h("i"), active ? "live" : ("queued #" + props.position)),
+					h("span", { className: "mc-sc-time", children: active ? fmtMs(e.elapsedMs) : fmtMs(e.waitedMs) })
+				),
+				h("div", { className: "mc-sc-title", children: sessionLabel(e) }),
+				h("div", { className: "mc-sc-meta" },
+					h("span", { className: "mc-tag", children: e.workspace || "no workspace" }),
+					h("span", { className: "mc-tag model", children: e.model || "?" }),
+					h("span", { className: "mc-tag", children: e.kind || "call" })
+				),
+				h("div", { className: "mc-sc-actions" },
+					h("button", {
+						className: "mc-btn", disabled: busy,
+						onClick: function (event) { stop(event); props.onCancel(e.sessionId); },
+						children: active ? "Cancel turn" : "Cancel"
+					}),
+					active ? h("button", {
+						className: "mc-btn danger", disabled: busy,
+						onClick: function (event) {
+							stop(event);
+							if (!window.confirm("Force-release this lease? The underlying model call may still be running; this can exceed the provider limit.")) return;
+							props.onForce(e.leaseId);
+						},
+						children: "Force release"
+					}) : null,
+					h("span", { className: "mc-sc-open", children: "Open ↗" })
+				)
+			);
+		}
+
 		function ProviderCard(props) {
 			var p = props.provider;
 			var busy = props.busyId;
-			return h("div", { className: "mc-card" },
-				h("div", { className: "mc-cardhead" },
-					h("span", { className: "mc-cardtitle", children: p.name }),
-					h("span", { className: "mc-chip" + (p.unlimited ? " ok" : p.used >= p.limit ? " warn" : " ok"), children: p.used + (p.unlimited ? " / unlimited" : "/" + p.limit) + " in use" }),
-					h("span", { className: "mc-chip", children: p.active.length + " active" }),
-					h("span", { className: "mc-chip", children: p.waiters.length + " waiting" }),
-					h("span", { className: "mc-chip", children: p.reservations.length + " reserved" })
+			var demand = p.active.length + p.waiters.length;
+			var pct = p.unlimited ? 100 : Math.min(100, Math.round((demand / Math.max(1, p.limit)) * 100));
+			return h("section", { className: "mc-provider mc-tone-" + props.tone + (p.waiters.length > 0 ? " is-waiting" : "") },
+				h("div", { className: "mc-provider-head" },
+					h("div", { style: { minWidth: 0 } },
+						h("div", { className: "mc-provider-name", children: p.name }),
+						h("div", { className: "mc-provider-sub", children: p.unlimited ? "unlimited concurrency · never queues" : p.limit + " concurrent model calls" })
+					),
+					h("div", { className: "mc-util" },
+						h("strong", { children: demand }),
+						h("span", { children: "/" + (p.unlimited ? "∞" : p.limit) }),
+						h("small", { children: "active + queued" })
+					)
 				),
-				h("div", { className: "mc-dim", style: { fontSize: 11, marginBottom: 4 }, children: "Active leases" }),
-				p.active.length === 0 ? h("div", { className: "mc-empty", children: "none" }) :
-					p.active.map(function (lease) {
-						return h("div", { className: "mc-row", key: lease.leaseId },
-							h("span", { className: "mc-key", children: lease.kind }),
-							h("span", { className: "mc-grow", title: lease.sessionId || "" },
-								h("b", { className: "mc-session", children: sessionLabel(lease) }),
-								h("span", { className: "mc-dim", children: " · " + (lease.workspace || "no workspace") + " · " + (lease.model || "?") })),
-							h("span", { className: "mc-dim mc-mono", children: fmtMs(lease.elapsedMs) }),
-							h("button", { className: "mc-btn", disabled: busy === lease.leaseId, onClick: function () { props.onCancelSession(lease.sessionId); }, children: "Cancel turn" }),
-							h("button", {
-								className: "mc-btn danger", disabled: busy === lease.leaseId,
-								onClick: function () {
-									if (!window.confirm("Force-release this lease? The underlying model call may still be running; this can exceed the provider limit.")) return;
-									props.onForceRelease(lease.leaseId);
-								},
-								children: "Force release"
-							})
-						);
-					}),
-				h("div", { className: "mc-dim", style: { fontSize: 11, margin: "8px 0 4px" }, children: "FIFO queue" }),
-				p.waiters.length === 0 ? h("div", { className: "mc-empty", children: "empty" }) :
-					p.waiters.map(function (waiter) {
-						return h("div", { className: "mc-row", key: waiter.waiterId },
-							h("span", { className: "mc-key", children: "#" + waiter.position }),
-							h("span", { className: "mc-chip", children: waiter.kind || "call" }),
-							h("span", { className: "mc-grow", title: waiter.sessionId || "" },
-								h("b", { className: "mc-session", children: sessionLabel(waiter) }),
-								h("span", { className: "mc-dim", children: " · " + (waiter.workspace || "no workspace") + " · " + (waiter.model || "?") })),
-							h("span", { className: "mc-dim mc-mono", children: fmtMs(waiter.waitedMs) }),
-							h("button", { className: "mc-btn", disabled: !waiter.sessionId, onClick: function () { props.onCancelSession(waiter.sessionId); }, children: "Cancel" })
-						);
-					}),
-				h("div", { className: "mc-dim", style: { fontSize: 11, margin: "8px 0 4px" }, children: "Subagent reservations" }),
-				p.reservations.length === 0 ? h("div", { className: "mc-empty", children: "none" }) :
+				h("div", { className: "mc-capbar" + (p.waiters.length > 0 ? " is-waiting" : "") },
+					h("span", { style: { width: pct + "%" } })
+				),
+				h("div", { className: "mc-section" },
+					h("div", { className: "mc-section-head", children: ["Active", h("span", { className: "mc-count", children: p.active.length })] }),
+					p.active.length === 0 ? h("div", { className: "mc-empty-card", children: "No active calls" }) :
+						p.active.map(function (lease) {
+							return h(SessionCard, {
+								key: lease.leaseId, entry: lease, state: "active", busy: busy,
+								onCancel: props.onCancelSession, onForce: props.onForceRelease, onOpen: props.onOpen
+							});
+						})
+				),
+				h("div", { className: "mc-section" },
+					h("div", { className: "mc-section-head", children: ["Queue", h("span", { className: "mc-count", children: p.waiters.length })] }),
+					p.waiters.length === 0 ? h("div", { className: "mc-empty-card", children: "Queue empty" }) :
+						p.waiters.map(function (waiter) {
+							return h(SessionCard, {
+								key: waiter.waiterId, entry: waiter, state: "queued", position: waiter.position, busy: busy,
+								onCancel: props.onCancelSession, onForce: props.onForceRelease, onOpen: props.onOpen
+							});
+						})
+				),
+				p.reservations.length > 0 ? h("div", { className: "mc-section" },
+					h("div", { className: "mc-section-head", children: ["Reservations", h("span", { className: "mc-count", children: p.reservations.length })] }),
 					p.reservations.map(function (reservation) {
-						return h("div", { className: "mc-row", key: reservation.reservationId },
-							h("span", { className: "mc-key", children: reservation.tool || "reservation" }),
-							h("span", { className: "mc-grow", title: reservation.parentSession || "" },
-								h("b", { className: "mc-session", children: (reservation.parent && reservation.parent.sessionTitle) || shortId(reservation.parentSession) }),
-								h("span", { className: "mc-dim", children: " · " + ((reservation.parent && reservation.parent.workspace) || "no workspace") + " · " + (reservation.state || "pending") + (reservation.childSession ? " → " + ((reservation.child && reservation.child.sessionTitle) || shortId(reservation.childSession)) : "") })),
-							h("span", { className: "mc-dim mc-mono", children: fmtMs(reservation.ageMs) }),
+						var parentTitle = (reservation.parent && reservation.parent.sessionTitle) || shortId(reservation.parentSession);
+						var childTitle = reservation.childSession ? ((reservation.child && reservation.child.sessionTitle) || shortId(reservation.childSession)) : null;
+						return h("div", { className: "mc-res-card", key: reservation.reservationId },
+							h("span", { className: "mc-res-tool", children: reservation.tool || "reservation" }),
+							h("span", { className: "mc-res-route", title: reservation.parentSession || "", children: parentTitle + (childTitle ? " → " + childTitle : "") + " · " + (reservation.state || "pending") }),
+							h("span", { className: "mc-res-age", children: fmtMs(reservation.ageMs) }),
 							h("button", { className: "mc-btn danger", disabled: busy === reservation.reservationId, onClick: function () { props.onDismissReservation(reservation.reservationId); }, children: "Dismiss" })
 						);
 					})
+				) : null
 			);
 		}
 
@@ -299,25 +408,36 @@ window.__ModuleLoader__.load({
 				});
 			}
 			return h("div", { className: "mc-root" },
-				h("div", { className: "mc-bar" },
-					h("h1", { className: "mc-title", children: "Model capacity" }),
-					h("span", { className: "mc-sub", children: snapshot ? (snapshot.enabled ? "enforcing" : "disabled") + " · " + totals.active + " active · " + totals.waiting + " waiting · " + totals.reservations + " reserved" : "loading" }),
-					h("span", { className: "mc-spacer" }),
-					h("span", { className: "mc-sub", children: "FIFO per provider; no queue timeout" })
-				),
-				h("div", { className: "mc-body" },
+				h("div", { className: "mc-page" },
+					h("div", { className: "mc-pagehead" },
+						h("div", { className: "mc-pagehead-main" },
+							h("h1", { className: "mc-title", children: "Model capacity" }),
+							h("div", { className: "mc-page-sub", children: "Per-provider admission control · FIFO · no queue timeout · click any session card to open it" })
+						),
+						h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : ""), children: [h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing"] })
+					),
 					notice ? h("div", { className: "mc-notice", children: notice }) : null,
 					error ? h("div", { className: "mc-notice", children: error }) : null,
 					snapshot === null ? h("div", { className: "mc-empty", children: "Loading capacity state…" }) :
 						snapshot.providers.length === 0 ? h("div", { className: "mc-empty", children: "No provider has been used yet." }) :
-							snapshot.providers.map(function (provider) {
-								return h(ProviderCard, {
-									key: provider.name, provider: provider, busyId: busy,
-									onCancelSession: function (sessionId) { if (sessionId) run("cancelSession", { sessionId: sessionId }, sessionId); },
-									onDismissReservation: function (id) { run("dismissReservation", { reservationId: id }, id); },
-									onForceRelease: function (id) { run("forceRelease", { leaseId: id }, id); }
-								});
-							})
+							h(React.Fragment, null,
+								h("div", { className: "mc-kpis" },
+									h(CapacityKpi, { tone: "mc-tone-blue", value: totals.active, label: "Active leases", hint: "model calls holding a slot" }),
+									h(CapacityKpi, { tone: "mc-tone-amber", value: totals.waiting, label: "Queued calls", hint: "FIFO waiting for capacity" }),
+									h(CapacityKpi, { tone: "mc-tone-violet", value: totals.reservations, label: "Reservations", hint: "subagent dispatches held" })
+								),
+								h("div", { className: "mc-provider-grid" }, snapshot.providers.map(function (provider, index) {
+									return h(ProviderCard, {
+										key: provider.name, provider: provider, tone: index % 3, busyId: busy,
+										onOpen: function (sessionId) {
+											if (openSessionById !== null && sessionId) openSessionById(sessionId);
+										},
+										onCancelSession: function (sessionId) { if (sessionId) run("cancelSession", { sessionId: sessionId }, sessionId); },
+										onDismissReservation: function (id) { run("dismissReservation", { reservationId: id }, id); },
+										onForceRelease: function (id) { run("forceRelease", { leaseId: id }, id); }
+									});
+								}))
+							)
 				)
 			);
 		}
@@ -369,6 +489,13 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			connection = ctx.connection !== undefined ? ctx.connection : ctx.get ? ctx.get("connection") : null;
+			openSessionById = function (sessionId) {
+				try {
+					var uiWorkspace = ctx.get("uiWorkspace");
+					if (uiWorkspace && typeof uiWorkspace.openSession === "function") { uiWorkspace.openSession(sessionId); return true; }
+				} catch (error) { /* session navigation is best-effort */ }
+				return false;
+			};
 			var slots = ctx.slots !== undefined ? ctx.slots : ctx.get ? ctx.get("slots") : undefined;
 			if (!slots) {
 				console.error("dsh-model-capacity: slots service missing");

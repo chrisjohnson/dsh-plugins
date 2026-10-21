@@ -115,10 +115,13 @@ are already interrupted by the restart). No database is used.
   capacity, red when anything is queued. Hovering a pill names the provider
   (`local-ai-machine (apu): 3/2 · 2 active · 1 queued`). The collapsed rail hides
   the pills because the 36 px rail cannot fit them without overlapping the icon.
-- `sidebar.panellist` entry **Capacity** → `main` panel showing per provider:
-  `used/limit`, active leases (session title, workspace, model, elapsed), FIFO
-  waiters (position, session title, workspace, model, waited) and subagent
-  reservations (parent/child titles, tool, age, state). Session titles come from
+- `sidebar.panellist` entry **Capacity** → a Context-tab-like full page: header
+  with live enforcing status, KPI cards (active / queued / reserved), and one
+  colour-accented card per provider with a capacity bar. Each active or queued
+  call is a session card showing title, workspace, model, kind and elapsed/waited
+  time. **Click any session card to open that session**; active cards pulse with a
+  green glow. Subagent reservations render as compact cards. The page uses the
+  same card/hover language as `dsh-context`'s Context overview. Session titles come from
   the session log's `title` projection; workspace names come from the workspace
   registry, matched by the session's cwd.
 - `conversation.input.dock` on every session: appears only while that session has
