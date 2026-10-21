@@ -32,9 +32,11 @@ in your own profile patch (a patch layer replaces a row's whole `config`).
     defaultMaxConcurrent: 1
     limits:
       - provider: gpu-a
-        maxConcurrent: 3
+        maxConcurrent: 2
       - provider: gpu-b
-        maxConcurrent: 1
+        maxConcurrent: 2
+      - provider: cloud-proxy
+        unlimited: true
     queueLimitPerProvider: 1000
     reservationTtlMs: 300000
     subagentTools: [subagent, subagent_fork, spawn_teammate]
@@ -44,7 +46,7 @@ in your own profile patch (a patch layer replaces a row's whole `config`).
 |---|---|
 | `enabled` | `false` makes the gate and guard inert while keeping the panel available. |
 | `defaultMaxConcurrent` | Limit for a provider with no `limits` entry. Unknown providers therefore admit one call at a time. |
-| `limits[]` | `{provider, maxConcurrent}`. Capacity is **per provider**, because a provider is the physical backend a deployment split its GPUs into. Every model id behind one provider shares its slots. |
+| `limits[]` | `{provider, maxConcurrent}` or `{provider, unlimited: true}`. Capacity is **per provider**, because a provider is the physical backend a deployment split its GPUs into. Every model id behind one provider shares its slots. `unlimited: true` means no queue and no rejection for that route (intended for a cloud proxy). |
 | `queueLimitPerProvider` | Bound on queued calls per provider; exceeding it rejects new calls with `CAPACITY_QUEUE_FULL` instead of growing memory forever. |
 | `reservationTtlMs` | Cleanup only: a subagent reservation whose child never starts is released after this long. This is **not** a queue timeout. |
 | `subagentTools` | Tools that preflight and fail immediately. `workflow` is deliberately excluded: its fan-out is not declared in the call, so there is no honest capacity statement; its children start sessions normally and queue. |
@@ -69,6 +71,9 @@ limits.
 | Subagent child first call | Consumes its reservation instead of acquiring again; a title/compaction call for the child does not consume it. |
 | `workflow` | Not preflighted. Children go through the normal per-call queue once their sessions start. |
 | Kanban | Uses the same global gate per call. It no longer owns a semaphore, leases or capacity checks; `wipCap` only bounds how many tickets are in `Now`. |
+
+`unlimited: true` providers never enter the FIFO and never reject a reservation;
+the panel labels them `unlimited`.
 
 Because the wait happens **before** `next()` reaches the provider adapter, the
 provider's `streamIdleTimeoutMs` does not start until a slot exists. This is what

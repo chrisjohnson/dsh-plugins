@@ -45,7 +45,7 @@ export class CapacityManager {
   }
 
   configure(limits) {
-    this.limits = new Map(limits.map((entry) => [entry.provider, entry.maxConcurrent]));
+    this.limits = new Map(limits.map((entry) => [entry.provider, entry.unlimited === true ? Infinity : entry.maxConcurrent]));
     for (const [provider, bucket] of this.buckets) {
       bucket.limit = this.limits.get(provider) ?? this.defaultLimit;
       this.drain(provider);
@@ -239,7 +239,7 @@ export class CapacityManager {
    */
   reserve({ provider, parentSession, tool = 'subagent', callId = null }) {
     const bucket = this.bucket(provider);
-    if (this.used(provider) >= bucket.limit) {
+    if (bucket.limit !== Infinity && this.used(provider) >= bucket.limit) {
       const details = {
         provider,
         limit: bucket.limit,
@@ -402,7 +402,8 @@ export class CapacityManager {
       totalReservations += reservations.length;
       providers.push({
         name: bucket.provider,
-        limit: bucket.limit,
+        limit: bucket.limit === Infinity ? null : bucket.limit,
+        unlimited: bucket.limit === Infinity,
         active,
         waiters,
         reservations,

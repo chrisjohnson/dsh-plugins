@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG = {
 };
 
 const TOP_LEVEL = new Set(Object.keys(DEFAULT_CONFIG));
-const LIMIT_KEYS = new Set(['provider', 'maxConcurrent']);
+const LIMIT_KEYS = new Set(['provider', 'maxConcurrent', 'unlimited']);
 
 export class ConfigError extends Error {
   constructor(message, path) {
@@ -83,6 +83,11 @@ export function resolveConfig(input = {}) {
     if (!isNonEmptyString(entry.provider)) throw new ConfigError('provider must be a non-empty string', at);
     if (seen.has(entry.provider)) throw new ConfigError(`duplicate provider "${entry.provider}"`, at);
     seen.add(entry.provider);
+    if (entry.unlimited === true) {
+      if (entry.maxConcurrent !== undefined) throw new ConfigError('unlimited and maxConcurrent are mutually exclusive', at);
+      return { provider: entry.provider, unlimited: true };
+    }
+    if (entry.unlimited !== undefined) throw new ConfigError('unlimited must be true when present', `${at}.unlimited`);
     if (!Number.isInteger(entry.maxConcurrent) || entry.maxConcurrent < 1) {
       throw new ConfigError('maxConcurrent must be an integer >= 1', `${at}.maxConcurrent`);
     }
@@ -95,7 +100,8 @@ export function resolveConfig(input = {}) {
 /** The limit for one provider route. */
 export function limitFor(config, provider) {
   const entry = config.limits.find((limit) => limit.provider === provider);
-  return entry === undefined ? config.defaultMaxConcurrent : entry.maxConcurrent;
+  if (entry === undefined) return config.defaultMaxConcurrent;
+  return entry.unlimited === true ? Infinity : entry.maxConcurrent;
 }
 
 /**

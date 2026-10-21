@@ -107,6 +107,17 @@ test('queue limit rejects instead of growing without bound', async () => {
   await assert.rejects(first, (e) => e.code === 'CAPACITY_CANCELLED')
 })
 
+test('an unlimited provider never queues and never rejects a reservation', async () => {
+  const m = manager({ limits: [{ provider: 'cloud', unlimited: true }] })
+  const leases = await Promise.all(Array.from({ length: 20 }, (_, i) => m.acquire({ provider: 'cloud', sessionId: 's' + i })))
+  assert.equal(leases.length, 20)
+  assert.equal(m.snapshot().providers.find((p) => p.name === 'cloud').unlimited, true)
+  assert.equal(m.snapshot().providers.find((p) => p.name === 'cloud').limit, null)
+  const reservation = m.reserve({ provider: 'cloud', parentSession: 'p' })
+  assert.ok(reservation)
+  for (const lease of leases) lease.release()
+})
+
 test('raising a limit drains waiters', async () => {
   const m = manager({ limits: [{ provider: 'gpu', maxConcurrent: 1 }] })
   await m.acquire({ provider: 'gpu', sessionId: 'a' })

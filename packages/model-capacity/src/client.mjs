@@ -169,7 +169,7 @@ window.__ModuleLoader__.load({
 			return h("div", { className: "mc-card" },
 				h("div", { className: "mc-cardhead" },
 					h("span", { className: "mc-cardtitle", children: p.name }),
-					h("span", { className: "mc-chip" + (p.used >= p.limit ? " warn" : " ok"), children: p.used + "/" + p.limit + " in use" }),
+					h("span", { className: "mc-chip" + (p.unlimited ? " ok" : p.used >= p.limit ? " warn" : " ok"), children: p.used + (p.unlimited ? " / unlimited" : "/" + p.limit) + " in use" }),
 					h("span", { className: "mc-chip", children: p.active.length + " active" }),
 					h("span", { className: "mc-chip", children: p.waiters.length + " waiting" }),
 					h("span", { className: "mc-chip", children: p.reservations.length + " reserved" })

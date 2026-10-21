@@ -29,6 +29,13 @@ test('unknown keys warn, wrong types refuse', () => {
   assert.throws(() => resolveConfig({ subagentTools: ['ok', 3] }), ConfigError)
 })
 
+test('unlimited providers are explicit and mutually exclusive with a limit', () => {
+  const { config } = resolveConfig({ limits: [{ provider: 'cloud', unlimited: true }] })
+  assert.equal(limitFor(config, 'cloud'), Infinity)
+  assert.throws(() => resolveConfig({ limits: [{ provider: 'cloud', unlimited: true, maxConcurrent: 1 }] }), ConfigError)
+  assert.throws(() => resolveConfig({ limits: [{ provider: 'cloud', unlimited: false }] }), ConfigError)
+})
+
 test('isEnabled honours the rollout switch', () => {
   assert.equal(isEnabled(DEFAULT_CONFIG), true)
   assert.equal(isEnabled({ ...DEFAULT_CONFIG, enabled: false }), false)
