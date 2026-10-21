@@ -70,8 +70,20 @@ window.__ModuleLoader__.load({
 			+ ".mc-btn.danger{color:#b42318;border-color:#e7b4ae}"
 			+ ".mc-btn:disabled{opacity:.4;cursor:default}"
 			+ ".mc-empty{padding:10px 0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px}"
-			+ ".mc-dock{margin:0 0 8px;border:.5px solid #e9c47e;border-radius:10px;background:#fffaf0;padding:7px 10px;display:flex;align-items:center;gap:10px;font:12px/18px Inter,sans-serif;color:#6d4a00}"
+			+ ".mc-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance,16px) - var(--dsh-composer-side-clearance,16px) - var(--dsh-composer-dock-inset,8px) - var(--dsh-composer-dock-inset,8px));max-width:calc(var(--dsh-composer-card-max-width,760px) - var(--dsh-composer-dock-inset,8px) - var(--dsh-composer-dock-inset,8px));margin:0 auto 8px;border:.5px solid #e9c47e;border-radius:10px;background:#fffaf0;padding:7px 10px;display:flex;align-items:center;gap:10px;font:12px/18px Inter,sans-serif;color:#6d4a00}"
 			+ ".mc-dock .mc-grow{white-space:normal}"
+			+ ".mc-waits{margin:6px 0;border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#f7f8fa);overflow:hidden;max-width:var(--dsh-chat-content-width,760px)}"
+			+ ".mc-waits-head{display:flex;align-items:center;gap:7px;width:100%;padding:5px 9px;border:none;background:0 0;cursor:pointer;text-align:left;color:var(--dsw-alias-label-secondary,#555);font:500 11px/16px Inter,sans-serif}"
+			+ ".mc-waits-head:hover{background:var(--dsw-alias-interactive-bg-hover,#f0f0f0)}"
+			+ ".mc-waits-clock{display:inline-flex;flex:none;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".mc-waits-total{color:var(--dsw-alias-label-primary,#111);font-weight:600}"
+			+ ".mc-waits-count{display:inline-flex;align-items:center;border:1px solid rgba(180,83,9,.35);background:rgba(234,179,8,.14);color:#854d0e;border-radius:999px;padding:0 6px;font:600 9px/14px ui-monospace,monospace}"
+			+ ".mc-waits-list{border-top:.5px solid var(--dsw-alias-border-l1,#e4e4e4);max-height:180px;overflow:auto;padding:3px 9px 5px}"
+			+ ".mc-wait-row{display:flex;align-items:center;gap:8px;padding:2px 0;font:11px/16px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#777)}"
+			+ ".mc-wait-route{font:11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+			+ ".mc-wait-ms{margin-left:auto;font:600 10px/14px ui-monospace,monospace;color:#b45309;white-space:nowrap}"
+			+ ".mc-nav-icon-wrap{position:relative;display:inline-flex;align-items:center;flex:none}"
+			+ ".mc-nav-badges{position:absolute;left:calc(100% + 68px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
 			+ ".mc-dock-title{font-weight:600}"
 			+ ".mc-notice{padding:7px 10px;border-radius:8px;background:#fff7e6;border:.5px solid #f0d39a;color:#7a5200;font-size:12px;margin-bottom:10px}"
 			+ ".mc-mono{font:11px/16px ui-monospace,monospace}"
@@ -123,25 +135,24 @@ window.__ModuleLoader__.load({
 			var size = props && props.size ? props.size : 16;
 			var pair = useSnapshot(1500);
 			var snapshot = pair[0];
-			// The sidebar re-renders the glyph at 18px in the collapsed rail and
-			// 16px expanded. Full count badges only fit when expanded; the rail gets
-			// one colored dot per provider with the same tooltip.
-			var compact = size === 18;
 			var providers = snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : [];
-			return h("span", { className: "mc-nav" },
+			var compact = size === 18;
+			return h("span", { className: "mc-nav-icon-wrap" },
 				h("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
 					h("rect", { x: 1.5, y: 9, width: 3, height: 5.5, rx: 1, fill: "currentColor", opacity: 0.5 }),
 					h("rect", { x: 6.5, y: 5.5, width: 3, height: 9, rx: 1, fill: "currentColor", opacity: 0.7 }),
 					h("rect", { x: 11.5, y: 2, width: 3, height: 12.5, rx: 1, fill: "currentColor", opacity: 0.9 })
 				),
-				providers.length > 0 ? h("span", { className: "mc-nav-badges" },
-					providers.map(function (provider) {
-						var state = badgeState(provider);
-						var title = badgeTitle(provider);
-						if (compact) return h("span", { key: provider.name, className: "mc-dot " + state, title: title });
-						return h("span", { key: provider.name, className: "mc-badge " + state, title: title, children: badgeCount(provider) });
-					})
-				) : null
+				!compact && providers.length > 0 ? h("span", { className: "mc-nav-badges" }, providers.map(function (provider) {
+					var state = provider.waiters.length > 0 ? "waiting" : (!provider.unlimited && badgeDemand(provider) >= provider.limit ? "full" : "ok");
+					return h("span", {
+						key: provider.name,
+						className: "mc-badge " + state,
+						title: provider.name + ": " + badgeDemand(provider) + "/" + (provider.unlimited ? "unlimited" : provider.limit) +
+							" \u00b7 " + provider.active.length + " active \u00b7 " + provider.waiters.length + " queued",
+						children: badgeDemand(provider) + "/" + (provider.unlimited ? "\u221e" : provider.limit),
+					});
+				})) : null
 			);
 		}
 
@@ -311,6 +322,51 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function useSessionWaits(sessionId) {
+			var s = React.useState([]);
+			var waits = s[0], setWaits = s[1];
+			React.useEffect(function () {
+				if (!sessionId) return undefined;
+				var alive = true;
+				function load() {
+					rpc("sessionWaits", { sessionId: sessionId }).then(function (res) {
+						if (!alive) return;
+						if (res && res.ok && res.value && Array.isArray(res.value.waits)) setWaits(res.value.waits);
+					}, function () {});
+				}
+				load();
+				var timer = setInterval(load, 2000);
+				return function () { alive = false; clearInterval(timer); };
+			}, [sessionId]);
+			return waits;
+		}
+
+		function CapacityWaitCard(props) {
+			var waits = useSessionWaits(props.sessionId);
+			var openState = React.useState(true);
+			var open = openState[0], setOpen = openState[1];
+			var turn = props.turn && typeof props.turn.turn === "number" ? props.turn.turn : props.turn;
+			var mine = (waits || []).filter(function (w) { return w.turn === turn; });
+			if (mine.length === 0) return null;
+			var total = mine.reduce(function (sum, w) { return sum + (Number(w.waitedMs) || 0); }, 0);
+			return h("div", { className: "mc-waits", "data-turn": turn },
+				h("button", { type: "button", className: "mc-waits-head", title: "Capacity waits recorded for this turn. Client-side only; not part of model context.", onClick: function () { setOpen(!open); } },
+					h("span", { className: "mc-waits-clock", children: h("svg", { width: 12, height: 12, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+						h("circle", { cx: 8, cy: 8, r: 6.2, stroke: "currentColor", strokeWidth: 1.2 }),
+						h("path", { d: "M8 4.4V8l2.6 1.6", stroke: "currentColor", strokeWidth: 1.2, strokeLinecap: "round" })) }),
+					h("span", { children: "Waited for capacity" }),
+					h("span", { className: "mc-waits-total", children: fmtMs(total) }),
+					h("span", { className: "mc-waits-count", children: mine.length === 1 ? "1 wait" : mine.length + " waits" }),
+					h("span", { className: "mc-dim", style: { marginLeft: "auto" }, children: open ? "hide" : "show" })
+				),
+				open ? h("div", { className: "mc-waits-list" }, mine.map(function (w) {
+					return h("div", { className: "mc-wait-row", key: w.id },
+						h("span", { className: "mc-wait-route", children: (w.provider || "?") + "/" + (w.model || "?") }),
+						h("span", { className: "mc-wait-ms", children: fmtMs(w.waitedMs) }));
+				})) : null
+			);
+		}
+
 		function apply(ctx) {
 			connection = ctx.connection !== undefined ? ctx.connection : ctx.get ? ctx.get("connection") : null;
 			var slots = ctx.slots !== undefined ? ctx.slots : ctx.get ? ctx.get("slots") : undefined;
@@ -332,6 +388,14 @@ window.__ModuleLoader__.load({
 					return slots.register({ name: "main", key: "model-capacity" }, CapacityPanel);
 				});
 			}, "dsh-model-capacity: panel page");
+			ctx.effect(function () {
+				return slots.inject("conversation.chat.turnTail", function () {
+					return slots.register(
+						{ name: "conversation.chat.turnTail", id: "model-capacity-waits", order: 8, inject: function (sessionId) { return { sessionId: sessionId }; } },
+						CapacityWaitCard
+					);
+				});
+			}, "dsh-model-capacity: turn wait history");
 			ctx.effect(function () {
 				return slots.inject("conversation.input.dock", function () {
 					return slots.register(

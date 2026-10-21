@@ -13,7 +13,7 @@ import { CapacityManager } from './semaphore.mjs';
 
 const PLUGIN_NAME = 'dsh-model-capacity';
 const API_BASE = '/api/modelCapacity';
-const ENDPOINTS = ['snapshot', 'cancelSession', 'cancelWaiter', 'dismissReservation', 'forceRelease'];
+const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'dismissReservation', 'forceRelease'];
 
 export default class ModelCapacity extends Service {
   constructor(ctx, config = {}) {
@@ -31,6 +31,8 @@ export default class ModelCapacity extends Service {
     });
     this.catalog = [];
     this.sessionMeta = new Map();
+    this.waitHistory = [];
+    this.waitSeq = 0;
     this.workspaceByPath = [];
     this.metaError = null;
     this.metaUpdatedAt = null;
@@ -85,6 +87,9 @@ export default class ModelCapacity extends Service {
   }
 
   #event(type, payload) {
+    if (type === 'acquired' && payload.sessionId && payload.kind === 'call' && Number(payload.waitedMs) > 250) {
+      this.#recordWait(payload);
+    }
     if (process.env.DSH_MODEL_CAPACITY_DEBUG === '1') this.log.info('capacity %s %o', type, payload);
     try {
       this.ctx.emit('capacity/' + type, payload);
@@ -208,6 +213,29 @@ export default class ModelCapacity extends Service {
    * registry. Refreshed every 10 s so the panel can decorate synchronously
    * without turning each poll into a full session scan.
    */
+  /** Attach a completed wait to the turn that was open when the call was admitted. */
+  #recordWait(payload) {
+    const session = this.ctx.get('sessions')?.get?.(payload.sessionId);
+    const boundary = session === undefined ? undefined : this.ctx.get('sessionProjections')?.stateOf?.(session, 'turnBoundary');
+    const turn = boundary?.lastTurn;
+    if (typeof turn !== 'number' || turn < 1) return;
+    this.waitSeq += 1;
+    this.waitHistory.push({
+      id: this.waitSeq,
+      sessionId: payload.sessionId,
+      turn,
+      provider: payload.provider,
+      model: payload.model ?? null,
+      waitedMs: Math.max(0, Math.round(Number(payload.waitedMs))),
+      at: Date.now(),
+    });
+    if (this.waitHistory.length > 5000) this.waitHistory.splice(0, this.waitHistory.length - 5000);
+  }
+
+  sessionWaits(sessionId) {
+    return this.waitHistory.filter((entry) => entry.sessionId === sessionId).sort((a, b) => a.at - b.at);
+  }
+
   async refreshSessionMeta() {
     const controller = this.ctx.get('sessionController');
     if (controller === undefined || typeof controller.list !== 'function') return;
@@ -336,6 +364,9 @@ export default class ModelCapacity extends Service {
           switch (endpoint) {
             case 'snapshot':
               return { ok: true, value: this.snapshot() };
+            case 'sessionWaits':
+              if (typeof p.sessionId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'sessionId is required', details: {} } };
+              return { ok: true, value: { waits: this.sessionWaits(p.sessionId) } };
             case 'cancelSession':
               if (typeof p.sessionId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'sessionId is required', details: {} } };
               return { ok: true, value: this.cancelSession(p.sessionId) };

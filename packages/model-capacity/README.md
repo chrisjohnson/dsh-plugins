@@ -76,7 +76,30 @@ limits.
 the panel labels them `unlimited`.
 
 Because the wait happens **before** `next()` reaches the provider adapter, the
-provider's `streamIdleTimeoutMs` does not start until a slot exists. This is what
+provider's `streamIdleTimeoutMs` does not start until a slot exists.
+
+### Session-log wait history
+
+Every queued main call that waited more than 250 ms is recorded in memory with
+its provider, model, turn number and duration. A `conversation.chat.turnTail`
+entry renders those waits beneath the turn in the chat log as a small collapsible
+card:
+
+```
+Waited for capacity  24s  1 wait
+  local-ai-machine (apu)/medium-dense        24s
+```
+
+This is client-only and never written to the session log or model context, so it
+does not perturb the conversation. The history is per host process (a restart
+clears it) and covers main calls only; title/compaction waits and judge calls are
+not recorded.
+
+### Composer dock width
+
+The queued-session banner uses the same width calculation as the core composer
+dock (`--dsh-composer-side-clearance` / `--dsh-composer-card-max-width`), so it
+aligns with the message column instead of spanning the full viewport. This is what
 makes multi-hour waits safe for a machine that thinks for hours.
 
 The gate is in-process: a host restart clears all leases and waiters (their turns
@@ -85,13 +108,13 @@ are already interrupted by the restart). No database is used.
 ## Panel
 
 - The **Capacity** sidebar entry carries one tiny round pill per provider in
-  real time. The left number is **active + queued** demand, so a full provider
-  with one call waiting reads `3/2`; an unlimited provider reads `3/∞`. Pills use
-  a light tinted fill with a darker border and text: green while there is free
-  capacity, yellow when exactly at capacity, red when anything is queued.
-  Hovering a pill names the provider (`local-ai-machine (apu): 3/2 · 2 active ·
-  1 queued`). The collapsed rail shows one coloured dot per provider with the
-  same tooltip.
+  real time, rendered after the word `Capacity`. The left number is **active +
+  queued** demand, so a full provider with one call waiting reads `3/2`; an
+  unlimited provider reads `3/∞`. Pills use a light tinted fill with a darker
+  border and text: green while there is free capacity, yellow when exactly at
+  capacity, red when anything is queued. Hovering a pill names the provider
+  (`local-ai-machine (apu): 3/2 · 2 active · 1 queued`). The collapsed rail hides
+  the pills because the 36 px rail cannot fit them without overlapping the icon.
 - `sidebar.panellist` entry **Capacity** → `main` panel showing per provider:
   `used/limit`, active leases (session title, workspace, model, elapsed), FIFO
   waiters (position, session title, workspace, model, waited) and subagent

@@ -31,6 +31,19 @@ test('admits up to the limit, queues FIFO, and drains on release', async () => {
   assert.equal(m.used('gpu'), 0)
 })
 
+test('a queued lease records how long it waited', async () => {
+  let clock = 1000
+  const m = manager({ now: () => clock })
+  const a = await m.acquire({ provider: 'gpu', sessionId: 'a' })
+  const b = await m.acquire({ provider: 'gpu', sessionId: 'b' })
+  const waiting = m.acquire({ provider: 'gpu', sessionId: 'c' })
+  clock = 1750
+  a.release()
+  const c = await waiting
+  assert.equal(c.waitedMs, 750)
+  b.release(); c.release()
+})
+
 test('aborting a waiter removes it without leaking a slot', async () => {
   const m = manager()
   const a = await m.acquire({ provider: 'gpu', sessionId: 'a' })

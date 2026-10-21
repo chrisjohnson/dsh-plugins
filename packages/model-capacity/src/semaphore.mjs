@@ -96,12 +96,22 @@ export class CapacityManager {
       kind: kind ?? 'call',
       startedAt: this.now(),
       released: false,
+      waitedMs: Number(meta?.waitedMs ?? 0),
       ...meta,
       release: () => this.release(id),
     };
     bucket.active.add(id);
     this.leases.set(id, lease);
-    this.onEvent('acquired', { leaseId: id, provider, model: lease.model, sessionId: lease.sessionId, kind: lease.kind, active: bucket.active.size, limit: bucket.limit });
+    this.onEvent('acquired', {
+      leaseId: id,
+      provider,
+      model: lease.model,
+      sessionId: lease.sessionId,
+      kind: lease.kind,
+      waitedMs: lease.waitedMs,
+      active: bucket.active.size,
+      limit: bucket.limit,
+    });
     return lease;
   }
 
@@ -228,7 +238,10 @@ export class CapacityManager {
       if (waiter.signal !== undefined && waiter.signal !== null && waiter.onAbort !== null) {
         waiter.signal.removeEventListener('abort', waiter.onAbort);
       }
-      waiter.resolve(this.#lease(provider, waiter.model, waiter.sessionId, waiter.kind, waiter.meta));
+      waiter.resolve(this.#lease(provider, waiter.model, waiter.sessionId, waiter.kind, {
+        ...waiter.meta,
+        waitedMs: Math.max(0, this.now() - waiter.enqueuedAt),
+      }));
     }
   }
 
