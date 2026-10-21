@@ -334,3 +334,88 @@ human involvement, telemetry, surfaces, config, build order, DoD, deferred work,
 resolved decisions). Environment findings and resolved choices are in the
 package's `DECISIONS.md`; this file records plan vs. actual and the remaining
 release work.
+
+---
+
+## 13. 2026-10-21 — global capacity plugin (post-kanban)
+
+### What changed
+
+Concurrency moved out of kanban into a new separate host plugin:
+
+- `/home/dsh/dsh-lab/plugins/dsh-plugins/packages/model-capacity`
+  - `src/config.mjs` — enabled switch, per-provider limits, default 1, queue
+    bound, reservation TTL, subagent tool list.
+  - `src/semaphore.mjs` — per-provider buckets: active leases, FIFO waiters,
+    reservations, snapshot, cancel/force-release, TTL.
+  - `src/gate.mjs` — one global `llm/stream` waterfall: acquire before `next()`,
+    release in `finally`; a subagent child's first main call consumes its
+    reservation; title/compaction calls do not.
+  - `src/guard.mjs` — synchronous preflight for subagent tools; error lists
+    active/reserved/waiting and free routes.
+  - `src/host.mjs` — Cordis `ctx.capacity` service, global gate + tool guard,
+    `session/created` reservation binding, `session/event` cleanup on tool error,
+    adapters-updated catalog, config reload via `configEditor`, `/api/modelCapacity/*`.
+  - `src/client.mjs` — `Capacity` sidebar panel + `main` page; session
+    `conversation.input.dock` banner with position/waited and Cancel turn;
+    lease/wait/reservation tables, dismiss and force-release.
+  - 29 tests.
+
+Kanban simplified to consume the global gate:
+
+- Removed `leases` table usage (schema v2 drops it), lease methods, heartbeat,
+  `maxConcurrent` validation/use, capacity admission, `pending_capacity` group
+  and events.
+- `Now` groups are `active | waiting on you | blocked`. A ticket in `now` is
+  active even while its model call is queued; the Capacity panel shows the queue.
+- Role stall watchdog asks `ctx.capacity.isWaitingForSession(sessionId)` so
+  multi-hour queue waits are not counted as a stalled model call.
+- `providers[]` now carries tier/prices only; a legacy `maxConcurrent` warns and
+  is ignored.
+- Tests updated: 57 pass.
+
+### Lab config
+
+`model-capacity` row:
+`enabled: true`, `defaultMaxConcurrent: 1`, `limits: local-ai-machine: 3`,
+`queueLimitPerProvider: 1000`, `reservationTtlMs: 300000`,
+`subagentTools: [subagent, subagent_fork, spawn_teammate]`.
+The kanban row no longer has `maxConcurrent`.
+
+### Verified in the lab
+
+- Capacity panel loads: provider `local-ai-machine 0/3`, active/waiting/reserved
+  tables.
+- Two real interactive sessions: A's main call active (cloud provider, default
+  limit 1), B's main call queued at position 1; snapshot showed
+  `active:1, waiting:2` (B main + B title). Cancelling A let B start.
+- Subagent success: a session called `subagent` on
+  `local-ai-machine/medium-moe`; child started (`started subagent edda…`).
+- Subagent capacity error (real tool result): while the cloud provider's single
+  slot was held by a title call, a session called `subagent` on
+  `local-ai-machine-cloud/deepseek-flash` and received:
+  `Error: capacity: provider "local-ai-machine-cloud" is at its limit (1 active,
+  0 reserved, 0 waiting). Cannot dispatch "subagent" on "deepseek-flash". Free
+  now: deepseek-official/…, local-ai-machine/medium-moe. Retry with provider/model
+  set to one of those. This tool does not queue; …`
+- Failed-route reservation cleanup verified by code/test (tool error cancels the
+  reservation by `callId`); TTL and `session/disposed` also clean up.
+- Capacity limit live reload: local limit 3→2→3 through the profile YAML, no
+  restart.
+- Kanban post-refactor: a real ticket (KAN-3) ran grill judgement → plan →
+  coverage → implement (wrote `src/status.txt = KANBAN_OK`) → verify → review and
+  reached `done`; no lease rows, capacity snapshot showed per-call activity.
+- Repo gates: 86 tests across kanban+capacity pass; `verify.mjs` 0/0; hooks gate
+  clean for both clients.
+
+### Not yet done
+
+- Session dock visual check: the panel and queue were verified; the dock's
+  queue-filtered rendering was not exercised in a selected session (the title
+  waiter case was deliberately filtered out). It passes the hooks gate.
+- Release: model-capacity is 0.1.0 on branch `feat/kanban` (commit `3979c49`),
+  not tagged/pushed. Kanban still 0.1.0.
+- Deployment: dsh-deploy profile still has no capacity row or kanban pin; needs
+  release tags, then both packages pinned and the service restarted in a planned
+  window.
+- Workflow fan-out is deliberately not preflighted; its children queue normally.
