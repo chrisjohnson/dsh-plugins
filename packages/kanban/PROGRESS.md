@@ -604,3 +604,42 @@ The Capacity panel was rebuilt in the visual language of the Context tab:
   and `prefers-reduced-motion` handling.
 
 32 capacity tests pass, hooks/verify clean. Commit `e160850`.
+
+### 2026-10-22 02:10 — Activity rename, capacity release, kanban shared session/UI
+
+**dsh-model-capacity is released.** The sidebar entry and page title are now
+**Activity**. `snapshot()` no longer calls private methods, fixing the
+`Receiver must be an instance of class ModelCapacity` error when Kanban reads
+`ctx.get('capacity').snapshot()` through the Cordis service proxy.
+
+- release PR: https://github.com/chrisjohnson/dsh-plugins/pull/18
+- merged commit: `558dcbdbef7501d0d54c2c8d83b879c4c5c2cf1e`
+- tag: `dsh-model-capacity-v0.1.0` (pushed)
+- CI: contract, tests on Node 20/22/24, and compose all pass.
+
+Kanban changes on `feat/kanban` (pushed, not released):
+
+- **One shared workflow session per ticket.** `ensureTicketSession()` creates it
+  once; each phase sets a phase-aware tool guard and calls
+  `agents.selectForNextRequest()` when the role route differs. Engine tests now
+  assert one `workflow` session across plan/implement/verify/review.
+- **New-ticket form asks for workspace and initial status** (Backlog / Now /
+  Blocked). Host `create` accepts `workspaceCwd` and `column`; `now` starts the
+  intake immediately.
+- **Activity-style visual redesign**: Work header, five KPI cards, colour-accented
+  board columns, lifecycle progress bars on every card, working-card glow,
+  a "live" badge, hero detail with a lifecycle timeline and metric cards, and
+  clickable shared-session links.
+- Kanban capacity chips now use the real `maxConcurrent`/unlimited snapshot and
+  show APU/eGPU/cloud limits instead of `0/undefined`.
+
+Verification: 89 tests pass (57 kanban + 32 capacity), hooks gates clean,
+`verify.mjs` 0/0. Live checks: workspace/status form renders with all
+workspaces; ticket created in `now` with workspace; one workflow session row
+created for the ticket; working KAN-6 card showed `live`/Running; Activity page
+loads at APU 2/eGPU 2/cloud ∞ without the receiver error.
+
+Remaining: kanban release/deploy, and a full multi-phase live ticket through
+implement→verify→review on a faster model; the planner turn is currently very
+slow on `medium-dense`, so the transition was verified by engine tests rather
+than a complete live run.
