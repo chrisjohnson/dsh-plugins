@@ -11,6 +11,13 @@
   an in-flight view, backed by a local SQLite store with forward-only migrations.
 - Code-driven lifecycle: intake, triage, grill, plan, implement, verify, review,
   with the intake-combination table enforced in the store.
+- One **shared workflow session per ticket**: every phase is a turn in that
+  session, with a phase-aware tool guard and a model-route switch between turns.
+- New-ticket form asks for the workspace and initial status; the Host accepts
+  `column: backlog|now|blocked`.
+- Activity-dashboard visual language: KPI strip, colour-accented columns,
+  lifecycle progress on cards, working-card glow, hero detail with phase
+  timeline and metric cards, and clickable session links.
 - Global per-provider capacity is delegated to `dsh-model-capacity`; Kanban owns
   no leases and no per-turn concurrency counters.
 - Role sessions created from presets, with tool allow-lists enforced by

@@ -16,7 +16,7 @@ import { mkdir } from 'node:fs/promises';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
-import { roleToolGuard } from './tools.mjs';
+import { phaseToolGuard } from './tools.mjs';
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -53,6 +53,8 @@ export class SessionDriver {
     this.waiters = new Map();
     /** sessionId -> {handle, role, preset, ticketId} */
     this.live = new Map();
+    /** ticketId -> the one shared workflow session */
+    this.ticketSessions = new Map();
     this.registeredPresets = new Map();
     this.disposed = false;
     this.offEvent = null;
@@ -118,24 +120,36 @@ export class SessionDriver {
   }
 
   /**
-   * Create one role session on a concrete route.
+   * Return the one live workflow session for a ticket, creating it on first use.
+   * Every phase runs as a turn in this session; only the model route and the
+   * phase tool mask change between turns.
    * @returns {Promise<{sessionId:string, handle:object, preset:string}>}
    */
-  async createRoleSession({ ticket, role, route }) {
+  async ensureTicketSession({ ticket, role, route }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
+    const existingId = this.ticketSessions.get(ticket.id);
+    if (existingId !== undefined) {
+      const existing = this.live.get(existingId);
+      if (existing !== undefined) return { sessionId: existingId, handle: existing.handle, preset: existing.preset };
+      this.ticketSessions.delete(ticket.id);
+    }
     if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
     const config = this.getConfig();
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     await mkdir(cwd, { recursive: true }).catch(() => {});
     const presets = this.ctx.get('agentPresets');
     if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
-    const requested = config.roles[role].preset;
+    // One preset backs the whole workflow. Role control lives in the phase
+    // guard, not in separate presets/tool masks.
+    const requested = config.roles.planner.preset;
     const resolved = await presets.resolve(requested ?? undefined);
     if (resolved.broken !== undefined) {
       throw new DispatchError(`preset ${resolved.id} is broken: ${resolved.broken}`, { code: 'PRESET_BROKEN' });
     }
-    const allow = Array.isArray(config.roles[role].allowTools) ? config.roles[role].allowTools : [];
+    const union = unionAllow(config);
     const sessionId = randomUUID();
+    const liveRef = { handle: null, role, phase: { role }, preset: resolved.id, ticketId: ticket.id, routeKey: null };
+    liveRef.phase = { role };
     const handle = await this.agents.create({
       sessionId,
       meta: { cwd, agentPreset: resolved.id },
@@ -146,20 +160,54 @@ export class SessionDriver {
       },
       setup: async (agentCtx) => {
         await presets.mount(agentCtx, resolved.id);
-        // Allow-list as a mask over the preset's inherited tools, then a
-        // monotonic guard so a newly mounted tool cannot slip past it.
+        // The visible tool set is the union of every role. The guard below
+        // narrows it to the current phase on every call, so a verifier turn
+        // cannot write even though the write tool is mounted.
         try {
-          const visible = new Set(agentCtx.tools.schemas().map((schema) => schema.name));
-          const keep = allow.filter((name) => visible.has(name));
-          if (keep.length > 0) agentCtx.tools.restrict({ allow: keep });
+          if (!union.unrestricted) {
+            const visible = new Set(agentCtx.tools.schemas().map((schema) => schema.name));
+            const keep = union.tools.filter((name) => visible.has(name));
+            if (keep.length > 0) agentCtx.tools.restrict({ allow: keep });
+          }
         } catch (error) {
-          this.log.warn('role %s: tool mask could not be applied: %s', role, String(error?.message ?? error));
+          this.log.warn('workflow session: tool mask could not be applied: %s', String(error?.message ?? error));
         }
-        agentCtx.tools.guard(roleToolGuard(role, allow));
+        agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
       },
     });
-    this.live.set(sessionId, { handle, role, preset: resolved.id, ticketId: ticket.id });
+    liveRef.handle = handle;
+    liveRef.routeKey = routeKey(route);
+    this.live.set(sessionId, liveRef);
+    this.ticketSessions.set(ticket.id, sessionId);
     return { sessionId, handle, preset: resolved.id };
+  }
+
+  /** Switch the shared session's phase; the tool guard reads this before every call. */
+  setPhase(sessionId, role) {
+    const live = this.live.get(sessionId);
+    if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
+    live.role = role;
+    live.phase.role = role;
+  }
+
+  /** Point the shared session at the next phase's provider/model route. */
+  setRoute(sessionId, route) {
+    const live = this.live.get(sessionId);
+    if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
+    const key = routeKey(route);
+    if (live.routeKey === key) return;
+    if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
+    this.agents.selectForNextRequest(live.handle.agent, {
+      provider: route.provider,
+      model: route.model,
+      ...(route.reasoningEffort === null || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+    });
+    live.routeKey = key;
+  }
+
+  liveTicketSession(ticketId) {
+    const id = this.ticketSessions.get(ticketId);
+    return id !== undefined && this.live.has(id) ? id : undefined;
   }
 
 
@@ -264,6 +312,7 @@ export class SessionDriver {
     const live = this.live.get(sessionId);
     if (live === undefined) return;
     this.live.delete(sessionId);
+    for (const [ticketId, id] of this.ticketSessions) if (id === sessionId) this.ticketSessions.delete(ticketId);
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
       this.waiters.delete(sessionId);
@@ -282,6 +331,22 @@ export class SessionDriver {
   isLive(sessionId) {
     return this.live.has(sessionId);
   }
+}
+
+function routeKey(route) {
+  return [route.provider, route.model, route.reasoningEffort ?? ''].join('|');
+}
+
+/** Explicit tool names across roles; `unrestricted` means at least one role allows all. */
+function unionAllow(config) {
+  const tools = new Set();
+  let unrestricted = false;
+  for (const role of ['griller', 'planner', 'implementer', 'verifier', 'reviewer']) {
+    const allow = Array.isArray(config.roles[role].allowTools) ? config.roles[role].allowTools : [];
+    if (allow.length === 0) unrestricted = true;
+    else for (const name of allow) tools.add(name);
+  }
+  return { tools: [...tools], unrestricted };
 }
 
 export function aggregateUsage(usages) {

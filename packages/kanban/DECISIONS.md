@@ -210,3 +210,14 @@ model route in the implementing session does not accept image input.
   with position/wait and a cancel action; a global `Capacity` panel in
   `sidebar.panellist`/`main` shows active leases, waiters and reservations with
   cancel/dismiss/force-release.
+
+## 2026-10-22 supersession — one shared session per ticket
+
+The per-phase role-session decision above is superseded. A ticket now owns one
+workflow session. Each phase is a turn in that session; the engine changes the
+tool allow-list through a phase-aware guard and calls
+`agents.selectForNextRequest()` to change provider/model for the next turn when
+the role routes differ. This preserves one continuous transcript (and its
+context) across intake → plan → implement → verify → review, instead of
+re-explaining the ticket at every boundary. `reuseSessionOnRetry` now controls
+whether a failed attempt keeps that live session or starts a fresh one.

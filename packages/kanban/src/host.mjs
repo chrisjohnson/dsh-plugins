@@ -25,6 +25,7 @@ const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 const ENDPOINTS = [
   'board',
+  'workspaces',
   'ticket',
   'create',
   'update',
@@ -172,6 +173,7 @@ export default async function kanban(ctx, config = {}) {
       });
       const groups = { active: [], waiting: [], blocked: [] };
       for (const ticket of now) groups[ticket.group]?.push(ticket);
+      byColumn.now = now;
       return {
         counts: store.counts(),
         columns: byColumn,
@@ -212,13 +214,30 @@ export default async function kanban(ctx, config = {}) {
         switch (endpoint) {
           case 'board':
             return { ok: true, value: board() };
+          case 'workspaces': {
+            const registry = ctx.get('workspaceRegistry');
+            const items = registry === undefined || typeof registry.list !== 'function' ? [] : registry.list().map((workspace) => ({
+              id: workspace.id,
+              path: workspace.path,
+              title: workspace.title,
+            }));
+            return { ok: true, value: { items } };
+          }
           case 'ticket':
             return { ok: true, value: detail(String(p.id)) };
           case 'events':
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
           case 'create': {
-            const ticket = store.createTicket(p);
+            let ticket = store.createTicket(p);
             appendConfigFingerprint(store, ticket.id);
+            const column = p.column;
+            if (column === 'now') {
+              ticket = engineRef.current.pickup(ticket.id);
+            } else if (column === 'blocked') {
+              ticket = store.transitionTicket(ticket.id, { column: 'blocked' }, { actor: 'human', reason: 'created blocked' });
+            } else if (column !== undefined && column !== 'backlog') {
+              return fail('bad_request', 'column must be backlog, now, or blocked');
+            }
             void engineRef.current.tick();
             return { ok: true, value: { ticket } };
           }

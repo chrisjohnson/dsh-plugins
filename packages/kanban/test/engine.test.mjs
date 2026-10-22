@@ -81,17 +81,26 @@ function setup({ implementer = [], verifier = [], reviewer = [], planner = [PLAN
   const store = new KanbanStore(db)
   const driver = {
     sessions: new Map(),
+    ticketSessions: new Map(),
     counter: 0,
     queues: { planner: planner.slice(), implementer: implementer.slice(), verifier: verifier.slice(), reviewer: reviewer.slice(), griller: griller.slice() },
     started: false,
     start() { this.started = true },
     stop() { this.started = false },
     isLive(id) { return this.sessions.has(id) },
-    async createRoleSession({ role }) {
-      const id = `session-${++this.counter}-${role}`
-      this.sessions.set(id, { role })
+    async ensureTicketSession({ ticket, role }) {
+      let id = this.ticketSessions.get(ticket.id)
+      if (id === undefined || !this.sessions.has(id)) {
+        id = `session-${++this.counter}`
+        this.ticketSessions.set(ticket.id, id)
+        this.sessions.set(id, { role })
+      }
+      this.sessions.get(id).role = role
       return { sessionId: id, preset: 'preset', handle: {} }
     },
+    setPhase(id, role) { this.sessions.get(id).role = role },
+    setRoute() {},
+    liveTicketSession(ticketId) { const id = this.ticketSessions.get(ticketId); return id !== undefined && this.sessions.has(id) ? id : undefined },
     async sendTurn({ sessionId }) {
       const s = this.sessions.get(sessionId)
       const next = this.queues[s.role].shift()
@@ -142,11 +151,10 @@ test('happy path: plan -> implement -> verify -> review -> done', async () => {
   assert.ok(roles.includes('implementer'))
   assert.ok(roles.includes('verifier'))
   assert.ok(roles.includes('reviewer'))
-  // Independence: verifier and implementer never share a session.
+  // One ticket workflow session hosts every phase; models can change between turns.
   const sessions = store.listSessions(ticket.id)
-  const impl = sessions.find((s) => s.role === 'implementer')
-  const ver = sessions.find((s) => s.role === 'verifier')
-  assert.ok(impl && ver && impl.sessionId !== ver.sessionId)
+  assert.equal(sessions.length, 1)
+  assert.equal(sessions[0].role, 'workflow')
   assert.equal(driver.sessions.size, 0)
 })
 

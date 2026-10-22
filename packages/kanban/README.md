@@ -3,8 +3,9 @@
 **A ticket-centric work organizer and workflow engine for DeepSeek Harness.**
 
 Tickets are rows in a local SQLite board. Code — not an agent — drives each
-ticket through intake, grill, plan, implement, verify and review. Each phase is a
-sandboxed role session with its own preset, tool allow-list and model route; the
+ticket through intake, grill, plan, implement, verify and review. Every phase is
+a **turn in the ticket's one shared workflow session**; the phase changes the
+tool allow-list and, when configured, the model route for the next turn. The
 engine gates dispatch on real per-provider concurrency, checks machine-readable
 `done_when` conditions mechanically, and records every span's time and tokens.
 
@@ -24,10 +25,14 @@ the deployment writes the complete section in its own profile patch.
 ## Where it appears
 
 `sidebar.panellist` gains a **Kanban** button (id `kanban`), and the `main` slot
-gains a `kanban` panel: Board, Now, ticket detail, timeline/Gantt, sessions,
-events and analytics. Both are additive seats in lists the shell already renders;
-the sidebar and workspaces list are untouched. A right-sidebar tab is the
-alternative placement; see `DECISIONS.md`.
+gains a `kanban` panel designed in the same visual language as the Activity
+dashboard: a Work header, backlog/in-flight/blocked/attention/done KPIs, a
+colour-accented five-column board, lifecycle progress on every card, a hero
+ticket detail with a phase timeline and metric cards, and clickable shared-session
+links. The New ticket form asks for the target workspace and initial status
+(Backlog, Now, or Blocked). Both are additive seats in lists the shell already
+renders; the sidebar and workspaces list are untouched. A right-sidebar tab is
+the alternative placement; see `DECISIONS.md`.
 
 ## Config
 
@@ -66,8 +71,8 @@ error. Nothing is written back to YAML or to SQLite.
 |---|---|---|
 | `implementer` | read/write/edit/shell/git in the ticket cwd | preset + `tools.restrict({allow})` + execution guard; no board tool exists |
 | `planner` | read repo/ticket; emits the plan as its final JSON | read-only allow-list; the engine writes the plan artifact |
-| `verifier` | read, run the checks named by `how_verified` | read + bash; write/edit denied; its own session |
-| `reviewer` | read diff and verification output | read-only; its own session |
+| `verifier` | read, run the checks named by `how_verified` | read + bash in the shared session; write/edit denied by the phase guard |
+| `reviewer` | read diff and verification output | read-only in the shared session |
 | `griller` | read ticket/acceptance, ask the human through the board | read-only |
 | `orchestrator` | read ticket/plan/diff, answer one JSON question | not a session: one `ctx.llm.stream()` call |
 
@@ -116,10 +121,11 @@ Failure goes to one out-of-band adjudication, then (if it cannot resolve) to a
 bounded continuation citing only the gaps. No JSON gets one continuation; two
 continuations per attempt at most.
 
-Verification is a **fresh read-only verifier session** that judges each condition
-independently, then a **fresh reviewer session** that reads the diff, verification
-and acceptance coverage. A failed verify or review starts a new attempt
-(a fresh session by default; `reuseSessionOnRetry` overrides).
+Verification is a **read-only verifier turn** in the shared session that judges
+each condition independently, then a **read-only reviewer turn** that reads the
+diff, verification and acceptance coverage. A failed verify or review starts a
+new attempt; `reuseSessionOnRetry` keeps the live shared session, while the
+default starts a fresh one after a failed attempt.
 
 ## Telemetry
 

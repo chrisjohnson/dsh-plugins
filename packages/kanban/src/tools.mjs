@@ -16,6 +16,18 @@ export function roleToolGuard(role, allow) {
   }
 }
 
+/** Allow-list guard whose role changes between turns of one shared session. */
+export function phaseToolGuard(getRole, getRoles) {
+  return function guard(execution) {
+    const role = getRole()
+    const entry = getRoles()[role]
+    const allow = entry === undefined || !Array.isArray(entry.allowTools) ? [] : entry.allowTools
+    const name = execution === null || execution === undefined ? undefined : execution.name
+    if (typeof name !== 'string' || name === '') return `kanban: role "${role}" may not call an unnamed tool`
+    return allow.includes(name) ? undefined : `kanban: role "${role}" may not call "${name}"`
+  }
+}
+
 /** The names a role may call, for tests and for the prompt's "allowed tools" line. */
 export function allowedTools(allow) {
   return Array.isArray(allow) ? allow.slice() : []

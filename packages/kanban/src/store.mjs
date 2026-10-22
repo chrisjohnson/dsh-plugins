@@ -435,8 +435,10 @@ export class KanbanStore {
       const at = nowIso();
       const existing = this.db.prepare('SELECT * FROM sessions WHERE dsh_session_id = ?').get(dshSessionId);
       if (existing !== undefined) {
-        this.db.prepare('UPDATE sessions SET ticket_id = ?, role = ?, closed_at = NULL WHERE id = ?').run(ticketId, role, existing.id);
-        this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role, retroactive: true } });
+        this.db.prepare('UPDATE sessions SET ticket_id = ?, role = ?, provider = ?, model = ?, closed_at = NULL WHERE id = ?').run(ticketId, role, provider, model, existing.id);
+        if (existing.ticket_id !== ticketId || existing.role !== role) {
+          this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role, retroactive: true } });
+        }
         return Number(existing.id);
       }
       const result = this.db

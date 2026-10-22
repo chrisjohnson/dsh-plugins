@@ -492,7 +492,6 @@ export class Engine {
       return this.afterGrill(this.store.transitionTicket(ticket.id, { phase: 'plan' }, { actor: 'engine', reason: 'grill not needed' }));
     }
     this.appendEvent(ticket.id, 'awaiting_human', { payload: { kind: 'grill', questions, sessionId: turn.sessionId } });
-    this.store.attachSession({ ticketId: ticket.id, dshSessionId: turn.sessionId, role: 'griller', preset: config.roles.griller.preset, provider: route.provider, model: route.model });
     return { kind: 'awaiting_human' };
   }
 
@@ -608,12 +607,12 @@ export class Engine {
       feedback: feedback === undefined ? '(first attempt)' : feedback.content,
     });
 
-    const reuse = config.reuseSessionOnRetry ? this.findReusableSession(ticket, 'implementer') : undefined;
-    if (attempt > 1 && reuse === undefined) await this.closeStaleSessions(ticket.id, ['implementer', 'verifier', 'reviewer']);
+    const reuse = config.reuseSessionOnRetry ? this.driver.liveTicketSession(ticket.id) : undefined;
+    if (attempt > 1 && reuse === undefined) await this.closeStaleSessions(ticket.id);
     const runId = this.ensureRun(ticket);
     let turn;
-    if (reuse !== undefined && this.driver.isLive(reuse.sessionId)) {
-      turn = await this.continueTurn({ ticket, role: 'implementer', route, sessionId: reuse.sessionId, prompt, runId, spanName: 'implement', attempt });
+    if (reuse !== undefined && this.driver.isLive(reuse)) {
+      turn = await this.continueTurn({ ticket, role: 'implementer', route, sessionId: reuse, prompt, runId, spanName: 'implement', attempt });
     } else {
       turn = await this.roleTurn({ ticket, role: 'implementer', route, prompt, spanName: 'implement', attempt, runId });
     }
@@ -983,11 +982,13 @@ export class Engine {
     });
     const startedMono = process.hrtime.bigint();
     try {
-      const session = await this.driver.createRoleSession({ ticket, role, route });
+      const session = await this.driver.ensureTicketSession({ ticket, role, route });
+      this.driver.setPhase(session.sessionId, role);
+      this.driver.setRoute(session.sessionId, route);
       this.store.attachSession({
         ticketId: ticket.id,
         dshSessionId: session.sessionId,
-        role,
+        role: 'workflow',
         preset: session.preset,
         provider: route.provider,
         model: route.model,
@@ -1042,6 +1043,8 @@ export class Engine {
     });
     const startedMono = process.hrtime.bigint();
     try {
+      this.driver.setPhase(sessionId, role);
+      this.driver.setRoute(sessionId, route);
       const turn = await this.driver.sendTurn({ sessionId, prompt, stallTimeoutMs: this.getConfig().stallTimeoutMs });
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.recordTurnUsage(ticket, span, route, turn.usage);
@@ -1210,17 +1213,14 @@ export class Engine {
     this.runIds.delete(ticketId);
   }
 
-  findReusableSession(ticketId, role) {
-    const sessions = this.store.listSessions(ticketId).filter((s) => s.role === role && s.closedAt === null);
-    return sessions.length === 0 ? undefined : sessions[sessions.length - 1];
+  findReusableSession(ticketId) {
+    const id = this.driver.liveTicketSession(ticketId);
+    return id === undefined ? undefined : { sessionId: id };
   }
 
-  async closeStaleSessions(ticketId, roles) {
-    for (const session of this.store.listSessions(ticketId)) {
-      if (!roles.includes(session.role)) continue;
-      if (!this.driver.isLive(session.sessionId)) continue;
-      await this.driver.closeSession(session.sessionId);
-    }
+  async closeStaleSessions(ticketId) {
+    const id = this.driver.liveTicketSession(ticketId);
+    if (id !== undefined) await this.driver.closeSession(id);
   }
 
   async closeTicketSessions(ticketId) {

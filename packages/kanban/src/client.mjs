@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
 		var h = React.createElement;
 
 		var connection = null;
+		var openSessionById = null;
 		var rpcSeq = 0;
 
 		function rpc(method, payload) {
@@ -131,7 +132,81 @@ window.__ModuleLoader__.load({
 			+ ".kb-answerrow{display:flex;gap:8px;align-items:flex-start}"
 			+ ".kb-q{flex:1;font-size:12px;color:var(--dsw-alias-label-secondary,#555)}"
 			+ ".kb-spin{display:inline-block;width:12px;height:12px;border:2px solid #ccc;border-top-color:#555;border-radius:50%;animation:kb-spin .8s linear infinite}"
-			+ "@keyframes kb-spin{to{transform:rotate(360deg)}}";
+			+ "@keyframes kb-spin{to{transform:rotate(360deg)}}"
+			+ ".kb-root{background:radial-gradient(900px 440px at 6% -8%,color-mix(in srgb,#3b82f6 6%,transparent),transparent 60%),radial-gradient(760px 380px at 100% 0%,color-mix(in srgb,#8b5cf6 5%,transparent),transparent 58%),var(--dsw-alias-bg-base,#fff)}"
+			+ ".kb-pagehead{display:flex;align-items:flex-start;gap:16px;padding:28px clamp(20px,4vw,48px) 0;flex-wrap:wrap}"
+			+ ".kb-pagehead-main{flex:1;min-width:0}"
+			+ ".kb-title{margin:0;font:500 20px/28px Inter,sans-serif;letter-spacing:-.01em}"
+			+ ".kb-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary,#888);font-size:12px}"
+			+ ".kb-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}"
+			+ ".kb-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;padding:18px clamp(20px,4vw,48px)}"
+			+ ".kb-kpi{position:relative;overflow:hidden;padding:10px 12px;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:11px;background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 8%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".kb-kpi::after{content:'';position:absolute;right:-16px;top:-22px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--kb-accent) 16%,transparent),transparent 70%)}"
+			+ ".kb-kpi-value{font:650 22px/26px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--kb-accent)}"
+			+ ".kb-kpi-label{margin-top:1px;font:600 10px/14px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".kb-tone-idle{--kb-accent:#64748b}.kb-tone-run{--kb-accent:#2563eb}.kb-tone-warn{--kb-accent:#b45309}.kb-tone-err{--kb-accent:#b91c1c}.kb-tone-ok{--kb-accent:#15803d}.kb-tone-violet{--kb-accent:#7c3aed}"
+			+ ".kb-body{padding:0 clamp(20px,4vw,48px) 48px}"
+			+ ".kb-cols{grid-template-columns:repeat(5,minmax(230px,1fr));gap:14px;min-width:1150px}"
+			+ ".kb-col{--kb-accent:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 18%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:14px;background:color-mix(in srgb,var(--kb-accent) 4%,var(--dsw-alias-bg-layer-2,#f7f8fa));padding-top:3px;max-height:calc(100vh - 280px)}"
+			+ ".kb-col::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
+			+ ".kb-col-backlog{--kb-accent:#64748b}.kb-col-now{--kb-accent:#2563eb}.kb-col-blocked{--kb-accent:#b45309}.kb-col-needs_attention{--kb-accent:#b91c1c}.kb-col-done{--kb-accent:#15803d}"
+			+ ".kb-col.attn{border-color:color-mix(in srgb,#b91c1c 35%,var(--dsw-alias-border-l2,#e5e7eb));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-2,#f7f8fa))}"
+			+ ".kb-colhead{padding:9px 12px 7px;color:var(--dsw-alias-label-secondary,#555);background:transparent;border-radius:12px 12px 0 0}"
+			+ ".kb-coldot{width:7px;height:7px;border-radius:50%;background:var(--kb-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-accent) 14%,transparent);flex:none}"
+			+ ".kb-collabel{font:600 11px/16px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase}"
+			+ ".kb-count{margin-left:auto;min-width:20px;height:18px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent) 11%,transparent);color:var(--kb-accent);font:600 10px/18px ui-monospace,monospace;text-align:center}"
+			+ ".kb-list{gap:8px;padding:0 9px 11px}"
+			+ ".kb-card{border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 10px;gap:6px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;position:relative}"
+			+ ".kb-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 45%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--kb-accent,#3b82f6) 13%,transparent)}"
+			+ ".kb-card.working{border-color:color-mix(in srgb,#22c55e 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#22c55e 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow 3.2s ease-in-out infinite}"
+			+ ".kb-card.working::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#22c55e,#06b6d4)}"
+			+ ".kb-card.attn{border-left:3px solid #b91c1c}"
+			+ ".kb-cardtop{display:flex;align-items:center;gap:7px}"
+			+ ".kb-key{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);letter-spacing:.02em}"
+			+ ".kb-live{margin-left:auto;display:inline-flex;align-items:center;gap:4px;color:#15803d;font:600 9px/14px Inter,sans-serif;letter-spacing:.05em;text-transform:uppercase}"
+			+ ".kb-live i{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:kb-pulse 1.8s ease-out infinite}"
+			+ ".kb-phasechip{margin-left:auto;display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--kb-accent,#64748b) 30%,transparent);background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font:600 9px/15px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}"
+			+ ".kb-phasechip.run{--kb-accent:#2563eb}.kb-phasechip.warn{--kb-accent:#b45309}.kb-phasechip.err{--kb-accent:#b91c1c}.kb-phasechip.ok{--kb-accent:#15803d}.kb-phasechip.idle{--kb-accent:#64748b}"
+			+ ".kb-cardtitle{font:600 12.5px/17px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
+			+ ".kb-steps{display:flex;gap:3px;margin:1px 0 2px}"
+			+ ".kb-step{height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 15%,transparent)}"
+			+ ".kb-step.done{background:color-mix(in srgb,var(--kb-accent,#3b82f6) 62%,transparent)}"
+			+ ".kb-step.current{background:var(--kb-accent,#3b82f6);box-shadow:0 0 0 8px color-mix(in srgb,var(--kb-accent,#3b82f6) 9%,transparent)}"
+			+ ".kb-meta{gap:5px;font:500 9.5px/14px Inter,sans-serif;align-items:center}"
+			+ ".kb-next{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font-weight:600;white-space:nowrap}"
+			+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.warn{--kb-accent:#b45309}.kb-next.err{--kb-accent:#b91c1c}.kb-next.ok{--kb-accent:#15803d}.kb-next.idle{--kb-accent:#64748b}"
+			+ ".kb-age{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary,#999)}"
+			+ ".kb-empty{padding:20px 10px;border:1px dashed color-mix(in srgb,var(--kb-accent,#888) 22%,transparent);border-radius:10px;background:transparent;font-size:11px}"
+			+ ".kb-detail{gap:12px;max-width:1180px}"
+			+ ".kb-hero{--kb-accent:#2563eb;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:14px;background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 7%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:14px 16px;box-shadow:0 10px 30px rgba(15,23,42,.04)}"
+			+ ".kb-hero::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
+			+ ".kb-hero-backlog{--kb-accent:#64748b}.kb-hero-now{--kb-accent:#2563eb}.kb-hero-blocked{--kb-accent:#b45309}.kb-hero-needs_attention{--kb-accent:#b91c1c}.kb-hero-done{--kb-accent:#15803d}"
+			+ ".kb-hero-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}"
+			+ ".kb-hero-title{margin:8px 0 3px;font:500 18px/25px Inter,sans-serif;letter-spacing:-.01em}"
+			+ ".kb-hero-meta{display:flex;flex-wrap:wrap;gap:5px 14px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px}"
+			+ ".kb-hero-meta b{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".kb-lifecycle{display:flex;align-items:center;gap:4px;margin-top:12px;flex-wrap:wrap}"
+			+ ".kb-life{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary,#999);font:500 10px/14px Inter,sans-serif}"
+			+ ".kb-life+.kb-life::before{content:'';width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px}"
+			+ ".kb-life-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-bg-layer-2,#eef1f5);border:1px solid var(--dsw-alias-border-l3,#ccc)}"
+			+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent)}"
+			+ ".kb-life.active{color:var(--kb-accent);font-weight:600}.kb-life.active .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent);animation:kb-pulse 1.8s ease-out infinite}"
+			+ ".kb-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}"
+			+ ".kb-metrics .kb-kpi{padding:8px 11px}.kb-metrics .kb-kpi-value{font-size:18px;line-height:22px}"
+			+ ".kb-tabs{gap:6px;border-bottom:none;margin:2px 0 0}"
+			+ ".kb-tab{padding:5px 11px;border-radius:999px;border:1px solid transparent;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".kb-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}"
+			+ ".kb-tab.on{color:var(--dsw-alias-label-primary,#111);border-color:var(--dsw-alias-border-l2,#ddd);background:var(--dsw-alias-bg-layer-1,#fff)}"
+			+ ".kb-panel{border-color:var(--dsw-alias-border-l2,#e5e7eb);border-radius:12px;padding:13px 15px}"
+			+ ".kb-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 12px;padding:7px 10px;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff)}"
+			+ ".kb-flow-title{font:600 10px/14px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-right:2px}"
+			+ ".kb-flow-chip{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);background:var(--dsw-alias-bg-layer-2,#f6f7f9);color:var(--dsw-alias-label-secondary,#555);font:600 10px/16px Inter,sans-serif;white-space:nowrap}"
+			+ ".kb-flow-chip.run{color:#1d4ed8;border-color:#bfdbfe;background:#eff6ff}.kb-flow-chip.warn{color:#b45309;border-color:#fcd34d;background:#fffbeb}"
+			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
+			+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
+			+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot{animation:none}}"
+			+ "@media (max-width:900px){.kb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+			+ "@media (max-width:600px){.kb-kpis{grid-template-columns:1fr}}";
 
 		function ensureStyles() {
 			var id = "kanban-styles";
@@ -157,12 +232,42 @@ window.__ModuleLoader__.load({
 
 		// ------------------------------------------------------------------ board
 
+		var PHASES = ["intake", "grill", "plan", "implement", "verify", "review", "closed"];
+		function phaseIndex(phase) {
+			var i = PHASES.indexOf(phase);
+			return i < 0 ? 0 : i;
+		}
+		function phaseLabel(phase) {
+			return phase === "implement" ? "Build" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
+		}
+		function phaseProgress(ticket) {
+			return h("div", { className: "kb-steps", title: "Lifecycle: " + PHASES.map(phaseLabel).join(" → ") },
+				PHASES.map(function (phase, i) {
+					var done = phaseIndex(ticket.phase) > i || ticket.phase === "closed";
+					var current = phaseIndex(ticket.phase) === i && ticket.phase !== "closed";
+					return h("span", { key: phase, className: "kb-step" + (done ? " done" : "") + (current ? " current" : ""), title: phaseLabel(phase) });
+				})
+			);
+		}
+		function phaseTone(column) {
+			return column === "blocked" ? "warn" : column === "needs_attention" ? "err" : column === "now" ? "run" : column === "done" || column === "discarded" ? "ok" : "idle";
+		}
+		function nextAction(t) {
+			if (t.column === "needs_attention") return "Needs your decision";
+			if (t.phase === "grill") return "Answers needed";
+			if (t.column === "blocked") return "Blocked";
+			if (t.column === "done" || t.column === "discarded") return "Closed";
+			if (t.column === "now") return t.group === "waiting" ? "Waiting on you" : t.group === "active" ? "Running" : "Queued";
+			return "Ready when promoted";
+		}
+
 		function Card(props) {
 			var t = props.ticket;
+			var working = t.column === "now" && t.group === "active";
 			return h(
 				"div",
 				{
-					className: "kb-card" + (t.column === "needs_attention" ? " attn" : ""),
+					className: "kb-card kb-card-" + t.column + (working ? " working" : "") + (t.column === "needs_attention" ? " attn" : ""),
 					draggable: true,
 					onDragStart: function (ev) {
 						ev.dataTransfer.setData("text/kanban", t.id);
@@ -181,15 +286,18 @@ window.__ModuleLoader__.load({
 					onClick: function () { props.onOpen(t.id); },
 					title: t.title
 				},
-				h("div", { className: "kb-row" }, h("span", { className: "kb-key", children: t.key }), h("span", { className: "kb-spacer" }),
-					t.attemptCount > 0 ? h("span", { className: "kb-chip", children: "try " + t.attemptCount }) : null),
+				h("div", { className: "kb-cardtop" },
+					h("span", { className: "kb-key", children: t.key }),
+					working ? h("span", { className: "kb-live" }, h("i"), "live") : h("span", { className: "kb-phasechip " + phaseTone(t.column), children: phaseLabel(t.phase) })
+				),
 				h("div", { className: "kb-cardtitle", children: t.title }),
+				phaseProgress(t),
 				h("div", { className: "kb-meta" },
-					h("span", { className: "kb-chip", children: t.phase }),
-					t.phase === "grill" ? h("span", { className: "kb-chip warn", children: "waiting on you" }) : null,
-					t.column === "now" && t.group ? h("span", { className: "kb-chip" + (t.group === "waiting" ? " warn" : t.group === "active" ? " ok" : "") , children: t.group.replace("_", " ") }) : null,
-					t.column !== "done" && t.column !== "discarded" ? h("span", { children: fmtUsd(t.spentUsd) }) : null,
-					t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null
+					h("span", { className: "kb-next " + phaseTone(t.column), children: nextAction(t) }),
+					t.attemptCount > 0 ? h("span", { children: "try " + t.attemptCount }) : null,
+					t.spentUsd > 0 ? h("span", { children: fmtUsd(t.spentUsd) }) : null,
+					h("span", { className: "kb-spacer" }),
+					h("span", { className: "kb-age", children: ago(t.updatedAt) })
 				)
 			);
 		}
@@ -199,7 +307,7 @@ window.__ModuleLoader__.load({
 			return h(
 				"div",
 				{
-					className: "kb-col" + (props.attention ? " attn" : ""),
+					className: "kb-col kb-col-" + props.column + (props.attention ? " attn" : ""),
 					onDragOver: function (ev) { ev.preventDefault(); },
 					onDrop: function (ev) {
 						ev.preventDefault();
@@ -207,17 +315,21 @@ window.__ModuleLoader__.load({
 						if (id) props.onMove(id, props.column);
 					}
 				},
-				h("div", { className: "kb-colhead" }, h("span", { children: props.label }), h("span", { className: "kb-count", children: items.length })),
+				h("div", { className: "kb-colhead" },
+					h("span", { className: "kb-coldot" }),
+					h("span", { className: "kb-collabel", children: props.label }),
+					h("span", { className: "kb-count", children: items.length })
+				),
 				h("div", { className: "kb-list" },
 					items.length === 0
-						? h("div", { className: "kb-empty", children: "empty" })
+						? h("div", { className: "kb-empty", children: props.column === "backlog" ? "Nothing queued" : props.column === "done" ? "Nothing shipped yet" : "Nothing here" })
 						: items.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: props.onOpen, onReorder: props.onReorder }); })
 				)
 			);
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0 });
+			var s = React.useState({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
@@ -241,11 +353,13 @@ window.__ModuleLoader__.load({
 					planMode: form.plan,
 					priority: Number(form.priority) || 0,
 					allowPaid: !!form.allowPaid,
-					budgetUsd: Number(form.budget) || 0
+					budgetUsd: Number(form.budget) || 0,
+					workspaceCwd: form.workspace || null,
+					column: form.status
 				}).then(function (res) {
 					setBusy(false);
 					if (res && res.ok) {
-						setForm({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0 });
+						setForm({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
 						props.onCreated(res.value.ticket);
 					} else {
 						setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -259,6 +373,23 @@ window.__ModuleLoader__.load({
 				h("textarea", { className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }),
 				h("div", { className: "kb-label", children: "Acceptance (one per line, stored verbatim; may be aspirational)" }),
 				h("textarea", { className: "kb-textarea", "aria-label": "Acceptance statements", value: form.acceptance, onChange: function (ev) { field("acceptance", ev.target.value); } }),
+				h("div", { className: "kb-row" },
+					h("div", { style: { flex: 1, minWidth: 220 } },
+						h("div", { className: "kb-label", children: "Workspace" }),
+						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, onChange: function (ev) { field("workspace", ev.target.value); } },
+							h("option", { value: "", children: "Engine default" }),
+							(props.workspaces || []).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
+						)
+					),
+					h("div", null,
+						h("div", { className: "kb-label", children: "Initial status" }),
+						h("select", { className: "kb-select", value: form.status, onChange: function (ev) { field("status", ev.target.value); } },
+							h("option", { value: "backlog", children: "Backlog" }),
+							h("option", { value: "now", children: "Now (start immediately)" }),
+							h("option", { value: "blocked", children: "Blocked" })
+						)
+					)
+				),
 				h("div", { className: "kb-row" },
 					h("div", null, h("div", { className: "kb-label", children: "Grill" }),
 						h("select", { className: "kb-select", value: form.grill, onChange: function (ev) { field("grill", ev.target.value); } },
@@ -362,6 +493,22 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function Lifecycle(props) {
+			var t = props.ticket;
+			var current = phaseIndex(t.phase);
+			var closed = t.phase === "closed" || t.column === "done";
+			return h("div", { className: "kb-lifecycle" },
+				PHASES.map(function (phase, i) {
+					var done = closed || i < current;
+					var active = !closed && i === current;
+					return h("div", { key: phase, className: "kb-life" + (done ? " done" : "") + (active ? " active" : "") },
+						h("span", { className: "kb-life-dot" }),
+						h("span", { className: "kb-life-label", children: phaseLabel(phase) })
+					);
+				})
+			);
+		}
+
 		function TicketDetail(props) {
 			var d = props.detail;
 			var tabState = React.useState("overview");
@@ -381,13 +528,27 @@ window.__ModuleLoader__.load({
 			var awaiting = t.phase === "grill" && questionArtifact && questionArtifact.questions && questionArtifact.questions.length > 0;
 			var tabs = ["overview", "timeline", "sessions", "events", "analytics"];
 			return h("div", { className: "kb-detail" },
-				h("div", { className: "kb-row" },
-					h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
-					h("span", { className: "kb-key", children: t.key }),
-					h("h2", { className: "kb-title", style: { margin: 0, fontSize: 15 }, children: t.title }),
-					h("span", { className: "kb-chip", children: t.column }),
-					h("span", { className: "kb-chip", children: t.phase }),
-					t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null
+				h("div", { className: "kb-hero kb-hero-" + t.column },
+					h("div", { className: "kb-hero-top" },
+						h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
+						h("span", { className: "kb-key", children: t.key }),
+						h("span", { className: "kb-phasechip " + phaseTone(t.column), children: t.column.replace("_", " ") }),
+						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null
+					),
+					h("h2", { className: "kb-hero-title", children: t.title }),
+					h("div", { className: "kb-hero-meta" },
+						h("span", null, "workspace ", h("b", { children: t.workspaceCwd || "engine default" })),
+						h("span", null, "attempts ", h("b", { children: t.attemptCount })),
+						h("span", null, "spend ", h("b", { children: fmtUsd(t.spentUsd) })),
+						h("span", null, "updated ", h("b", { children: ago(t.updatedAt) }))
+					),
+					h(Lifecycle, { ticket: t })
+				),
+				h("div", { className: "kb-metrics" },
+					h(Kpi, { tone: "kb-tone-idle", value: t.attemptCount, label: "Attempts" }),
+					h(Kpi, { tone: "kb-tone-run", value: d.sessions.length, label: "Session" }),
+					h(Kpi, { tone: "kb-tone-ok", value: fmtUsd(t.spentUsd), label: "Spent" }),
+					h(Kpi, { tone: "kb-tone-violet", value: d.spans.length, label: "Steps" })
 				),
 				awaiting ? h(GrillAnswerForm, { ticket: t, questions: questionArtifact.questions, onSubmit: props.onAnswer }) : null,
 				t.column === "needs_attention" ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
@@ -538,14 +699,15 @@ window.__ModuleLoader__.load({
 			var s = React.useState("");
 			var sessionId = s[0], setSessionId = s[1];
 			return h("div", { className: "kb-panel" },
-				h("h3", { children: "Sessions (retro-attach supported)" }),
+				h("h3", { children: "Workflow session (shared across phases)" }),
 				d.sessions.length === 0 ? h("div", { className: "kb-hint", children: "No sessions attached." }) :
 					h("table", { className: "kb-table" },
 						h("thead", null, h("tr", null, h("th", { children: "role" }), h("th", { children: "session" }), h("th", { children: "provider/model" }), h("th", { children: "created" }), h("th", { children: "" }))),
 						h("tbody", null, d.sessions.map(function (session) {
 							return h("tr", { key: session.id },
 								h("td", { children: session.role }),
-								h("td", null, h("code", { style: { fontSize: 10 }, children: session.sessionId })),
+								h("td", null, h("code", { style: { fontSize: 10 }, children: session.sessionId }),
+									h("button", { className: "kb-btn", style: { marginLeft: 8 }, onClick: function () { if (openSessionById) openSessionById(session.sessionId); }, children: "Open" })),
 								h("td", { children: (session.provider || "?") + "/" + (session.model || "?") }),
 								h("td", { children: fmtTime(session.createdAt) }),
 								h("td", null, h("button", { className: "kb-btn", onClick: function () { props.onAction(d.ticket.id, "detachSession", { sessionId: session.sessionId }); }, children: "Detach" })));
@@ -598,6 +760,13 @@ window.__ModuleLoader__.load({
 
 		// ------------------------------------------------------------------ page
 
+		function Kpi(props) {
+			return h("div", { className: "kb-kpi " + props.tone },
+				h("div", { className: "kb-kpi-value", children: props.value }),
+				h("div", { className: "kb-kpi-label", children: props.label })
+			);
+		}
+
 		function KanbanPage() {
 			var b = React.useState(null);
 			var board = b[0], setBoard = b[1];
@@ -613,6 +782,8 @@ window.__ModuleLoader__.load({
 			var view = v[0], setView = v[1];
 			var analytics = React.useState(null);
 			var analyticsData = analytics[0], setAnalyticsData = analytics[1];
+			var ws = React.useState([]);
+			var workspaces = ws[0], setWorkspaces = ws[1];
 			var poll = React.useRef(0);
 
 			function loadBoard() {
@@ -628,6 +799,7 @@ window.__ModuleLoader__.load({
 				});
 			}
 			React.useEffect(function () {
+				rpc("workspaces", {}).then(function (res) { if (res && res.ok && res.value) setWorkspaces(res.value.items || []); });
 				loadBoard();
 				var timer = setInterval(function () {
 					poll.current += 1;
@@ -659,24 +831,28 @@ window.__ModuleLoader__.load({
 			var nowGroups = board ? board.now : { active: [], waiting: [], blocked: [] };
 			var counts = board ? board.counts : {};
 			return h("div", { className: "kb-root" },
-				h("div", { className: "kb-bar" },
-					h("h1", { className: "kb-title", children: "Kanban" }),
-					h("span", { className: "kb-sub", children: board ? [
-						counts.backlog + " backlog",
-						counts.now + " now",
-						counts.blocked + " blocked",
-						counts.needs_attention + " attention",
-						counts.done + " done"
-					].join(" · ") : "loading" }),
-					h("span", { className: "kb-spacer" }),
-					h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
-					h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
-					h("button", { className: "kb-btn", onClick: function () { loadBoard(); }, children: "Refresh" }),
-					h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
+				h("div", { className: "kb-pagehead" },
+					h("div", { className: "kb-pagehead-main" },
+						h("h1", { className: "kb-title", children: "Work" }),
+						h("div", { className: "kb-sub", children: board ? "Ticket flow from intake to review · every phase shares one session" : "Loading the board…" })
+					),
+					h("div", { className: "kb-actions" },
+						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
+						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
+						h("button", { className: "kb-btn", onClick: function () { loadBoard(); }, children: "Refresh" }),
+						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
+					)
 				),
+				board ? h("div", { className: "kb-kpis" },
+					h(Kpi, { tone: "kb-tone-idle", value: counts.backlog || 0, label: "Backlog" }),
+					h(Kpi, { tone: "kb-tone-run", value: counts.now || 0, label: "In flight" }),
+					h(Kpi, { tone: "kb-tone-warn", value: counts.blocked || 0, label: "Blocked" }),
+					h(Kpi, { tone: "kb-tone-err", value: counts.needs_attention || 0, label: "Needs attention" }),
+					h(Kpi, { tone: "kb-tone-ok", value: counts.done || 0, label: "Done" })
+				) : null,
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
-					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
+					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { workspaces: workspaces, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						onBack: function () { setSelectedId(null); setDetail(null); },
@@ -685,24 +861,25 @@ window.__ModuleLoader__.load({
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
+						board ? h("div", { className: "kb-flow" },
+							h("span", { className: "kb-flow-title", children: "In flight" }),
+							h("span", { className: "kb-flow-chip run", children: (nowGroups.active || []).length + " active" }),
+							h("span", { className: "kb-flow-chip warn", children: (nowGroups.waiting || []).length + " waiting on you" }),
+							h("span", { className: "kb-flow-chip", children: (nowGroups.blocked || []).length + " blocked" }),
+							h("span", { className: "kb-spacer" }),
+							(board.capacity || []).map(function (c) {
+								var short = c.name.includes("(apu)") ? "APU" : c.name.includes("(eGPU)") ? "eGPU" : "cloud";
+								var limit = c.maxConcurrent === null || c.maxConcurrent === undefined ? "∞" : c.maxConcurrent;
+								return h("span", { key: c.name, className: "kb-flow-chip" + (c.waiting > 0 ? " warn" : ""), title: c.name, children: short + " " + c.used + "/" + limit + (c.waiting > 0 ? " · " + c.waiting + " queued" : "") });
+							})
+						) : null,
 						h("div", { className: "kb-cols" },
 							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder }),
-							h(Column, { column: "now", label: "Now", items: columns.now, onOpen: open, onMove: move, onReorder: reorder }),
+							h(Column, { column: "now", label: "In flight", items: columns.now, onOpen: open, onMove: move, onReorder: reorder }),
 							h(Column, { column: "blocked", label: "Blocked", items: columns.blocked, onOpen: open, onMove: move, onReorder: reorder }),
 							h(Column, { column: "needs_attention", label: "Needs attention", items: columns.needs_attention, attention: true, onOpen: open, onMove: move, onReorder: reorder }),
 							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder })
-						),
-						board ? h("div", { className: "kb-now" },
-							h("div", { className: "kb-grouphead", children: "Now · active" }),
-							nowGroups.active.length === 0 ? h("div", { className: "kb-hint", children: "Nothing running." }) : h("div", { className: "kb-list" }, nowGroups.active.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: open, onReorder: reorder }); })),
-							h("div", { className: "kb-grouphead", children: "Now · waiting on you" }),
-							nowGroups.waiting.length === 0 ? h("div", { className: "kb-hint", children: "Nothing waiting." }) : h("div", { className: "kb-list" }, nowGroups.waiting.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: open, onReorder: reorder }); })),
-							h("div", { className: "kb-grouphead", children: "Now · pending capacity" }),
-							h("div", { className: "kb-grouphead", children: "Capacity" }),
-							h("div", { className: "kb-row" }, (board.capacity || []).map(function (c) {
-								return h("span", { key: c.name, className: "kb-chip" + (c.waiting > 0 ? " warn" : ""), children: c.name + " " + c.used + "/" + (c.maxConcurrent ?? "?") + (c.waiting > 0 ? " · " + c.waiting + " queued" : "") });
-							}))
-						) : null
+						)
 					)
 				)
 			);
@@ -722,6 +899,13 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			connection = ctx.connection !== undefined ? ctx.connection : ctx.get ? ctx.get("connection") : null;
+			openSessionById = function (sessionId) {
+				try {
+					var uiWorkspace = ctx.get("uiWorkspace");
+					if (uiWorkspace && typeof uiWorkspace.openSession === "function") { uiWorkspace.openSession(sessionId); return true; }
+				} catch (error) { /* best-effort navigation */ }
+				return false;
+			};
 			var slots = ctx.slots !== undefined ? ctx.slots : ctx.get ? ctx.get("slots") : undefined;
 			if (!slots) {
 				console.error("dsh-kanban: slots service missing - the board stays off");
