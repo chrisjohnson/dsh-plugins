@@ -647,3 +647,27 @@ showed exactly one `workflow` session. The judge was still running when the
 ticket was discarded, so the complete plan→implement→verify live run remains a
 verification task; engine tests now assert one shared session across all four
 phases.
+
+### 2026-10-22 09:10 — Kanban capacity decoupling, workflow timeline, analytics
+
+- Removed every Kanban-side capacity remnant: the `isWaitingForCapacity` stall
+  callback, board capacity view/chips, legacy provider `maxConcurrent`, lease
+  schema text, UI capacity fetch, and capacity comments/tests. Kanban now has no
+  capacity code at all.
+- Timeline is now **workflow-level**: one block per phase/attempt (grilling
+  includes the human answer gap), separate orchestrator judge calls, and separate
+  plugin command steps (`git diff` recorded as a `workflow` span). Session turns
+  and tools are excluded from the timeline but remain in spans/events for
+  diagnostics. Phase blocks use distinct colours; plugin steps cycle a separate
+  palette; judges are purple.
+- Token counts render as `k`/`m`; configured local routes price at `$0.00` rather
+  than `unpriced` (unknown providers remain unpriced). Detail, model table, and
+  analytics all use the human units.
+- Analytics page restyled with KPI cards, per-card accent colours, rate bars and
+  hover rows.
+
+Verified: 91 tests (59 Kanban + 32 capacity), hooks clean, verify 0/0. Live
+`/api/kanban/ticket` timeline for KAN-4 returned 6 workflow blocks from 31 spans
+while excluding 25 tool spans; board no longer contains a `capacity` field;
+detail shows `input 24k`, `output 7.7k`, `$0.00`. Commit `b30c80c` on
+`feat/kanban` (pushed).
