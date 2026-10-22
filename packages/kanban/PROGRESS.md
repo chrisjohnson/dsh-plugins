@@ -1,9 +1,3 @@
-# PROGRESS (snapshot)
-
-This is a snapshot of the implementing session status, kept beside the code so
-it survives context compaction and worktree cleanup. The same snapshot exists
-in the fleet-cinder worktree as `KANBAN-STATUS.md`.
-
 # dsh-kanban — plan, progress and resume notes
 
 Last updated: 2026-10-21 09:35 America/New_York
@@ -643,3 +637,13 @@ Remaining: kanban release/deploy, and a full multi-phase live ticket through
 implement→verify→review on a faster model; the planner turn is currently very
 slow on `medium-dense`, so the transition was verified by engine tests rather
 than a complete live run.
+
+### 2026-10-22 02:20 — shared-session live probe
+
+On a temporary cloud-role config (restored afterwards), KAN-7 ran its planner
+turn on `local-ai-machine-cloud/deepseek-flash`, completed 20 tool spans, and
+entered the APU orchestrator coverage judge while `store.listSessions` still
+showed exactly one `workflow` session. The judge was still running when the
+ticket was discarded, so the complete plan→implement→verify live run remains a
+verification task; engine tests now assert one shared session across all four
+phases.
