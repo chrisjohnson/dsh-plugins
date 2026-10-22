@@ -16,8 +16,16 @@
 - New-ticket form asks for the workspace and initial status; the Host accepts
   `column: backlog|now|blocked`.
 - Activity-dashboard visual language: KPI strip, colour-accented columns,
-  lifecycle progress on cards, working-card glow, hero detail with phase
+  lifecycle progress on cards, working-card glow, hero detail with a workflow
   timeline and metric cards, and clickable session links.
+- Workflow timeline now shows plugin-owned phase blocks (grilling includes the
+  human wait), separate orchestrator judge calls, and plugin command steps with
+  individual colours; session tools/turns are no longer plotted.
+- Human-friendly token units (k/m), local routes price at $0.00, and a styled
+  analytics dashboard with KPI cards and rate bars.
+- Removed the remaining Kanban-side capacity coupling (`isWaitingForCapacity`,
+  board capacity view/chips, legacy `maxConcurrent`); concurrency is entirely
+  outside this plugin.
 - Global per-provider capacity is delegated to `dsh-model-capacity`; Kanban owns
   no leases and no per-turn concurrency counters.
 - Role sessions created from presets, with tool allow-lists enforced by

@@ -92,7 +92,6 @@ export default async function kanban(ctx, config = {}) {
     ctx,
     log,
     getConfig,
-    isWaitingForCapacity: (sessionId) => ctx.get('capacity')?.isWaitingForSession?.(sessionId) === true,
   });
   const engine = new Engine({ ctx, store, driver, judge, getConfig, getPrompts, log });
   engine.configHash = configHash;
@@ -179,7 +178,6 @@ export default async function kanban(ctx, config = {}) {
         columns: byColumn,
         now: groups,
         inFlight: now.filter((t) => t.group === 'active' || t.group === 'waiting'),
-        capacity: capacityView(ctx, live),
       };
     };
 
@@ -197,6 +195,7 @@ export default async function kanban(ctx, config = {}) {
         sessions: store.listSessions(ticket.id),
         spans,
         spanTree: tree(spans),
+        timeline: timelineView(spans),
         usage: store.rollup(ticket.id),
         events: store.listEvents(ticket.id, { limit: 300 }),
         artifacts: store.listArtifacts(ticket.id, { limit: 40 }),
@@ -474,19 +473,87 @@ function tree(spans) {
   return roots;
 }
 
-function capacityView(ctx, config) {
-  const cap = ctx.get('capacity')?.snapshot?.();
-  if (cap !== undefined) {
-    return cap.providers.map((provider) => ({
-      name: provider.name,
-      maxConcurrent: provider.limit,
-      used: provider.used,
-      waiting: provider.waiters.length,
-      reservations: provider.reservations.length,
-      tier: 'global',
-    }));
+
+
+const TIMELINE_LABELS = {
+  griller: 'Grill',
+  planner: 'Plan',
+  implementer: 'Build',
+  verifier: 'Verify',
+  reviewer: 'Review',
+};
+
+/**
+ * Timeline blocks are plugin-owned workflow steps, not the session's individual
+ * turns/tools. Agent spans are collapsed per role+attempt, so grilling includes
+ * the human answer gap; judge calls and plugin steps stay separate and coloured.
+ */
+function timelineView(spans, now = Date.now()) {
+  const groups = new Map();
+  const items = [];
+  for (const span of spans) {
+    const start = Date.parse(span.startedAt);
+    if (!Number.isFinite(start)) continue;
+    const end = span.endedAt === null || span.endedAt === undefined ? now : Date.parse(span.endedAt);
+    const finish = Number.isFinite(end) ? Math.max(start, end) : now;
+    if (span.kind === 'agent' && typeof span.role === 'string' && span.role !== 'orchestrator') {
+      const attemptKey = span.role === 'griller' ? 1 : (span.attempt ?? 0);
+      const key = `${span.role}|${attemptKey}`;
+      const found = groups.get(key);
+      if (found === undefined) {
+        groups.set(key, {
+          kind: 'phase',
+          role: span.role,
+          name: TIMELINE_LABELS[span.role] ?? span.role,
+          attempt: attemptKey,
+          start,
+          end: finish,
+          status: span.status,
+          provider: span.provider ?? null,
+          model: span.model ?? null,
+          spans: 1,
+          lastEnd: finish,
+          maxGap: 0,
+        });
+      } else {
+        found.start = Math.min(found.start, start);
+        found.maxGap = Math.max(found.maxGap, Math.max(0, start - found.lastEnd));
+        found.end = Math.max(found.end, finish);
+        found.lastEnd = Math.max(found.lastEnd, finish);
+        found.spans += 1;
+        if (span.status === 'failed' || span.status === 'abandoned') found.status = span.status;
+      }
+    } else if (span.kind === 'judge') {
+      items.push({
+        kind: 'judge', role: span.role, name: span.name, attempt: span.attempt ?? 0,
+        start, end: finish, status: span.status, provider: span.provider ?? null, model: span.model ?? null,
+      });
+    } else if (span.kind === 'workflow') {
+      items.push({
+        kind: 'plugin', role: null, name: span.name, attempt: span.attempt ?? 0,
+        start, end: finish, status: span.status, provider: null, model: null,
+      });
+    }
   }
-  return config.providers.map((provider) => ({ name: provider.name, maxConcurrent: null, used: 0, waiting: 0, reservations: 0, tier: provider.tier ?? 'local' }));
+  for (const group of groups.values()) {
+    items.push({ ...group, includesWait: group.maxGap > 2000 });
+  }
+  return items
+    .map((item) => ({
+      kind: item.kind,
+      role: item.role,
+      name: item.name,
+      attempt: item.attempt,
+      provider: item.provider,
+      model: item.model,
+      status: item.status,
+      spans: item.spans ?? 1,
+      includesWait: item.includesWait === true,
+      startedAt: new Date(item.start).toISOString(),
+      endedAt: new Date(item.end).toISOString(),
+      durationMs: item.end - item.start,
+    }))
+    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
 }
 
 function safeJson(text) {
@@ -519,7 +586,7 @@ async function validateRoutes(config, llm) {
   const declared = new Set(config.providers.map((p) => p.name));
   for (const name of declared) {
     if (!providers.has(name)) {
-      throw new Error(`kanban config: capacity is declared for provider "${name}", which the host does not offer`);
+      throw new Error(`kanban config: provider "${name}" is not offered by the host`);
     }
   }
   for (const [role, entry] of Object.entries(config.roles)) {

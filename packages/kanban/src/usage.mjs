@@ -11,12 +11,15 @@ export function priceVersion(policy) {
 }
 
 /**
- * Price one turn. Returns `costUsd: null` — never 0 — when the route has no
- * complete price, so the UI can show `unpriced` instead of a fake $0.00.
+ * Price one turn. A configured local route has no dollar spend, so it prices
+ * at 0. An unknown route stays null (unpriced) rather than pretending it is free.
  */
 export function priceUsage(usage, policy) {
   const version = priceVersion(policy);
   if (usage === undefined || usage === null) return { costUsd: null, priceVersion: version };
+  if (policy !== undefined && policy !== null && policy.known === true && policy.tier === 'local') {
+    return { costUsd: 0, priceVersion: version };
+  }
   const input = Number(usage.inputTokens ?? 0);
   const output = Number(usage.outputTokens ?? 0);
   const cacheRead = Number(usage.cacheReadTokens ?? 0);

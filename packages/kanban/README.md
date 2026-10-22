@@ -28,8 +28,8 @@ the deployment writes the complete section in its own profile patch.
 gains a `kanban` panel designed in the same visual language as the Activity
 dashboard: a Work header, backlog/in-flight/blocked/attention/done KPIs, a
 colour-accented five-column board, lifecycle progress on every card, a hero
-ticket detail with a phase timeline and metric cards, and clickable shared-session
-links. The New ticket form asks for the target workspace and initial status
+ticket detail with a workflow timeline and metric cards, and clickable
+shared-session links. The New ticket form asks for the target workspace and initial status
 (Backlog, Now, or Blocked). Both are additive seats in lists the shell already
 renders; the sidebar and workspaces list are untouched. A right-sidebar tab is
 the alternative placement; see `DECISIONS.md`.
@@ -44,7 +44,7 @@ impossible values refuse to start.
 |---|---|
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no `workspace_cwd`. |
-| `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. Prices are USD per million tokens; an unlisted provider is priced `unpriced`. Concurrency is owned by `dsh-model-capacity`, not this config; a legacy `maxConcurrent` is accepted with a warning and ignored. |
+| `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. Prices are USD per million tokens; an unlisted provider is priced `unpriced`. This config has no concurrency slots. |
 | `roles{}` | per role: `preset`, `provider`, `model`, `reasoningEffort`, `prompt` (file name), `allowTools[]`. A `null` provider/model falls back to the host's default model selection. |
 | `confidenceThreshold` | default `0.70`; a condition below it is not proven. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
@@ -129,6 +129,12 @@ default starts a fresh one after a failed attempt.
 
 ## Telemetry
 
+The workflow timeline deliberately shows **plugin-owned steps**, not the
+session's individual turns or tools: one block per phase/attempt (grilling
+includes the human answer gap), one block per orchestrator judge call, and one
+block per plugin command (currently `git diff`). Tools remain in the span tree
+and event log for diagnostics, but not in the timeline.
+
 Every span records kind (`trigger|workflow|agent|judge|tool|wait`), parent/child
 links, role, provider/model, attempt, timing, status and prompt hash. Usage rows
 carry input/output/cache-read/cache-write tokens and cost; an unpriceable route
@@ -143,9 +149,8 @@ cost per ticket, stall rate by role.
 Boot recovery marks every `running` span abandoned and returns affected tickets
 to `implement` or `needs_attention`. The SQLite store uses WAL, `busy_timeout`,
 and `BEGIN IMMEDIATE` for every mutation, with a row `version` and a post-commit
-event. Kanban no longer owns concurrency leases: the process-wide
-`dsh-model-capacity` gate queues model calls, so a restart clears the queue and
-its in-memory leases automatically.
+event. Kanban does not own model-call concurrency; that is entirely outside
+this plugin.
 
 ## What this plugin is not
 
@@ -165,7 +170,7 @@ node --test test/*.test.mjs        # 57 tests: pure modules + engine pipeline wi
 node scripts/verify.mjs            # repository release contract
 ```
 
-Concurrency is enforced by the separate `dsh-model-capacity` host plugin. This
+Interactive model concurrency is outside this plugin. This
 package dispatches role turns and lets every model call queue there; `wipCap`
 still bounds how many tickets are in `Now`. See `DECISIONS.md` for the
 measurement and for resolved design choices.

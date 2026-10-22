@@ -42,7 +42,7 @@ test('role allow-lists are the documented sets and never name the board', async 
   const { DEFAULT_TOOLS } = await import('../src/config.mjs')
   for (const [role, tools] of Object.entries(DEFAULT_TOOLS)) {
     for (const name of tools) {
-      assert.equal(/kanban|ticket|board|budget|lease/i.test(name), false, `${role} may call ${name}`)
+      assert.equal(/kanban|ticket|board|budget/i.test(name), false, `${role} may call ${name}`)
     }
   }
   assert.ok(DEFAULT_TOOLS.implementer.includes('edit'))

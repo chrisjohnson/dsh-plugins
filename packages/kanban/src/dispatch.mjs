@@ -9,7 +9,7 @@
 //   2. polling the live agent's status on the worker tick, for the case where a
 //      listener was attached after the event fired (restart, HMR).
 // The watchdog is separate: a turn with no event for `stallTimeoutMs` resolves
-// as stalled and the engine abandons its span and lease.
+// as stalled and the engine abandons its span.
 
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -44,12 +44,11 @@ const PRESET_PLUGINS = [
 
 /** Existing sessions can be reused for a continuation, but never across tickets. */
 export class SessionDriver {
-  constructor({ ctx, log, getConfig, isWaitingForCapacity = () => false }) {
+  constructor({ ctx, log, getConfig }) {
     this.ctx = ctx;
     this.agents = ctx.get('agents');
     this.log = log;
     this.getConfig = getConfig;
-    this.isWaitingForCapacity = isWaitingForCapacity;
     this.waiters = new Map();
     /** sessionId -> {handle, role, preset, ticketId} */
     this.live = new Map();
@@ -252,13 +251,10 @@ export class SessionDriver {
     if (this.waiters.has(sessionId)) return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     const startedMono = process.hrtime.bigint();
     return new Promise((resolve, reject) => {
-      // A turn can legitimately wait in the global capacity queue for a long
-      // time. The stall watchdog must not count that wait as a hung model call.
       const waiter = { resolve, reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId };
       const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
       const timer = setInterval(() => {
         if (this.waiters.get(sessionId) !== waiter) return;
-        if (this.isWaitingForCapacity(sessionId)) return;
         if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
         this.waiters.delete(sessionId);
         clearInterval(timer);
@@ -286,7 +282,7 @@ export class SessionDriver {
     for (const [sessionId, waiter] of [...this.waiters]) {
       const live = this.live.get(sessionId);
       if (live === undefined) continue;
-      if (!this.isWaitingForCapacity(sessionId) && now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
+      if (now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
         this.waiters.delete(sessionId);
         clearInterval(waiter.timer);
         waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'stalled', startedMono: waiter.startedMono });

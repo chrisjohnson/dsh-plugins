@@ -144,8 +144,7 @@ export function assertTransition(from, to, { actor = 'engine', reason = '' } = {
 }
 
 /**
- * The Now view groups. Global capacity is a process-wide queue now, so kanban
- * no longer has a per-ticket `pending_capacity` state: a ticket in `now` is
+ * The Now view groups. A ticket in `now` is
  * active (its session may be queued), waiting on a human, or blocked.
  */
 export function nowGroup(ticket, { waiting = false } = {}) {

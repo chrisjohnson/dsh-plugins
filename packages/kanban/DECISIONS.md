@@ -193,11 +193,10 @@ model route in the implementing session does not accept image input.
 - **Per-call, not per-turn:** the gate acquires a lease before `next()` reaches
   the adapter and releases it when the stream ends/fails/aborts. A tool-heavy
   turn does not hold a slot, so sessions interleave inference and tool time.
-- **Kanban:** all lease code, `maxConcurrent`, capacity admission, the
-  `pending_capacity` group and the `leases` table are gone. A role turn creates
-  its span and sends the prompt; the first model call queues globally. The role
-  stall watchdog asks `ctx.capacity.isWaitingForSession(sessionId)` and does not
-  count queue time as a stall, so hours-long queues are safe.
+- **Kanban:** all capacity code is gone, including lease admission,
+  `maxConcurrent`, the `pending_capacity` group, capacity snapshots and the
+  `isWaitingForCapacity` stall callback. A role turn creates its span and sends
+  the prompt; any model-call queueing is invisible to this plugin.
 - **Subagents:** `subagent`, `subagent_fork` and `spawn_teammate` preflight in
   the tool guard. A reservation is bound to the child on `session/created` and
   consumed by the child's first **main** call (title/compaction calls do not
@@ -206,10 +205,8 @@ model route in the implementing session does not accept image input.
   its fan-out is not declared, so its children queue normally.
 - **Timeouts:** no plugin queue timeout. The wait occurs before the adapter's
   `streamIdleTimeoutMs` starts; the only plugin timer is reservation cleanup.
-- **UI:** a session dock in `conversation.input.dock` shows the queued main call
-  with position/wait and a cancel action; a global `Capacity` panel in
-  `sidebar.panellist`/`main` shows active leases, waiters and reservations with
-  cancel/dismiss/force-release.
+- **UI:** the queue UI belongs to `dsh-model-capacity` (now the **Activity**
+  panel); Kanban shows no capacity controls or counters.
 
 ## 2026-10-22 supersession — one shared session per ticket
 

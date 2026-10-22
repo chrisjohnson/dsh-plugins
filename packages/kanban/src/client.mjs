@@ -31,6 +31,20 @@ window.__ModuleLoader__.load({
 			return "$" + Number(value).toFixed(value > 0 && value < 0.01 ? 4 : 2);
 		}
 
+		function fmtTokens(value) {
+			var n = Number(value || 0);
+			if (!isFinite(n)) return "0";
+			if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1).replace(/\.0$/, "") + "m";
+			if (Math.abs(n) >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
+			return String(Math.round(n));
+		}
+
+		function fmtCost(value, unpriced) {
+			if (unpriced) return "$0.00";
+			if (value === null || value === undefined) return "$0.00";
+			return fmtUsd(value);
+		}
+
 		function fmtDur(ms) {
 			if (ms === null || ms === undefined) return "—";
 			var s = Math.round(ms / 1000);
@@ -202,6 +216,37 @@ window.__ModuleLoader__.load({
 			+ ".kb-flow-title{font:600 10px/14px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-right:2px}"
 			+ ".kb-flow-chip{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);background:var(--dsw-alias-bg-layer-2,#f6f7f9);color:var(--dsw-alias-label-secondary,#555);font:600 10px/16px Inter,sans-serif;white-space:nowrap}"
 			+ ".kb-flow-chip.run{color:#1d4ed8;border-color:#bfdbfe;background:#eff6ff}.kb-flow-chip.warn{color:#b45309;border-color:#fcd34d;background:#fffbeb}"
+			+ ".kb-timeline{display:flex;flex-direction:column;gap:7px}"
+			+ ".kb-tl-legend{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}"
+			+ ".kb-tl-key{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);color:var(--dsw-alias-label-secondary,#555);font:600 9px/15px Inter,sans-serif;background:var(--dsw-alias-bg-layer-2,#f6f7f9)}"
+			+ ".kb-tl-key::before{content:'';width:7px;height:7px;border-radius:2px;background:var(--kb-tl-color)}"
+			+ ".kb-tl-griller{--kb-tl-color:#d97706}.kb-tl-planner{--kb-tl-color:#2563eb}.kb-tl-implementer{--kb-tl-color:#0d9488}.kb-tl-verifier{--kb-tl-color:#7c3aed}.kb-tl-reviewer{--kb-tl-color:#db2777}.kb-tl-judge{--kb-tl-color:#8b5cf6}.kb-tl-plugin{--kb-tl-color:#64748b}"
+			+ ".kb-tl-row{display:grid;grid-template-columns:180px minmax(0,1fr);align-items:center;gap:10px;min-height:30px}"
+			+ ".kb-tl-label{min-width:0;display:flex;flex-direction:column;line-height:1.25}"
+			+ ".kb-tl-name{font:600 10.5px/14px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+			+ ".kb-tl-detail{font:9.5px/13px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+			+ ".kb-tl-track{position:relative;height:20px;background:repeating-linear-gradient(90deg,transparent,transparent 39px,color-mix(in srgb,var(--dsw-alias-border-l2,#e2e6ea) 55%,transparent) 40px);border-radius:6px;overflow:hidden}"
+			+ ".kb-tl-bar{position:absolute;top:3px;height:14px;border-radius:4px;background:var(--kb-tl-color);display:flex;align-items:center;justify-content:flex-end;padding-right:5px;box-shadow:0 1px 2px rgba(15,23,42,.12);opacity:.92;min-width:3px;transition:filter .15s ease}"
+			+ ".kb-tl-bar:hover{filter:brightness(1.08);opacity:1}"
+			+ ".kb-tl-griller{--kb-tl-color:#d97706}.kb-tl-planner{--kb-tl-color:#2563eb}.kb-tl-implementer{--kb-tl-color:#0d9488}.kb-tl-verifier{--kb-tl-color:#7c3aed}.kb-tl-reviewer{--kb-tl-color:#db2777}.kb-tl-judge{--kb-tl-color:#8b5cf6}"
+			+ ".kb-tl-step-0{--kb-tl-color:#0891b2}.kb-tl-step-1{--kb-tl-color:#ca8a04}.kb-tl-step-2{--kb-tl-color:#c026d3}.kb-tl-step-3{--kb-tl-color:#65a30d}.kb-tl-step-4{--kb-tl-color:#e11d48}"
+			+ ".kb-tl-dur{font:600 8px/10px ui-monospace,monospace;color:#fff;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.2)}"
+			+ "@media (max-width:700px){.kb-tl-row{grid-template-columns:120px minmax(0,1fr)}}"
+			+ ".kb-analytics{display:flex;flex-direction:column;gap:14px}"
+			+ ".kb-analytics-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}"
+			+ ".kb-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}"
+			+ ".kb-analytics-card{border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 18%,var(--dsw-alias-border-l2,#e5e7eb));background:linear-gradient(150deg,color-mix(in srgb,var(--kb-accent,#3b82f6) 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".kb-analytics-card h3{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary,#555);font:600 10px/14px Inter,sans-serif;letter-spacing:.08em}"
+			+ ".kb-carddot{width:7px;height:7px;border-radius:2px;background:var(--kb-accent,#3b82f6);box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-accent,#3b82f6) 12%,transparent)}"
+			+ ".kb-analytics .kb-table th{padding:6px 8px;border-bottom:1px solid color-mix(in srgb,var(--kb-accent,#3b82f6) 16%,var(--dsw-alias-border-l1,#e8e8e8))}"
+			+ ".kb-analytics .kb-table td{padding:7px 8px;border-bottom:.5px solid var(--dsw-alias-border-l1,#f0f0f0)}"
+			+ ".kb-analytics .kb-table tr:hover td{background:color-mix(in srgb,var(--kb-accent,#3b82f6) 4%,transparent)}"
+			+ ".kb-big-num{font:650 13px/16px ui-monospace,monospace;color:var(--kb-accent,#2563eb)}"
+			+ ".kb-time{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap}"
+			+ ".kb-rate{display:inline-flex;align-items:center;gap:7px;min-width:90px}"
+			+ ".kb-rate-track{width:70px;height:6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 14%,transparent);overflow:hidden}"
+			+ ".kb-rate-fill{display:block;height:100%;border-radius:inherit;background:#64748b}.kb-rate-fill.good{background:#15803d}.kb-rate-fill.mid{background:#b45309}.kb-rate-fill.bad{background:#b91c1c}"
+			+ "@media (max-width:800px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-analytics-grid{grid-template-columns:1fr}}"
 			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
 			+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
 			+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot{animation:none}}"
@@ -448,37 +493,53 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function Gantt(props) {
-			var spans = props.spans || [];
-			if (spans.length === 0) return h("div", { className: "kb-empty", children: "No spans yet." });
+		function Timeline(props) {
+			var items = props.items || [];
+			if (items.length === 0) return h("div", { className: "kb-empty", children: "No workflow steps recorded yet." });
 			var min = Infinity, max = -Infinity;
-			spans.forEach(function (s) {
-				var a = new Date(s.startedAt).getTime();
-				var b = s.endedAt ? new Date(s.endedAt).getTime() : Date.now();
+			items.forEach(function (item) {
+				var a = new Date(item.startedAt).getTime();
+				var b = new Date(item.endedAt).getTime();
 				if (isFinite(a)) min = Math.min(min, a);
 				if (isFinite(b)) max = Math.max(max, b);
 			});
 			if (!isFinite(min) || !isFinite(max) || max <= min) max = min + 1000;
-			var depth = {};
-			function depthOf(s, guard) {
-				if (depth[s.id] !== undefined) return depth[s.id];
-				var d = 0;
-				if (s.parentSpanId && props.byId[s.parentSpanId]) d = 1 + depthOf(props.byId[s.parentSpanId], (guard || 0) + 1);
-				depth[s.id] = d;
-				return d;
+			var stepIndex = 0;
+			function tone(item) {
+				if (item.kind === "phase") return "kb-tl-" + item.role;
+				if (item.kind === "judge") return "kb-tl-judge";
+				var cls = "kb-tl-step-" + (stepIndex % 5);
+				stepIndex += 1;
+				return cls;
 			}
-			var rows = spans.slice().sort(function (a, b) { return new Date(a.startedAt) - new Date(b.startedAt); });
-			return h("div", { className: "kb-gantt" },
-				rows.map(function (s) {
-					var a = new Date(s.startedAt).getTime();
-					var b = s.endedAt ? new Date(s.endedAt).getTime() : Date.now();
+			return h("div", { className: "kb-timeline" },
+				h("div", { className: "kb-tl-legend" },
+					h("span", { className: "kb-tl-key kb-tl-griller", children: "Grill" }),
+					h("span", { className: "kb-tl-key kb-tl-planner", children: "Plan" }),
+					h("span", { className: "kb-tl-key kb-tl-implementer", children: "Build" }),
+					h("span", { className: "kb-tl-key kb-tl-verifier", children: "Verify" }),
+					h("span", { className: "kb-tl-key kb-tl-reviewer", children: "Review" }),
+					h("span", { className: "kb-tl-key kb-tl-judge", children: "Orchestrator judge" }),
+					h("span", { className: "kb-tl-key kb-tl-plugin", children: "Plugin step" })
+				),
+				items.map(function (item, index) {
+					var a = new Date(item.startedAt).getTime();
+					var b = new Date(item.endedAt).getTime();
 					var left = ((a - min) / (max - min)) * 100;
-					var width = Math.max(0.4, ((b - a) / (max - min)) * 100);
-					var cls = "kb-gbar " + (s.kind === "wait" ? "wait" : s.kind) + (s.status === "failed" ? " failed" : s.status === "abandoned" ? " abandoned" : "");
-					var title = (s.role || s.kind) + " · " + (s.provider || "?") + "/" + (s.model || "?") + " · attempt " + s.attempt + " · " + fmtDur(s.durationMs);
-					return h("div", { className: "kb-grow", key: s.id },
-						h("div", { className: "kb-glabel", style: { paddingLeft: 8 + depthOf(s, 0) * 14 }, title: title, children: (s.kind === "tool" ? "· " : "") + s.name + (s.role ? " (" + s.role + ")" : "") }),
-						h("div", { className: "kb-gtrack" }, h("div", { className: cls, style: { left: Math.min(99, Math.max(0, left)) + "%", width: Math.min(100, width) + "%" }, title: title }))
+					var width = Math.max(0.5, ((b - a) / (max - min)) * 100);
+					var cls = tone(item);
+					var label = item.kind === "phase" ? item.name : item.kind === "judge" ? "judge · " + item.name : item.name;
+					var detail = (item.kind === "phase" ? "attempt " + item.attempt + " · " : "") + (item.includesWait ? "includes human wait · " : "") + fmtDur(item.durationMs);
+					return h("div", { className: "kb-tl-row", key: index },
+						h("div", { className: "kb-tl-label", title: label + " · " + detail },
+							h("span", { className: "kb-tl-name", children: label }),
+							h("span", { className: "kb-tl-detail", children: detail })
+						),
+						h("div", { className: "kb-tl-track" },
+							h("div", { className: "kb-tl-bar " + cls, style: { left: Math.min(99, Math.max(0, left)) + "%", width: Math.min(100, width) + "%" }, title: label + " · " + detail },
+								width > 12 ? h("span", { className: "kb-tl-dur", children: fmtDur(item.durationMs) }) : null
+							)
+						)
 					);
 				})
 			);
@@ -522,8 +583,6 @@ window.__ModuleLoader__.load({
 			}, [tab, analytics]);
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
-			var spanById = {};
-			d.spans.forEach(function (s) { spanById[s.id] = s; });
 			var questionArtifact = d.grill;
 			var awaiting = t.phase === "grill" && questionArtifact && questionArtifact.questions && questionArtifact.questions.length > 0;
 			var tabs = ["overview", "timeline", "sessions", "events", "analytics"];
@@ -557,12 +616,12 @@ window.__ModuleLoader__.load({
 				})),
 				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onAcceptance: props.onAcceptance }) : null,
 				tab === "timeline" ? h("div", { className: "kb-panel" },
-					h("h3", { children: "Span timeline (from spans, not aggregates)" }),
+					h("h3", { children: "Workflow timeline" }),
 					h("div", { className: "kb-row", style: { marginBottom: 8 } },
 						h("button", { className: "kb-btn", onClick: function () { rpc("export", { id: t.id, kind: "spans", format: "csv" }).then(function (res) { if (res && res.ok) download(t.key + "-spans.csv", res.value.mime, res.value.body); }); }, children: "Spans CSV" }),
 						h("button", { className: "kb-btn", onClick: function () { rpc("export", { id: t.id, kind: "spans", format: "jsonl" }).then(function (res) { if (res && res.ok) download(t.key + "-spans.jsonl", res.value.mime, res.value.body); }); }, children: "Spans JSONL" }),
 						h("button", { className: "kb-btn", onClick: function () { rpc("export", { id: t.id, kind: "usage", format: "csv" }).then(function (res) { if (res && res.ok) download(t.key + "-usage.csv", res.value.mime, res.value.body); }); }, children: "Usage CSV" })),
-					h(Gantt, { spans: d.spans, byId: spanById })) : null,
+					h(Timeline, { items: d.timeline || [] })) : null,
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
 				tab === "analytics" ? h(AnalyticsPanel, { data: analytics }) : null
@@ -670,17 +729,17 @@ window.__ModuleLoader__.load({
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "Token and cost rollup" }),
 					h("div", { className: "kb-row", style: { gap: 18, marginBottom: 8 } },
-						h("span", { children: "input " + (usage.inputTokens || 0) }),
-						h("span", { children: "output " + (usage.outputTokens || 0) }),
-						h("span", { children: "cache read " + (usage.cacheReadTokens || 0) }),
+						h("span", { children: "input " + fmtTokens(usage.inputTokens) }),
+						h("span", { children: "output " + fmtTokens(usage.outputTokens) }),
+						h("span", { children: "cache read " + fmtTokens(usage.cacheReadTokens) }),
 						h("span", { children: "cache write " + (usage.cacheWriteTokens || 0) }),
-						h("span", { children: usage.unpriced ? "unpriced" : fmtUsd(usage.costUsd || 0) })),
+						h("span", { children: fmtCost(usage.costUsd, usage.unpriced) })),
 					models.length === 0 ? h("div", { className: "kb-hint", children: "No usage recorded." }) :
 						h("table", { className: "kb-table" },
 							h("thead", null, h("tr", null, h("th", { children: "provider" }), h("th", { children: "model" }), h("th", { children: "in" }), h("th", { children: "out" }), h("th", { children: "cost" }))),
 							h("tbody", null, models.map(function (key) {
 								var m = usage.byModel[key];
-								return h("tr", { key: key }, h("td", { children: m.provider }), h("td", { children: m.model }), h("td", { children: m.inputTokens }), h("td", { children: m.outputTokens }), h("td", { children: m.unpriced ? "unpriced" : fmtUsd(m.costUsd) }));
+								return h("tr", { key: key }, h("td", { children: m.provider }), h("td", { children: m.model }), h("td", { children: fmtTokens(m.inputTokens) }), h("td", { children: fmtTokens(m.outputTokens) }), h("td", { children: fmtCost(m.costUsd, m.unpriced) }));
 							})))
 				),
 				h("div", { className: "kb-panel" },
@@ -738,9 +797,20 @@ window.__ModuleLoader__.load({
 		function AnalyticsPanel(props) {
 			if (!props.data) return h("div", { className: "kb-empty", children: "Loading analytics…" });
 			var a = props.data;
-			function table(title, rows, cols) {
-				return h("div", { className: "kb-panel", style: { marginBottom: 12 } },
-					h("h3", { children: title }),
+			var done = a.counts ? a.counts.done || 0 : 0;
+			var totalCost = (a.costPerTicket || []).reduce(function (sum, row) { return sum + (Number(row.costUsd) || 0); }, 0);
+			var totalAttempts = 0, totalTickets = 0;
+			(a.attemptsToDone || []).forEach(function (row) { totalAttempts += Number(row.attempts) * Number(row.tickets); totalTickets += Number(row.tickets); });
+			var avgAttempts = totalTickets === 0 ? "—" : (totalAttempts / totalTickets).toFixed(1);
+			var modelCount = (a.modelSuccessRate || []).length;
+			function pctBar(rate) {
+				if (rate === null || rate === undefined) return h("span", { className: "kb-dim", children: "—" });
+				var pct = Math.round(rate * 100);
+				return h("span", { className: "kb-rate" }, h("span", { className: "kb-rate-track" }, h("span", { className: "kb-rate-fill " + (pct >= 80 ? "good" : pct >= 50 ? "mid" : "bad"), style: { width: pct + "%" } })), h("span", { children: pct + "%" }));
+			}
+			function table(title, rows, cols, tone) {
+				return h("div", { className: "kb-panel kb-analytics-card " + tone },
+					h("h3", { children: [h("span", { className: "kb-carddot" }), title] }),
 					rows.length === 0 ? h("div", { className: "kb-hint", children: "No data yet." }) :
 						h("table", { className: "kb-table" },
 							h("thead", null, h("tr", null, cols.map(function (c) { return h("th", { key: c[0], children: c[1] }); }))),
@@ -748,13 +818,21 @@ window.__ModuleLoader__.load({
 								return h("tr", { key: i }, cols.map(function (c) { return h("td", { key: c[0], children: typeof c[2] === "function" ? c[2](row) : row[c[0]] }); }));
 							}))));
 			}
-			return h("div", null,
-				table("Attempts to done", a.attemptsToDone, [["attempts", "attempts"], ["tickets", "tickets"]]),
-				table("Model success rate", a.modelSuccessRate, [["provider", "provider"], ["model", "model"], ["tickets", "tickets"], ["done", "done"], ["rate", "rate", function (r) { return r.rate === null ? "—" : Math.round(r.rate * 100) + "%"; }]]),
-				table("Confidence calibration", a.calibration, [["verdict", "verdict"], ["bucket", "confidence"], ["n", "n"], ["done", "done"]]),
-				table("Time in phase", a.timeInPhase, [["phase", "phase"], ["transitions", "completed stays"], ["avgMs", "avg time", function (r) { return fmtDur(r.avgMs); }]]),
-				table("Cost per ticket", a.costPerTicket, [["key", "ticket"], ["inputTokens", "in"], ["outputTokens", "out"], ["costUsd", "cost", function (r) { return r.unpricedRows > 0 ? "unpriced" : fmtUsd(r.costUsd); }]]),
-				table("Stall rate by role", a.stallRate, [["role", "role"], ["spans", "spans"], ["abandoned", "abandoned"], ["rate", "rate", function (r) { return r.rate === null ? "—" : Math.round(r.rate * 100) + "%"; }]])
+			return h("div", { className: "kb-analytics" },
+				h("div", { className: "kb-analytics-kpis" },
+					h(Kpi, { tone: "kb-tone-ok", value: done, label: "Tickets done" }),
+					h(Kpi, { tone: "kb-tone-run", value: avgAttempts, label: "Avg attempts" }),
+					h(Kpi, { tone: "kb-tone-violet", value: modelCount, label: "Models tracked" }),
+					h(Kpi, { tone: "kb-tone-idle", value: fmtCost(totalCost, false), label: "Recorded spend" })
+				),
+				h("div", { className: "kb-analytics-grid" },
+					table("Attempts to done", a.attemptsToDone, [["attempts", "attempts"], ["tickets", "tickets", function (r) { return h("span", { className: "kb-big-num", children: r.tickets }); }]], "kb-tone-run"),
+					table("Model success rate", a.modelSuccessRate, [["provider", "provider"], ["model", "model"], ["tickets", "tickets"], ["rate", "success", function (r) { return pctBar(r.rate); }]], "kb-tone-violet"),
+					table("Confidence calibration", a.calibration, [["verdict", "verdict"], ["confidence", "bucket"], ["n", "n"], ["done", "done", function (r) { return h("span", { className: "kb-big-num", children: r.done }); }]], "kb-tone-ok"),
+					table("Time in phase", a.timeInPhase, [["phase", "phase"], ["transitions", "runs"], ["avgMs", "avg time", function (r) { return h("span", { className: "kb-time", children: fmtDur(r.avgMs) }); }]], "kb-tone-warn"),
+					table("Cost per ticket", a.costPerTicket, [["key", "ticket"], ["inputTokens", "in", function (r) { return fmtTokens(r.inputTokens); }], ["outputTokens", "out", function (r) { return fmtTokens(r.outputTokens); }], ["costUsd", "cost", function (r) { return fmtCost(r.costUsd, r.unpricedRows > 0); }]], "kb-tone-idle"),
+					table("Stall rate by role", a.stallRate, [["role", "role"], ["spans", "runs"], ["abandoned", "abandoned"], ["rate", "stalled", function (r) { return pctBar(r.rate); }]], "kb-tone-err")
+				)
 			);
 		}
 
@@ -865,13 +943,7 @@ window.__ModuleLoader__.load({
 							h("span", { className: "kb-flow-title", children: "In flight" }),
 							h("span", { className: "kb-flow-chip run", children: (nowGroups.active || []).length + " active" }),
 							h("span", { className: "kb-flow-chip warn", children: (nowGroups.waiting || []).length + " waiting on you" }),
-							h("span", { className: "kb-flow-chip", children: (nowGroups.blocked || []).length + " blocked" }),
-							h("span", { className: "kb-spacer" }),
-							(board.capacity || []).map(function (c) {
-								var short = c.name.includes("(apu)") ? "APU" : c.name.includes("(eGPU)") ? "eGPU" : "cloud";
-								var limit = c.maxConcurrent === null || c.maxConcurrent === undefined ? "∞" : c.maxConcurrent;
-								return h("span", { key: c.name, className: "kb-flow-chip" + (c.waiting > 0 ? " warn" : ""), title: c.name, children: short + " " + c.used + "/" + limit + (c.waiting > 0 ? " · " + c.waiting + " queued" : "") });
-							})
+							h("span", { className: "kb-flow-chip", children: (nowGroups.blocked || []).length + " blocked" })
 						) : null,
 						h("div", { className: "kb-cols" },
 							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder }),

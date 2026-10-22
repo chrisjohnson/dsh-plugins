@@ -147,17 +147,6 @@ CREATE TABLE IF NOT EXISTS verifications (
 );
 CREATE INDEX IF NOT EXISTS verifications_ticket ON verifications(ticket_id, cycle);
 
-CREATE TABLE IF NOT EXISTS leases (
-  provider TEXT NOT NULL,
-  slot INTEGER NOT NULL,
-  holder_span_id TEXT NOT NULL,
-  acquired_at TEXT NOT NULL,
-  heartbeat_at TEXT NOT NULL,
-  released_at TEXT,
-  PRIMARY KEY (provider, slot)
-);
-CREATE INDEX IF NOT EXISTS leases_holder ON leases(holder_span_id);
-
 CREATE TABLE IF NOT EXISTS artifacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
@@ -172,9 +161,8 @@ CREATE INDEX IF NOT EXISTS artifacts_created ON artifacts(created_at);
 `;
 
 const V2 = `
--- Concurrency moved to the process-wide dsh-model-capacity service. The old
--- per-turn lease rows are no longer read or written.
-DROP TABLE IF EXISTS leases;
+-- Reserved migration slot; concurrency is owned outside this plugin.
+SELECT 1;
 `;
 
 export const MIGRATIONS = [
@@ -185,7 +173,7 @@ export const MIGRATIONS = [
   },
   {
     version: 2,
-    name: 'drop-local-leases',
+    name: 'drop-legacy-concurrency',
     sql: V2,
   },
 ];

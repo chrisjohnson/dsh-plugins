@@ -248,7 +248,7 @@ test('paid route without allow_paid refuses instead of downgrading', async () =>
   assert.match(t.needsAttentionReason, /allow_paid/)
 })
 
-test('restart recovery abandons running spans, releases leases and requeues work', async () => {
+test('restart recovery abandons running spans and requeues work', async () => {
   const { store, engine } = setup({ implementer: [PASS_CLAIM], verifier: [VERIFY_PASS], reviewer: [REVIEW_PASS] })
   const ticket = pickedUp(store)
   store.transitionTicket(ticket.id, { phase: 'plan' })

@@ -112,14 +112,14 @@ export const DEFAULT_CONFIG = {
    */
   escalationLadder: [{ rung: 0 }],
 
-  /** Worker tick and lease timings (milliseconds). */
+  /** Worker tick and timing intervals (milliseconds). */
   tickIntervalMs: 5000,
   /** A turn with no observable progress for this long is abandoned. */
   stallTimeoutMs: 600000,
 
   /** Tickets allowed to hold an active implement attempt at once. */
   wipCap: 4,
-  /** Promote backlog tickets into `now` when capacity and WIP allow. */
+  /** Promote backlog tickets into `now` when WIP allows. */
   autoPromote: true,
   /** Maximum promotions per tick, so one tick cannot flood the queue. */
   autoPromotePerTick: 2,
@@ -157,9 +157,6 @@ const PROVIDER_KEYS = new Set([
   'priceOut',
   'priceCacheRead',
   'priceCacheWrite',
-  // Legacy from before global capacity; accepted so an old row boots with a
-  // warning instead of an unknown-key surprise, but the value is ignored.
-  'maxConcurrent',
 ]);
 const LADDER_KEYS = new Set(['rung', 'provider', 'model', 'reasoningEffort', 'paid']);
 
@@ -227,13 +224,6 @@ function validateProviders(providers, errors, warnings) {
     if (!isNonEmptyString(provider.name)) errors.push(new ConfigError('name must be a non-empty string', at));
     else if (seen.has(provider.name)) errors.push(new ConfigError(`duplicate provider "${provider.name}"`, at));
     else seen.add(provider.name);
-    if (provider.maxConcurrent !== undefined) {
-      if (!Number.isInteger(provider.maxConcurrent) || provider.maxConcurrent < 1) {
-        errors.push(new ConfigError('maxConcurrent must be an integer >= 1', `${at}.maxConcurrent`));
-      } else {
-        warnings.push(`providers[${index}].maxConcurrent is ignored: concurrency is owned by dsh-model-capacity`);
-      }
-    }
     if (provider.tier !== undefined && provider.tier !== 'local' && provider.tier !== 'paid') {
       errors.push(new ConfigError('tier must be "local" or "paid"', `${at}.tier`));
     }

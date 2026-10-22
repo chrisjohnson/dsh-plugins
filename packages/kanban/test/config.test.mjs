@@ -19,21 +19,14 @@ test('unknown keys warn once instead of refusing to boot', () => {
 })
 
 test('wrong types and impossible values refuse to start', () => {
-  assert.throws(() => resolveConfig({ providers: [{ name: 'p', maxConcurrent: 0 }] }), ConfigError)
-  assert.throws(() => resolveConfig({ providers: [{ name: 'p', maxConcurrent: 1, priceIn: -1 }] }), ConfigError)
+  assert.throws(() => resolveConfig({ providers: [{ name: 'p', priceIn: -1 }] }), ConfigError)
   assert.throws(() => resolveConfig({ wipCap: 0 }), ConfigError)
   assert.throws(() => resolveConfig({ confidenceThreshold: 2 }), ConfigError)
   assert.throws(() => resolveConfig({ escalationLadder: [] }), ConfigError)
 })
 
-test('legacy maxConcurrent is accepted with a warning and ignored', () => {
-  const { config, warnings } = resolveConfig({ providers: [{ name: 'p', maxConcurrent: 2 }] })
-  assert.ok(warnings.some((w) => /maxConcurrent is ignored/.test(w)))
-  assert.equal('maxConcurrent' in providerPolicy(config, 'p'), false)
-})
-
 test('duplicate provider names are rejected', () => {
-  assert.throws(() => resolveConfig({ providers: [{ name: 'p', maxConcurrent: 1 }, { name: 'p', maxConcurrent: 1 }] }), /duplicate/)
+  assert.throws(() => resolveConfig({ providers: [{ name: 'p' }, { name: 'p' }] }), /duplicate/)
 })
 
 test('unknown provider is unpriced; concurrency is owned elsewhere', () => {
@@ -41,7 +34,6 @@ test('unknown provider is unpriced; concurrency is owned elsewhere', () => {
   const policy = providerPolicy(config, 'mystery')
   assert.equal(policy.priceIn, null)
   assert.equal(policy.known, false)
-  assert.equal('maxConcurrent' in policy, false)
 })
 
 test('escalation ladder maps attempts to rungs', () => {

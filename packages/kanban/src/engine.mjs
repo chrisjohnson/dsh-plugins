@@ -1,7 +1,7 @@
 // dsh-kanban: the workflow engine.
 //
 // Code decides. This file owns every transition: intake, plan, implement,
-// verify, review, retry, escalation, capacity admission, budget refusal and
+// verify, review, retry, escalation, budget refusal and
 // human waits. Role sessions are dispatched, their final JSON is judged
 // mechanically, and an out-of-band judge is consulted only where the protocol
 // says a human-level decision is needed.
@@ -117,8 +117,8 @@ export class Engine {
 
   /**
    * Restart safety. A host killed mid-turn leaves `running` spans and live
-   * leases; neither survives the process. Mark them abandoned, release the
-   * capacity, and put the ticket back into a dispatchable phase exactly once.
+   * spans; they do not survive the process. Mark them abandoned and put the
+   * ticket back into a dispatchable phase exactly once.
    */
   async recover() {
     for (const span of this.store.runningSpans()) {
@@ -224,7 +224,7 @@ export class Engine {
 
   // -------------------------------------------------------------- pipeline
 
-  /** Drive one ticket as far as capacity, human input and terminal states allow. */
+  /** Drive one ticket as far as human input and terminal states allow. */
   async advance(start) {
     let ticket = this.store.getTicket(start.id);
     let guard = 0;
@@ -294,8 +294,8 @@ export class Engine {
       }
     }
 
-    // A one_shot conversion that could not run last tick (judge capacity) is
-    // retried here; it is the only intake work owed while phase is triage.
+    // A one_shot conversion that could not run last tick is retried here; it is
+    // the only intake work owed while phase is triage.
     if (ticket.phase === 'triage' && ticket.planMode === 'one_shot' && this.store.listConditions(ticket.id).length === 0) {
       const converted = await this.convertAcceptance(ticket);
       if (converted === 'deferred') return { kind: 'wait' };
@@ -897,7 +897,6 @@ export class Engine {
   }
 
   async failedTurn(ticket, turn, phaseName) {
-    if (turn.kind === 'no_capacity') return { kind: 'wait' };
     if (turn.kind === 'budget') return this.hold(ticket, turn);
     if (turn.kind === 'needs_attention') return this.needsAttention(ticket, turn.reason);
     const reason = `turn ${turn.kind} in ${phaseName}: ${turn.error ?? 'unknown'}`;
@@ -938,7 +937,7 @@ export class Engine {
   // -------------------------------------------------------------- role turns
 
   /**
-   * Admit one model call against declared capacity and budget. Returns
+   * Admit one model call against the budget. Returns
    * `{ok:false, reason}` for "wait" (no slot) and "needs_attention" (budget or
    * paid policy), never a silent downgrade.
    */
@@ -1243,6 +1242,18 @@ export class Engine {
 
   async diff(ticket) {
     const cwd = ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd();
+    const spanId = randomUUID();
+    const span = this.store.startSpan({
+      id: spanId,
+      ticketId: ticket.id,
+      runId: this.ensureRun(ticket),
+      parentSpanId: null,
+      kind: 'workflow',
+      name: 'git diff',
+      role: null,
+      attempt: ticket.attemptCount,
+    });
+    const startedMono = process.hrtime.bigint();
     try {
       const [stat, status, diff] = await Promise.all([
         execFileAsync('git', ['-C', cwd, 'diff', '--stat', 'HEAD'], { timeout: 10_000, maxBuffer: MAX_DIFF_BYTES }),
@@ -1254,6 +1265,8 @@ export class Engine {
         .filter((line) => line.startsWith('??'))
         .map((line) => line.slice(3))
         .slice(0, 50);
+      const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
+      this.store.endSpan(span.id, { status: 'ok', durationMs });
       return [
         'STAT:',
         stat.stdout.trim() || '(no tracked changes)',
@@ -1265,6 +1278,8 @@ export class Engine {
         diff.stdout.slice(0, MAX_DIFF_BYTES) || '(empty)',
       ].join('\n');
     } catch (error) {
+      const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
+      this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });
       return `(could not read git diff in ${cwd}: ${String(error?.message ?? error)})`;
     }
   }
