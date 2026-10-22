@@ -258,7 +258,7 @@ export default class ModelCapacity extends Service {
       next.set(item.sessionId, {
         title: item.projections?.values?.title ?? null,
         cwd,
-        workspace: this.#workspaceFor(cwd),
+        workspace: this.workspaceFor(cwd),
         running: item.running === true,
       });
     }
@@ -267,7 +267,7 @@ export default class ModelCapacity extends Service {
     this.metaUpdatedAt = Date.now();
   }
 
-  #workspaceFor(cwd) {
+  workspaceFor(cwd) {
     if (typeof cwd !== 'string' || cwd === '') return null;
     const match = this.workspaceByPath.find((workspace) => cwd === workspace.path || cwd.startsWith(workspace.path + '/'));
     return match?.title ?? null;
@@ -277,13 +277,13 @@ export default class ModelCapacity extends Service {
    * Prefer the live session: the projection cache may not be mounted for cold
    * sessions, but a live agent has its title fold and header cwd right here.
    */
-  #describe(sessionId) {
+  describe(sessionId) {
     if (typeof sessionId !== 'string' || sessionId === '') return { sessionTitle: null, workspace: null, cwd: null };
     const live = this.ctx.get('sessions')?.get?.(sessionId);
     if (live !== undefined && live !== null) {
       const title = this.ctx.get('sessionTitle')?.get?.(live)?.title ?? null;
       const cwd = live.header?.cwd ?? null;
-      return { sessionTitle: title ?? this.sessionMeta.get(sessionId)?.title ?? null, workspace: this.#workspaceFor(cwd), cwd };
+      return { sessionTitle: title ?? this.sessionMeta.get(sessionId)?.title ?? null, workspace: this.workspaceFor(cwd), cwd };
     }
     const meta = this.sessionMeta.get(sessionId);
     return {
@@ -299,12 +299,12 @@ export default class ModelCapacity extends Service {
     const snap = this.manager.snapshot();
     const providers = snap.providers.map((provider) => ({
       ...provider,
-      active: provider.active.map((lease) => ({ ...lease, ...this.#describe(lease.sessionId) })),
-      waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.#describe(waiter.sessionId) })),
+      active: provider.active.map((lease) => ({ ...lease, ...this.describe(lease.sessionId) })),
+      waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.describe(waiter.sessionId) })),
       reservations: provider.reservations.map((reservation) => ({
         ...reservation,
-        parent: this.#describe(reservation.parentSession),
-        child: this.#describe(reservation.childSession),
+        parent: this.describe(reservation.parentSession),
+        child: this.describe(reservation.childSession),
       })),
     }));
     return {

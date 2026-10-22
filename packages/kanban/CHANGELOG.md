@@ -11,8 +11,8 @@
   an in-flight view, backed by a local SQLite store with forward-only migrations.
 - Code-driven lifecycle: intake, triage, grill, plan, implement, verify, review,
   with the intake-combination table enforced in the store.
-- Per-turn capacity leases with heartbeat and stale reclaim; unknown providers
-  are admitted one at a time.
+- Global per-provider capacity is delegated to `dsh-model-capacity`; Kanban owns
+  no leases and no per-turn concurrency counters.
 - Role sessions created from presets, with tool allow-lists enforced by
   `tools.restrict` and a monotonic execution guard.
 - Mechanical result gate, bounded continuations, out-of-band adjudication,

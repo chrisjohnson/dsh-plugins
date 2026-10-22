@@ -107,7 +107,7 @@ are already interrupted by the restart). No database is used.
 
 ## Panel
 
-- The **Capacity** sidebar entry carries one tiny round pill per provider in
+- The **Activity** sidebar entry carries one tiny round pill per provider in
   real time, rendered after the word `Capacity`. The left number is **active +
   queued** demand, so a full provider with one call waiting reads `3/2`; an
   unlimited provider reads `3/∞`. Pills use a light tinted fill with a darker
@@ -115,7 +115,7 @@ are already interrupted by the restart). No database is used.
   capacity, red when anything is queued. Hovering a pill names the provider
   (`local-ai-machine (apu): 3/2 · 2 active · 1 queued`). The collapsed rail hides
   the pills because the 36 px rail cannot fit them without overlapping the icon.
-- `sidebar.panellist` entry **Capacity** → a Context-tab-like full page: header
+- `sidebar.panellist` entry **Activity** → a Context-tab-like full page: header
   with live enforcing status, KPI cards (active / queued / reserved), and one
   colour-accented card per provider with a capacity bar. Each active or queued
   call is a session card showing title, workspace, model, kind and elapsed/waited

@@ -143,7 +143,7 @@ window.__ModuleLoader__.load({
 			+ ".mc-mono{font:11px/16px ui-monospace,monospace}"
 			+ ".mc-session{font-weight:600;color:var(--dsw-alias-label-primary,#111)}"
 			+ ".mc-nav-icon-wrap{position:relative;display:inline-flex;align-items:center;flex:none}"
-			+ ".mc-nav-badges{position:absolute;left:calc(100% + 68px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
+			+ ".mc-nav-badges{position:absolute;left:calc(100% + 58px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
 			+ ".mc-badge{display:inline-flex;align-items:center;justify-content:center;height:14px;padding:0 6px;border-radius:999px;border:1px solid;box-sizing:border-box;font:600 9px/12px ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.02em}"
 			+ ".mc-badge.ok{color:#15803d;background:rgba(34,160,74,.12);border-color:rgba(34,160,74,.35)}"
 			+ ".mc-badge.full{color:#854d0e;background:rgba(234,179,8,.14);border-color:rgba(161,98,7,.38)}"
@@ -411,8 +411,8 @@ window.__ModuleLoader__.load({
 				h("div", { className: "mc-page" },
 					h("div", { className: "mc-pagehead" },
 						h("div", { className: "mc-pagehead-main" },
-							h("h1", { className: "mc-title", children: "Model capacity" }),
-							h("div", { className: "mc-page-sub", children: "Per-provider admission control · FIFO · no queue timeout · click any session card to open it" })
+							h("h1", { className: "mc-title", children: "Activity" }),
+							h("div", { className: "mc-page-sub", children: "Live model activity · per-provider admission control · FIFO · click any session card to open it" })
 						),
 						h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : ""), children: [h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing"] })
 					),
@@ -505,7 +505,7 @@ window.__ModuleLoader__.load({
 			ctx.effect(function () {
 				return slots.inject("sidebar.panellist", function () {
 					return slots.register(
-						{ name: "sidebar.panellist", id: "model-capacity", order: 21, label: function () { return "Capacity"; } },
+						{ name: "sidebar.panellist", id: "model-capacity", order: 21, label: function () { return "Activity"; } },
 						CapacityIcon
 					);
 				});
