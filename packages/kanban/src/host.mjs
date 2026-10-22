@@ -228,15 +228,14 @@ export default async function kanban(ctx, config = {}) {
           case 'events':
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
           case 'create': {
+            const column = p.column ?? 'backlog';
+            if (!['backlog', 'now', 'blocked'].includes(column)) return fail('bad_request', 'column must be backlog, now, or blocked');
             let ticket = store.createTicket(p);
             appendConfigFingerprint(store, ticket.id);
-            const column = p.column;
             if (column === 'now') {
               ticket = engineRef.current.pickup(ticket.id);
             } else if (column === 'blocked') {
               ticket = store.transitionTicket(ticket.id, { column: 'blocked' }, { actor: 'human', reason: 'created blocked' });
-            } else if (column !== undefined && column !== 'backlog') {
-              return fail('bad_request', 'column must be backlog, now, or blocked');
             }
             void engineRef.current.tick();
             return { ok: true, value: { ticket } };
