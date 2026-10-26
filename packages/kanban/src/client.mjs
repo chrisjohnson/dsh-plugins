@@ -205,8 +205,9 @@ window.__ModuleLoader__.load({
 			+ ".kb-life{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary,#999);font:500 10px/14px Inter,sans-serif}"
 			+ ".kb-life+.kb-life::before{content:'';width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px}"
 			+ ".kb-life-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-bg-layer-2,#eef1f5);border:1px solid var(--dsw-alias-border-l3,#ccc)}"
-			+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent)}"
-			+ ".kb-life.active{color:var(--kb-accent);font-weight:600}.kb-life.active .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent);animation:kb-pulse 1.8s ease-out infinite}"
+			+ ".kb-life-intake{--kb-life-color:#64748b}.kb-life-grill{--kb-life-color:#d97706}.kb-life-plan{--kb-life-color:#2563eb}.kb-life-implement{--kb-life-color:#0d9488}.kb-life-verify{--kb-life-color:#7c3aed}.kb-life-review{--kb-life-color:#db2777}.kb-life-closed{--kb-life-color:#15803d}"
+			+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-life-color);border-color:var(--kb-life-color)}"
+			+ ".kb-life.active{color:var(--kb-life-color);font-weight:600}.kb-life.active .kb-life-dot{background:var(--kb-life-color);border-color:var(--kb-life-color);animation:kb-pulse 1.8s ease-out infinite}"
 						+ ".kb-tabs{gap:6px;border-bottom:none;margin:2px 0 0}"
 			+ ".kb-tab{padding:5px 11px;border-radius:999px;border:1px solid transparent;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}"
@@ -257,7 +258,7 @@ window.__ModuleLoader__.load({
 			+ ".kb-tl-artifact-title{font:600 9px/13px ui-monospace,monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-bottom:3px}"
 			+ ".kb-tl-artifact-body{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#e8e8e8);border-radius:7px;padding:7px 9px;font:10.5px/15px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222)}"
 			+ "@media (max-width:700px){.kb-tl-expand{margin-left:0}}"
-			+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-tertiary,#888);cursor:pointer;padding:0;flex:none}"
+			+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l3,#cbd2da);border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f4f6f8);color:var(--dsw-alias-label-secondary,#555);cursor:pointer;padding:0;flex:none}"
 			+ ".kb-iconbtn:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,#f2f4f7)}"
 			+ ".kb-panelhead{display:flex;align-items:center;justify-content:space-between;gap:8px}"
 			+ ".kb-modal-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.34);backdrop-filter:blur(2px)}"
@@ -485,9 +486,9 @@ window.__ModuleLoader__.load({
 		// ---------------------------------------------------------------- detail
 
 		function PencilIcon() {
-			return h("svg", { width: 13, height: 13, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
-				h("path", { d: "M3 11.8V13h1.2l6.9-6.9-1.2-1.2L3 11.8Z", stroke: "currentColor", strokeWidth: 1.2, strokeLinejoin: "round" }),
-				h("path", { d: "m10.3 4.3 1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4l-1.4 1.4", stroke: "currentColor", strokeWidth: 1.2, strokeLinejoin: "round" })
+			return h("svg", { width: 15, height: 15, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+				h("path", { d: "M3 11.8V13h1.2l6.9-6.9-1.2-1.2L3 11.8Z", stroke: "currentColor", strokeWidth: 1.8, strokeLinejoin: "round", strokeLinecap: "round" }),
+				h("path", { d: "m10.3 4.3 1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4l-1.4 1.4", stroke: "currentColor", strokeWidth: 1.8, strokeLinejoin: "round", strokeLinecap: "round" })
 			);
 		}
 
@@ -656,7 +657,7 @@ window.__ModuleLoader__.load({
 				PHASES.map(function (phase, i) {
 					var done = closed || i < current;
 					var active = !closed && i === current;
-					return h("div", { key: phase, className: "kb-life" + (done ? " done" : "") + (active ? " active" : "") },
+					return h("div", { key: phase, className: "kb-life kb-life-" + phase + (done ? " done" : "") + (active ? " active" : "") },
 						h("span", { className: "kb-life-dot" }),
 						h("span", { className: "kb-life-label", children: phaseLabel(phase) })
 					);
