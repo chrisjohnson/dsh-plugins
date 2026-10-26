@@ -184,6 +184,7 @@ export default async function kanban(ctx, config = {}) {
     const detail = (id) => {
       const ticket = requireTicket(id);
       const spans = store.listSpans(ticket.id);
+      const events = store.listEvents(ticket.id, { limit: 300 });
       const artifacts = store.listArtifacts(ticket.id, { limit: 40 }).map((artifact) => ({
         ...artifact,
         content: store.getArtifact(artifact.id)?.content ?? '',
@@ -199,9 +200,9 @@ export default async function kanban(ctx, config = {}) {
         sessions: store.listSessions(ticket.id),
         spans,
         spanTree: tree(spans),
-        timeline: timelineView(spans, artifacts),
+        timeline: timelineView(spans, artifacts, events),
         usage: store.rollup(ticket.id),
-        events: store.listEvents(ticket.id, { limit: 300 }),
+        events,
         artifacts,
         plan: plan === undefined ? null : safeJson(plan.content),
         grill: grill === undefined ? null : safeJson(grill.content),
@@ -498,7 +499,7 @@ const TIMELINE_LABELS = {
  * turns/tools. Agent spans are collapsed per role+attempt, so grilling includes
  * the human answer gap; judge calls and plugin steps stay separate and coloured.
  */
-function timelineView(spans, artifacts = [], now = Date.now()) {
+function timelineView(spans, artifacts = [], events = [], now = Date.now()) {
   const groups = new Map();
   const items = [];
   const artifactsBySpan = new Map();
@@ -529,6 +530,7 @@ function timelineView(spans, artifacts = [], now = Date.now()) {
           provider: span.provider ?? null,
           model: span.model ?? null,
           spans: 1,
+          spanIds: [span.id],
           lastEnd: finish,
           maxGap: 0,
         });
@@ -538,23 +540,52 @@ function timelineView(spans, artifacts = [], now = Date.now()) {
         found.end = Math.max(found.end, finish);
         found.lastEnd = Math.max(found.lastEnd, finish);
         found.spans += 1;
+        found.spanIds.push(span.id);
         if (span.status === 'failed' || span.status === 'abandoned') found.status = span.status;
       }
     } else if (span.kind === 'judge') {
       items.push({
         kind: 'judge', role: span.role, name: span.name, attempt: span.attempt ?? 0,
         start, end: finish, status: span.status, provider: span.provider ?? null, model: span.model ?? null,
+        spanIds: [span.id],
         artifacts: artifactsBySpan.get(span.id) ?? [],
       });
     } else if (span.kind === 'workflow') {
       items.push({
         kind: 'plugin', role: null, name: span.name, attempt: span.attempt ?? 0,
         start, end: finish, status: span.status, provider: null, model: null,
+        spanIds: [span.id],
+        artifacts: artifactsBySpan.get(span.id) ?? [],
       });
     }
   }
+  const rolePhase = { griller: 'grill', planner: 'plan', implementer: 'implement', verifier: 'verify', reviewer: 'review' };
+  const EVENT_KINDS = new Set([
+    'phase_changed', 'conditions_set', 'planned', 'implemented', 'verified', 'done',
+    'retry_scheduled', 'needs_attention_reason', 'stalled', 'recovered',
+    'awaiting_human', 'grill_answered', 'attempt_started', 'attempt_history', 'triage_forced_plan',
+  ]);
   for (const group of groups.values()) {
-    items.push({ ...group, includesWait: group.maxGap > 2000 });
+    const phase = rolePhase[group.role];
+    const related = events
+      .filter((event) => {
+        if (!EVENT_KINDS.has(event.kind)) return false;
+        if (event.phaseFrom === phase) return true;
+        const at = Date.parse(event.at);
+        return Number.isFinite(at) && at >= group.start && at <= group.end + 1500;
+      })
+      .map((event) => ({
+        kind: event.kind,
+        at: event.at,
+        actor: event.actor,
+        phaseFrom: event.phaseFrom,
+        phaseTo: event.phaseTo,
+        payload: event.payload,
+      }))
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+      .slice(-20);
+    const relatedArtifacts = (group.spanIds ?? []).flatMap((id) => artifactsBySpan.get(id) ?? []);
+    items.push({ ...group, includesWait: group.maxGap > 2000, artifacts: relatedArtifacts, events: related });
   }
   return items
     .map((item) => ({
@@ -568,6 +599,7 @@ function timelineView(spans, artifacts = [], now = Date.now()) {
       spans: item.spans ?? 1,
       includesWait: item.includesWait === true,
       artifacts: item.artifacts ?? [],
+      events: item.events ?? [],
       startedAt: new Date(item.start).toISOString(),
       endedAt: new Date(item.end).toISOString(),
       durationMs: item.end - item.start,

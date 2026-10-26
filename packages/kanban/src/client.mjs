@@ -256,6 +256,14 @@ window.__ModuleLoader__.load({
 			+ ".kb-tl-meta b{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}"
 			+ ".kb-tl-artifact+.kb-tl-artifact{margin-top:6px}"
 			+ ".kb-tl-artifact-title{font:600 9px/13px ui-monospace,monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-bottom:3px}"
+			+ ".kb-tl-events{margin-top:8px;border-top:.5px solid var(--dsw-alias-border-l1,#e8e8e8);padding-top:7px}"
+			+ ".kb-tl-event{padding:5px 0;border-top:.5px dashed var(--dsw-alias-border-l1,#ececec)}"
+			+ ".kb-tl-event:first-of-type{border-top:none}"
+			+ ".kb-tl-event-head{display:flex;align-items:center;flex-wrap:wrap;gap:5px 9px;font:10px/14px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".kb-tl-event-head b{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".kb-tl-event-time,.kb-tl-event-phase{font:9px/13px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".kb-tl-event-actor{margin-left:auto;font:9px/13px Inter,sans-serif;text-transform:uppercase;letter-spacing:.04em}"
+			+ ".kb-tl-event-payload{margin:3px 0 0;max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#ececec);border-radius:6px;padding:5px 7px;font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#444)}"
 			+ ".kb-tl-artifact-body{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#e8e8e8);border-radius:7px;padding:7px 9px;font:10.5px/15px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222)}"
 			+ "@media (max-width:700px){.kb-tl-expand{margin-left:0}}"
 			+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l3,#cbd2da);border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f4f6f8);color:var(--dsw-alias-label-secondary,#555);cursor:pointer;padding:0;flex:none}"
@@ -628,12 +636,27 @@ window.__ModuleLoader__.load({
 								h("span", null, "status ", h("b", { children: item.status || "unknown" })),
 								h("span", null, "spans ", h("b", { children: item.spans || 1 }))
 							),
-							(item.artifacts || []).length > 0 ? (item.artifacts || []).map(function (artifact) {
-								return h("div", { className: "kb-tl-artifact", key: artifact.kind },
-									h("div", { className: "kb-tl-artifact-title", children: artifact.kind.replace(/^judge_/, "judge · ") }),
+							(item.artifacts || []).map(function (artifact, artifactIndex) {
+								return h("div", { className: "kb-tl-artifact", key: "artifact-" + artifactIndex },
+									h("div", { className: "kb-tl-artifact-title", children: artifact.kind.replace(/^judge_/, "judge · ").replace(/^plugin_/, "plugin · ") }),
 									h("pre", { className: "kb-tl-artifact-body", children: artifact.content })
 								);
-							}) : h("div", { className: "kb-hint", children: item.kind === "judge" ? "No artifact was stored for this older judge call." : "No payload stored for this step." })
+							}),
+							(item.events || []).length > 0 ? h("div", { className: "kb-tl-events" },
+								h("div", { className: "kb-tl-artifact-title", children: "Lifecycle events" }),
+								(item.events || []).map(function (event, eventIndex) {
+									return h("div", { className: "kb-tl-event", key: "event-" + eventIndex },
+										h("div", { className: "kb-tl-event-head" },
+											h("b", { children: event.kind }),
+											h("span", { className: "kb-tl-event-time", children: fmtTime(event.at) }),
+											event.phaseFrom || event.phaseTo ? h("span", { className: "kb-tl-event-phase", children: (event.phaseFrom || "—") + " → " + (event.phaseTo || "—") }) : null,
+											h("span", { className: "kb-tl-event-actor", children: event.actor || "engine" })
+										),
+										h("pre", { className: "kb-tl-event-payload", children: JSON.stringify(event.payload || {}, null, 2) })
+									);
+								})
+							) : null,
+							(item.artifacts || []).length === 0 && (item.events || []).length === 0 ? h("div", { className: "kb-hint", children: item.kind === "judge" ? "No artifact was stored for this older judge call." : "No payload or lifecycle event stored for this step." }) : null
 						) : null
 					);
 				})

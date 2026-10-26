@@ -147,9 +147,11 @@ The workflow timeline deliberately shows **plugin-owned steps**, not the
 session's individual turns or tools: one block per phase/attempt (grilling
 includes the human answer gap), one block per orchestrator judge call, and one
 block per plugin command (currently `git diff`). Clicking a block expands its
-metadata; judge blocks also show the stored judge result (and, for new runs, the
-question). Tools remain in the span tree and event log for diagnostics, but not
-in the timeline.
+metadata; phase blocks show their prompt/result/plan/verification/review
+artifacts plus the lifecycle events in that phase window, judge blocks show the
+stored result (and, for new runs, the question), and `git diff` now stores its
+output as a plugin artifact. Tools remain in the span tree and event log for
+diagnostics, but not in the timeline.
 
 Every span records kind (`trigger|workflow|agent|judge|tool|wait`), parent/child
 links, role, provider/model, attempt, timing, status and prompt hash. Usage rows

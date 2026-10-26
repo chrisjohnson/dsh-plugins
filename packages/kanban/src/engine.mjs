@@ -1267,8 +1267,7 @@ export class Engine {
         .map((line) => line.slice(3))
         .slice(0, 50);
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
-      this.store.endSpan(span.id, { status: 'ok', durationMs });
-      return [
+      const text = [
         'STAT:',
         stat.stdout.trim() || '(no tracked changes)',
         '',
@@ -1278,6 +1277,9 @@ export class Engine {
         'DIFF:',
         diff.stdout.slice(0, MAX_DIFF_BYTES) || '(empty)',
       ].join('\n');
+      this.store.addArtifact(ticket.id, 'plugin_git_diff', text, { spanId: span.id });
+      this.store.endSpan(span.id, { status: 'ok', durationMs });
+      return text;
     } catch (error) {
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });

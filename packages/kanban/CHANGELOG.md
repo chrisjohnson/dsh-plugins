@@ -21,7 +21,9 @@
 - Workflow timeline now shows plugin-owned phase blocks (grilling includes the
   human wait), separate orchestrator judge calls, and plugin command steps with
   individual colours; session tools/turns are no longer plotted. Clicking a block
-  expands metadata and judge artifacts.
+  expands metadata; phase blocks include their prompt/result artifacts and the
+  lifecycle events in that phase window, judge blocks include their verdict (and
+  question for new runs), and `git diff` persists its output as a plugin artifact.
 - Role presets are rebound per phase, changing the actual model-facing tool set
   (plus a global-tool mask); prompts were rewritten for the shared-session model.
 - Per-ticket **ticket analytics** is ticket-scoped; the page-level Analytics
