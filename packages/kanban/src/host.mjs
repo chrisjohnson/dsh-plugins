@@ -37,6 +37,7 @@ const ENDPOINTS = [
   'export',
   'analytics',
   'config',
+  'setRoutes',
   'events',
 ];
 
@@ -380,11 +381,24 @@ export default async function kanban(ctx, config = {}) {
                 counts: store.counts(),
               },
             };
-          case 'config':
+          case 'config': {
+            const configEditor = ctx.get('configEditor');
+            const catalog = {};
+            for (const provider of live.providers) {
+              try {
+                catalog[provider.name] = (await llm.listModels(provider.name)).map((model) => ({ id: model.id, name: model.name ?? model.id }));
+              } catch (error) {
+                log.warn('could not list models for %s: %s', provider.name, message(error));
+                catalog[provider.name] = [];
+              }
+            }
             return {
               ok: true,
               value: {
                 providers: live.providers,
+                catalog,
+                writable: configEditor !== undefined,
+                revision: null,
                 routes: Object.fromEntries(
                   Object.keys(live.roles).map((role) => [role, engineRef.current.resolveRoute(role, 1)]),
                 ),
@@ -406,6 +420,38 @@ export default async function kanban(ctx, config = {}) {
                 dbPath,
               },
             };
+          }
+          case 'setRoutes': {
+            const configEditor = ctx.get('configEditor');
+            if (configEditor === undefined) return fail('forbidden', 'this profile does not accept configuration edits');
+            const row = configEditor.configuration().find((item) => item.entry?.id === 'kanban' || item.entry?.id?.endsWith(':kanban'));
+            if (row === undefined) return fail('not_found', 'kanban has no config entry');
+            const hostProviders = new Map(llm.listProviders().map((provider) => [provider.id, provider]));
+            const routes = [];
+            for (const item of Array.isArray(p.routes) ? p.routes : []) {
+              const role = String(item.role ?? '');
+              if (!Object.hasOwn(live.roles, role)) return fail('bad_request', `unknown role "${role}"`);
+              const provider = String(item.provider ?? '');
+              const model = String(item.model ?? '');
+              if (provider === '' || model === '') return fail('bad_request', `role ${role} needs both provider and model`);
+              if (!hostProviders.has(provider)) return fail('bad_request', `provider "${provider}" is not offered by the host`);
+              const models = await llm.listModels(provider).catch(() => []);
+              if (models.length > 0 && !models.some((candidate) => candidate.id === model)) {
+                return fail('bad_request', `model "${model}" is not offered by provider "${provider}"`);
+              }
+              routes.push({ role, provider, model });
+            }
+            if (routes.length === 0) return fail('bad_request', 'no routes supplied');
+            await configEditor.edit(row.entry, (current, inherited) => {
+              const next = structuredClone(current ?? {});
+              next.roles = { ...(inherited?.roles ?? {}), ...(next.roles ?? {}) };
+              for (const route of routes) {
+                next.roles[route.role] = { ...(next.roles[route.role] ?? {}), provider: route.provider, model: route.model };
+              }
+              return next;
+            });
+            return { ok: true, value: { saved: routes.length } };
+          }
           default:
             return fail('unknown_endpoint', `unknown endpoint ${endpoint}`);
         }

@@ -294,6 +294,22 @@ window.__ModuleLoader__.load({
 			+ ".kb-route-model span{font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
 			+ ".kb-route-meta{display:flex;flex-wrap:wrap;gap:3px 6px;margin-top:3px;font:9px/13px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-route-default{color:var(--kb-route-color);font-weight:600}"
+			+ ".kb-modal-actions{display:flex;align-items:center;gap:6px}"
+			+ ".kb-route-rows{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:10px;overflow:hidden}"
+			+ ".kb-route-row{display:grid;grid-template-columns:minmax(120px,150px) minmax(0,1fr) minmax(120px,170px);align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--dsw-alias-border-l1,#eef1f4);border-left:3px solid var(--kb-route-color);background:var(--dsw-alias-bg-layer-1,#fff)}"
+			+ ".kb-route-row:first-child{border-top:0}"
+			+ ".kb-route-edit{grid-template-columns:minmax(100px,135px) minmax(0,1fr) minmax(0,1fr);background:color-mix(in srgb,var(--kb-route-color) 3%,var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".kb-route-label{display:flex;flex-direction:column;min-width:0}"
+			+ ".kb-route-label b{font:600 11px/15px Inter,sans-serif;color:var(--kb-route-color)}"
+			+ ".kb-route-label span{font:9px/13px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#999)}"
+			+ ".kb-route-value{display:flex;flex-direction:column;min-width:0;line-height:1.25}"
+			+ ".kb-route-value b{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+			+ ".kb-route-value span{font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+			+ ".kb-route-effort{display:flex;flex-direction:column;align-items:flex-end;gap:1px;font:9px/13px Inter,sans-serif;text-align:right;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".kb-routing-editfoot{display:flex;align-items:center;gap:8px;margin-top:10px}"
+			+ ".kb-routing-editfoot .kb-err{flex:1}"
+			+ "@media (max-width:560px){.kb-route-row,.kb-route-edit{grid-template-columns:100px minmax(0,1fr);gap:6px}.kb-route-effort,.kb-route-edit select:last-of-type{grid-column:2}.kb-route-effort{align-items:flex-start;text-align:left}}"
+
 			+ ".kb-modal .kb-routing{margin:0;padding:0;border:0;background:transparent}"
 			+ ".kb-modal .kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}"
 			+ "@media (max-width:520px){.kb-modal .kb-routing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
@@ -533,7 +549,10 @@ window.__ModuleLoader__.load({
 				h("div", { className: "kb-modal", role: "dialog", "aria-modal": "true", "aria-label": props.title },
 					h("div", { className: "kb-modal-head" },
 						h("h2", { className: "kb-modal-title", children: props.title }),
-						h("button", { className: "kb-iconbtn", "aria-label": "Close dialog", title: "Close", onClick: props.onClose, children: "×" })
+						h("div", { className: "kb-modal-actions" },
+							props.actions || null,
+							h("button", { className: "kb-iconbtn", "aria-label": "Close dialog", title: "Close", onClick: props.onClose, children: "×" })
+						)
 					),
 					props.children
 				)
@@ -1019,29 +1038,52 @@ window.__ModuleLoader__.load({
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
+			var catalog = props.catalog || {};
 			var labels = { orchestrator: "Judge", griller: "Grill", planner: "Plan", implementer: "Build", verifier: "Verify", reviewer: "Review" };
 			var order = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
+			function providerOptions(role) {
+				var names = Object.keys(catalog);
+				var current = props.editing ? (props.draft[role] || {}).provider : (routes[role] || {}).provider;
+				if (current && names.indexOf(current) === -1) names.unshift(current);
+				return names;
+			}
+			function modelOptions(provider) {
+				return (catalog[provider] || []).map(function (model) { return model.id; });
+			}
 			return h("div", { className: "kb-routing" },
-				h("div", { className: "kb-routing-sub", children: "Base route per role. The escalation ladder can override this for later attempts." }),
-				h("div", { className: "kb-routing-grid" }, order.map(function (role) {
+				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a provider and model for each role. Saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
+				h("div", { className: "kb-route-rows" }, order.map(function (role) {
 					var route = routes[role] || {};
 					var config = roles[role] || {};
 					var isFallback = config.provider === null || config.provider === undefined || config.model === null || config.model === undefined;
-					return h("div", { className: "kb-route kb-route-" + role, key: role },
-						h("div", { className: "kb-route-top" },
-							h("span", { className: "kb-route-task", children: labels[role] }),
-							h("span", { className: "kb-route-role", children: role })
-						),
-						h("div", { className: "kb-route-model", title: (route.provider || "?") + "/" + (route.model || "?") },
-							h("b", { children: route.provider || "?" }),
-							h("span", { children: "/" + (route.model || "?") })
-						),
-						h("div", { className: "kb-route-meta" },
+					if (props.editing) {
+						var entry = props.draft[role] || { provider: route.provider || "", model: route.model || "" };
+						var providers = providerOptions(role);
+						var models = modelOptions(entry.provider);
+						return h("div", { className: "kb-route-row kb-route-edit kb-route-" + role, key: role },
+							h("div", { className: "kb-route-label" }, h("b", { children: labels[role] }), h("span", { children: role })),
+							h("select", { className: "kb-select", value: entry.provider, onChange: function (event) {
+								var provider = event.target.value;
+								var nextModels = modelOptions(provider);
+								var model = nextModels.indexOf(entry.model) === -1 ? (nextModels[0] || "") : entry.model;
+								props.onDraft(role, { provider: provider, model: model });
+							} }, providers.map(function (provider) { return h("option", { key: provider, value: provider, children: provider }); })),
+							h("select", { className: "kb-select", value: entry.model, onChange: function (event) { props.onDraft(role, { provider: entry.provider, model: event.target.value }); } },
+								models.length === 0 ? h("option", { value: entry.model, children: entry.model || "(no models listed)" }) : models.map(function (model) { return h("option", { key: model, value: model, children: model }); }))
+						);
+					}
+					return h("div", { className: "kb-route-row kb-route-" + role, key: role },
+						h("div", { className: "kb-route-label" }, h("b", { children: labels[role] }), h("span", { children: role })),
+						h("div", { className: "kb-route-value" }, h("b", { children: route.provider || "?" }), h("span", { children: "/" + (route.model || "?") })),
+						h("div", { className: "kb-route-effort" },
 							h("span", { children: route.reasoningEffort || "default effort" }),
-							isFallback ? h("span", { className: "kb-route-default", children: "deployment default" }) : null
-						)
+							isFallback ? h("span", { className: "kb-route-default", children: "deployment default" }) : null)
 					);
-				}))
+				})),
+				props.editing ? h("div", { className: "kb-routing-editfoot" },
+					props.error ? h("div", { className: "kb-err", children: props.error }) : null,
+					h("button", { className: "kb-btn primary", disabled: props.saving, onClick: props.onSave, children: props.saving ? "Saving…" : "Save routing" }),
+					h("button", { className: "kb-btn", onClick: props.onCancel, children: "Cancel" })) : null
 			);
 		}
 
@@ -1066,6 +1108,14 @@ window.__ModuleLoader__.load({
 			var routing = rc[0], setRouting = rc[1];
 			var ro = React.useState(false);
 			var routingOpen = ro[0], setRoutingOpen = ro[1];
+			var re = React.useState(false);
+			var routingEditing = re[0], setRoutingEditing = re[1];
+			var rd = React.useState({});
+			var routingDraft = rd[0], setRoutingDraft = rd[1];
+			var rsv = React.useState(false);
+			var routingSaving = rsv[0], setRoutingSaving = rsv[1];
+			var rerr = React.useState(null);
+			var routingError = rerr[0], setRoutingError = rerr[1];
 			var poll = React.useRef(0);
 
 			function loadBoard() {
@@ -1163,10 +1213,60 @@ window.__ModuleLoader__.load({
 						)
 					)
 				),
-				h(Modal, { open: routingOpen, title: "Model routing", onClose: function () { setRoutingOpen(false); } },
-					routing ? h(RoleRouting, { routes: routing.routes, roles: routing.roles }) : h("div", { className: "kb-hint", children: "Loading routing…" }))
+				h(Modal, { open: routingOpen, title: "Model routing", onClose: function () { setRoutingOpen(false); setRoutingEditing(false); setRoutingError(null); },
+					actions: routing && routing.writable !== false && !routingEditing ? h("button", { className: "kb-iconbtn", title: "Edit routing", "aria-label": "Edit routing", onClick: startRoutingEdit }, h(PencilIcon)) : null },
+					routing ? h(RoleRouting, {
+						routes: routing.routes,
+						roles: routing.roles,
+						catalog: routing.catalog,
+						editing: routingEditing,
+						draft: routingDraft,
+						saving: routingSaving,
+						error: routingError,
+						onDraft: updateRoutingDraft,
+						onSave: saveRouting,
+						onCancel: cancelRoutingEdit
+					}) : h("div", { className: "kb-hint", children: "Loading routing…" }))
 			);
 
+			function startRoutingEdit() {
+				if (!routing || routing.writable === false) return;
+				var draft = {};
+				["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"].forEach(function (role) {
+					var route = (routing.routes || {})[role] || {};
+					draft[role] = { provider: route.provider || "", model: route.model || "" };
+				});
+				setRoutingDraft(draft);
+				setRoutingError(null);
+				setRoutingEditing(true);
+			}
+			function updateRoutingDraft(role, patch) {
+				var next = Object.assign({}, routingDraft);
+				next[role] = Object.assign({}, next[role], patch);
+				setRoutingDraft(next);
+			}
+			function cancelRoutingEdit() {
+				setRoutingEditing(false);
+				setRoutingError(null);
+			}
+			function saveRouting() {
+				if (!routing) return;
+				var roles = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
+				var routes = roles.map(function (role) { return { role: role, provider: routingDraft[role].provider, model: routingDraft[role].model }; });
+				setRoutingSaving(true);
+				setRoutingError(null);
+				rpc("setRoutes", { routes: routes, revision: routing.revision }).then(function (res) {
+					if (res && res.ok) {
+						var nextRoutes = Object.assign({}, routing.routes);
+						routes.forEach(function (route) { nextRoutes[route.role] = Object.assign({}, nextRoutes[route.role] || {}, { provider: route.provider, model: route.model }); });
+						setRouting(Object.assign({}, routing, { routes: nextRoutes }));
+						setRoutingEditing(false);
+						setTimeout(function () { rpc("config", {}).then(function (next) { if (next && next.ok) setRouting(next.value); }); }, 6000);
+					} else {
+						setRoutingError(res && res.error ? res.error.message : "Could not save routing.");
+					}
+				}, function () { setRoutingError("Could not reach the Host."); }).finally(function () { setRoutingSaving(false); });
+			}
 			function open(id) { setSelectedId(id); loadDetail(id); }
 			function move(id, column) {
 				if (column === "done") return;
