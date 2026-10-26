@@ -1,0 +1,13 @@
+# Bundle layer for dsh-math-literal.
+#
+# `dsh plugin --profile web add dsh-math-literal` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, and this plugin has no configuration.
+# Disabling it means removing the row or disabling the plugin in Settings — the
+# page then boots exactly as it did before the plugin existed.
+- insert:
+    - id: math-literal
+      name: dsh-math-literal
