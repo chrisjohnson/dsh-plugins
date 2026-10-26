@@ -716,3 +716,13 @@ detail shows `input 24k`, `output 7.7k`, `$0.00`. Commit `b30c80c` on
   to show stored result/input artifacts.
 
 Tests: 91 (59 Kanban + 32 capacity); hooks/verify clean.
+
+### 2026-10-26 12:30 — lifecycle dots and pencil visibility
+
+- Hero lifecycle dots now use the timeline phase colours (intake slate, grill
+  amber, plan blue, build teal, verify violet, review pink, done green) instead
+  of inheriting the hero/column green accent.
+- Pencil controls are 28×28 with a darker secondary label colour, stronger
+  border/fill, and 15px 1.8-stroke icons.
+
+59 Kanban tests pass; hooks/verify clean. Commit `518299f`.
