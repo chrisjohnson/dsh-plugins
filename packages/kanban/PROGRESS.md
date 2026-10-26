@@ -797,3 +797,19 @@ Commit `261bbc5`; 59 Kanban tests pass, hooks/verify clean.
   edit mode renders one picker per row with provider optgroups.
 
 Commit `96cb5bc`; 59 Kanban tests pass, hooks/verify clean.
+
+### 2026-10-26 17:20 — lab model config mirrored from production
+
+- Corrected the lab profile's fake model data. The entire `llm-pi-ai` provider
+  block, `agent-default-model`, `subagent-model-selection-settings` and empty
+  `llm-deepseek` catalog now match the real deployment config.
+- Lab catalog is now exactly: APU `big-moe`; eGPU `medium-moe` +
+  `medium-dense`; cloud proxy `deepseek-flash`. No `deepseek-official`
+  instances and no APU `medium-dense`.
+- Lab Kanban roles now point at the real default route,
+  `local-ai-machine-cloud/deepseek-flash`, with the cloud provider declared in
+  the Kanban provider tiers.
+- Routing picker remains one grouped list per role; edit mode persists the
+  selected provider/model through `configEditor.edit`.
+
+Commit for the picker remains `96cb5bc`; lab config correction is lab-only.
