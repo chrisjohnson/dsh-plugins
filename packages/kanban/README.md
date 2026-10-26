@@ -69,16 +69,30 @@ error. Nothing is written back to YAML or to SQLite.
 
 | Role | May | Enforcement |
 |---|---|---|
-| `implementer` | read/write/edit/shell/git in the ticket cwd | preset + `tools.restrict({allow})` + execution guard; no board tool exists |
-| `planner` | read repo/ticket; emits the plan as its final JSON | read-only allow-list; the engine writes the plan artifact |
-| `verifier` | read, run the checks named by `how_verified` | read + bash in the shared session; write/edit denied by the phase guard |
-| `reviewer` | read diff and verification output | read-only in the shared session |
+| `implementer` | read/write/edit/shell/git in the ticket cwd | role preset + execution guard; no board tool exists |
+| `planner` | read repo/ticket; emits the plan as its final JSON | role preset + execution guard; the engine writes the plan artifact |
+| `verifier` | read, run the checks named by `how_verified` | role preset + execution guard; write/edit denied |
+| `reviewer` | read diff and verification output | role preset + execution guard; read-only |
 | `griller` | read ticket/acceptance, ask the human through the board | read-only |
 | `orchestrator` | read ticket/plan/diff, answer one JSON question | not a session: one `ctx.llm.stream()` call |
 
 There is no tool that can move a ticket, change a budget, attach a session or
 spawn work. The guard denies any tool name outside `allowTools` even if a preset
 mounts it. Prompts are not controls; the allow-list is.
+
+## Tool visibility across phases
+
+Each role has its own preset. Changing phase rebinds that preset on the one
+shared session (`agentPresets.recompose`), so the model-facing tool schemas
+actually change: the implementer gets jobs/bash/fs, the verifier loses jobs, and
+the reviewer loses bash. A global-tool mask removes tools such as browser,
+image-search and model-switch controls that are outside the role. The phase guard
+still denies anything outside `allowTools` at execution time.
+
+Two upstream limits are visible and intentional: `dsh-tool-fs` ships
+read/write/edit as one plugin, so read-only phases still see the write/edit
+schemas (the guard denies them); and session-scoped schedule tools are visible in
+every phase but denied outside the role allow-list.
 
 ## Lifecycle
 
@@ -132,8 +146,10 @@ default starts a fresh one after a failed attempt.
 The workflow timeline deliberately shows **plugin-owned steps**, not the
 session's individual turns or tools: one block per phase/attempt (grilling
 includes the human answer gap), one block per orchestrator judge call, and one
-block per plugin command (currently `git diff`). Tools remain in the span tree
-and event log for diagnostics, but not in the timeline.
+block per plugin command (currently `git diff`). Clicking a block expands its
+metadata; judge blocks also show the stored judge result (and, for new runs, the
+question). Tools remain in the span tree and event log for diagnostics, but not
+in the timeline.
 
 Every span records kind (`trigger|workflow|agent|judge|tool|wait`), parent/child
 links, role, provider/model, attempt, timing, status and prompt hash. Usage rows

@@ -20,7 +20,12 @@
   timeline and metric cards, and clickable session links.
 - Workflow timeline now shows plugin-owned phase blocks (grilling includes the
   human wait), separate orchestrator judge calls, and plugin command steps with
-  individual colours; session tools/turns are no longer plotted.
+  individual colours; session tools/turns are no longer plotted. Clicking a block
+  expands metadata and judge artifacts.
+- Role presets are rebound per phase, changing the actual model-facing tool set
+  (plus a global-tool mask); prompts were rewritten for the shared-session model.
+- Per-ticket **ticket analytics** is ticket-scoped; the page-level Analytics
+  button remains board-wide.
 - Human-friendly token units (k/m), local routes price at $0.00, and a styled
   analytics dashboard with KPI cards and rate bars.
 - Removed the remaining Kanban-side capacity coupling (`isWaitingForCapacity`,

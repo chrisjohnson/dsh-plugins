@@ -184,6 +184,10 @@ export default async function kanban(ctx, config = {}) {
     const detail = (id) => {
       const ticket = requireTicket(id);
       const spans = store.listSpans(ticket.id);
+      const artifacts = store.listArtifacts(ticket.id, { limit: 40 }).map((artifact) => ({
+        ...artifact,
+        content: store.getArtifact(artifact.id)?.content ?? '',
+      }));
       const plan = store.latestArtifact(ticket.id, 'plan');
       const grill = store.latestArtifact(ticket.id, 'grill_questions');
       const review = store.latestArtifact(ticket.id, 'review');
@@ -195,10 +199,10 @@ export default async function kanban(ctx, config = {}) {
         sessions: store.listSessions(ticket.id),
         spans,
         spanTree: tree(spans),
-        timeline: timelineView(spans),
+        timeline: timelineView(spans, artifacts),
         usage: store.rollup(ticket.id),
         events: store.listEvents(ticket.id, { limit: 300 }),
-        artifacts: store.listArtifacts(ticket.id, { limit: 40 }),
+        artifacts,
         plan: plan === undefined ? null : safeJson(plan.content),
         grill: grill === undefined ? null : safeJson(grill.content),
         review: review === undefined ? null : safeJson(review.content),
@@ -488,9 +492,16 @@ const TIMELINE_LABELS = {
  * turns/tools. Agent spans are collapsed per role+attempt, so grilling includes
  * the human answer gap; judge calls and plugin steps stay separate and coloured.
  */
-function timelineView(spans, now = Date.now()) {
+function timelineView(spans, artifacts = [], now = Date.now()) {
   const groups = new Map();
   const items = [];
+  const artifactsBySpan = new Map();
+  for (const artifact of artifacts) {
+    if (artifact.spanId === null || artifact.spanId === undefined) continue;
+    const list = artifactsBySpan.get(artifact.spanId) ?? [];
+    list.push({ kind: artifact.kind, content: artifact.content, createdAt: artifact.createdAt });
+    artifactsBySpan.set(artifact.spanId, list);
+  }
   for (const span of spans) {
     const start = Date.parse(span.startedAt);
     if (!Number.isFinite(start)) continue;
@@ -527,6 +538,7 @@ function timelineView(spans, now = Date.now()) {
       items.push({
         kind: 'judge', role: span.role, name: span.name, attempt: span.attempt ?? 0,
         start, end: finish, status: span.status, provider: span.provider ?? null, model: span.model ?? null,
+        artifacts: artifactsBySpan.get(span.id) ?? [],
       });
     } else if (span.kind === 'workflow') {
       items.push({
@@ -549,6 +561,7 @@ function timelineView(spans, now = Date.now()) {
       status: item.status,
       spans: item.spans ?? 1,
       includesWait: item.includesWait === true,
+      artifacts: item.artifacts ?? [],
       startedAt: new Date(item.start).toISOString(),
       endedAt: new Date(item.end).toISOString(),
       durationMs: item.end - item.start,

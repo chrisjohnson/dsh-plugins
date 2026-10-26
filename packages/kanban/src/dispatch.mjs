@@ -26,21 +26,35 @@ export class DispatchError extends Error {
   }
 }
 
-const PRESET_PLUGINS = [
+const CORE_PRESET_PLUGINS = [
   {
     id: 'persona',
     name: '@deepseek-ai/dsh-persona',
     config: {
-      prefix: 'You are a workflow agent in a DeepSeek Harness role session.',
+      prefix: 'You are a workflow agent in a DeepSeek Harness workflow session.',
       suffix: 'Your working directory is {{cwd}}.',
     },
   },
   { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions', config: { maxBytes: 65536 } },
-  { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash' },
-  { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
-  { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search', config: { sampleOverCapGlobResults: false } },
-  { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
 ];
+
+const TOOL_PLUGINS = {
+  fs: { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+  search: { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search', config: { sampleOverCapGlobResults: false } },
+  bash: { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash' },
+  jobs: { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
+};
+
+/** One role preset carries exactly the tools that role may use. */
+function presetPlugins(role, config) {
+  const allow = new Set(Array.isArray(config.roles[role]?.allowTools) ? config.roles[role].allowTools : []);
+  const plugins = [...CORE_PRESET_PLUGINS];
+  if (['read', 'read_image', 'write', 'edit'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.fs);
+  if (['glob', 'grep'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.search);
+  if (allow.has('bash')) plugins.push(TOOL_PLUGINS.bash);
+  if (['job_list', 'job_output', 'job_kill'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.jobs);
+  return plugins;
+}
 
 /** Existing sessions can be reused for a continuation, but never across tickets. */
 export class SessionDriver {
@@ -96,12 +110,12 @@ export class SessionDriver {
     const presets = this.ctx.get('agentPresets');
     if (presets === undefined) throw new DispatchError('agentPresets service is missing; role presets cannot be bound', { code: 'NO_PRESETS' });
     const config = this.getConfig();
-    const ids = new Set();
+    const byId = new Map();
     for (const role of ['griller', 'planner', 'implementer', 'verifier', 'reviewer']) {
       const id = config.roles[role].preset;
-      if (typeof id === 'string' && id.startsWith('kanban-')) ids.add(id);
+      if (typeof id === 'string' && id.startsWith('kanban-') && !byId.has(id)) byId.set(id, role);
     }
-    for (const id of ids) {
+    for (const [id, role] of byId) {
       if (this.registeredPresets.has(id)) continue;
       const existing = await presets.resolve(id).catch(() => undefined);
       if (existing !== undefined) {
@@ -111,8 +125,8 @@ export class SessionDriver {
       const dispose = await presets.register({
         id,
         name: id.replace('kanban-', 'Kanban '),
-        description: 'Role-scoped workflow session owned by dsh-kanban',
-        plugins: PRESET_PLUGINS,
+        description: `Role-scoped workflow preset (${role}) owned by dsh-kanban`,
+        plugins: presetPlugins(role, config),
       });
       this.registeredPresets.set(id, dispose);
     }
@@ -120,9 +134,8 @@ export class SessionDriver {
 
   /**
    * Return the one live workflow session for a ticket, creating it on first use.
-   * Every phase runs as a turn in this session; only the model route and the
-   * phase tool mask change between turns.
-   * @returns {Promise<{sessionId:string, handle:object, preset:string}>}
+   * Every phase runs as a turn in this session; role changes rebind a
+   * role-specific preset so the model-facing tool schemas change with the phase.
    */
   async ensureTicketSession({ ticket, role, route }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
@@ -138,17 +151,13 @@ export class SessionDriver {
     await mkdir(cwd, { recursive: true }).catch(() => {});
     const presets = this.ctx.get('agentPresets');
     if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
-    // One preset backs the whole workflow. Role control lives in the phase
-    // guard, not in separate presets/tool masks.
-    const requested = config.roles.planner.preset;
+    const requested = config.roles[role].preset;
     const resolved = await presets.resolve(requested ?? undefined);
     if (resolved.broken !== undefined) {
       throw new DispatchError(`preset ${resolved.id} is broken: ${resolved.broken}`, { code: 'PRESET_BROKEN' });
     }
-    const union = unionAllow(config);
     const sessionId = randomUUID();
-    const liveRef = { handle: null, role, phase: { role }, preset: resolved.id, ticketId: ticket.id, routeKey: null };
-    liveRef.phase = { role };
+    const liveRef = { handle: null, role, phase: { role }, preset: resolved.id, ticketId: ticket.id, routeKey: null, maskDispose: null, applyMask: null };
     const handle = await this.agents.create({
       sessionId,
       meta: { cwd, agentPreset: resolved.id },
@@ -159,18 +168,28 @@ export class SessionDriver {
       },
       setup: async (agentCtx) => {
         await presets.mount(agentCtx, resolved.id);
-        // The visible tool set is the union of every role. The guard below
-        // narrows it to the current phase on every call, so a verifier turn
-        // cannot write even though the write tool is mounted.
-        try {
-          if (!union.unrestricted) {
+        // Preset tools are the role's own layer; this mask removes the global
+        // tools (browser, schedule, model switching, ...) that are not in the
+        // phase allow-list. Together with preset rebinding this makes the
+        // model-facing surface follow the role.
+        liveRef.applyMask = (nextRole) => {
+          const roleConfig = this.getConfig().roles[nextRole];
+          const allow = Array.isArray(roleConfig?.allowTools) ? roleConfig.allowTools : [];
+          try {
+            if (liveRef.maskDispose !== null) {
+              liveRef.maskDispose();
+              liveRef.maskDispose = null;
+            }
+            if (allow.length === 0) return;
             const visible = new Set(agentCtx.tools.schemas().map((schema) => schema.name));
-            const keep = union.tools.filter((name) => visible.has(name));
-            if (keep.length > 0) agentCtx.tools.restrict({ allow: keep });
+            const keep = allow.filter((name) => visible.has(name));
+            if (keep.length > 0) liveRef.maskDispose = agentCtx.tools.restrict({ allow: keep });
+            else if (visible.size > 0) liveRef.maskDispose = agentCtx.tools.restrict({ deny: [...visible] });
+          } catch (error) {
+            this.log.warn('workflow session: global tool mask could not be applied: %s', String(error?.message ?? error));
           }
-        } catch (error) {
-          this.log.warn('workflow session: tool mask could not be applied: %s', String(error?.message ?? error));
-        }
+        };
+        liveRef.applyMask(role);
         agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
       },
     });
@@ -181,12 +200,27 @@ export class SessionDriver {
     return { sessionId, handle, preset: resolved.id };
   }
 
-  /** Switch the shared session's phase; the tool guard reads this before every call. */
-  setPhase(sessionId, role) {
+  /**
+   * Switch the shared session's phase. Rebinding the preset is what actually
+   * adds/removes the model-facing tools; the guard is execution-time defense.
+   */
+  async setPhase(sessionId, role) {
     const live = this.live.get(sessionId);
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
+    const previous = live.role;
     live.role = role;
     live.phase.role = role;
+    if (previous === role) return;
+    const presets = this.ctx.get('agentPresets');
+    if (presets === undefined) throw new DispatchError('agentPresets service is missing; cannot switch phase tools', { code: 'NO_PRESETS' });
+    const requested = this.getConfig().roles[role].preset;
+    try {
+      await presets.recompose(live.handle.agent.ctx, requested ?? undefined);
+      live.preset = this.getConfig().roles[role].preset;
+      if (typeof live.applyMask === 'function') live.applyMask(role);
+    } catch (error) {
+      throw new DispatchError(`could not switch phase tools to ${role}: ${String(error?.message ?? error)}`, { code: 'PHASE_PRESET' });
+    }
   }
 
   /** Point the shared session at the next phase's provider/model route. */
@@ -331,18 +365,6 @@ export class SessionDriver {
 
 function routeKey(route) {
   return [route.provider, route.model, route.reasoningEffort ?? ''].join('|');
-}
-
-/** Explicit tool names across roles; `unrestricted` means at least one role allows all. */
-function unionAllow(config) {
-  const tools = new Set();
-  let unrestricted = false;
-  for (const role of ['griller', 'planner', 'implementer', 'verifier', 'reviewer']) {
-    const allow = Array.isArray(config.roles[role].allowTools) ? config.roles[role].allowTools : [];
-    if (allow.length === 0) unrestricted = true;
-    else for (const name of allow) tools.add(name);
-  }
-  return { tools: [...tools], unrestricted };
 }
 
 export function aggregateUsage(usages) {

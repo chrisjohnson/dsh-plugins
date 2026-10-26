@@ -982,7 +982,7 @@ export class Engine {
     const startedMono = process.hrtime.bigint();
     try {
       const session = await this.driver.ensureTicketSession({ ticket, role, route });
-      this.driver.setPhase(session.sessionId, role);
+      await this.driver.setPhase(session.sessionId, role);
       this.driver.setRoute(session.sessionId, route);
       this.store.attachSession({
         ticketId: ticket.id,
@@ -1042,7 +1042,7 @@ export class Engine {
     });
     const startedMono = process.hrtime.bigint();
     try {
-      this.driver.setPhase(sessionId, role);
+      await this.driver.setPhase(sessionId, role);
       this.driver.setRoute(sessionId, route);
       const turn = await this.driver.sendTurn({ sessionId, prompt, stallTimeoutMs: this.getConfig().stallTimeoutMs });
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
@@ -1130,6 +1130,7 @@ export class Engine {
     try {
       const prompts = this.getPrompts();
       const request = judgeRequest({ basePrompt: prompts.bodies.orchestrator, task: taskText, payload, schema });
+      this.store.addArtifact(ticket.id, `judge_input_${spanName}`, JSON.stringify({ task, question: taskText }, null, 2), { spanId: span.id });
       const result = await this.judge.judgeJson({
         task,
         system: request.system,

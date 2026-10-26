@@ -247,6 +247,16 @@ window.__ModuleLoader__.load({
 			+ ".kb-rate-track{width:70px;height:6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 14%,transparent);overflow:hidden}"
 			+ ".kb-rate-fill{display:block;height:100%;border-radius:inherit;background:#64748b}.kb-rate-fill.good{background:#15803d}.kb-rate-fill.mid{background:#b45309}.kb-rate-fill.bad{background:#b91c1c}"
 			+ "@media (max-width:800px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-analytics-grid{grid-template-columns:1fr}}"
+			+ ".kb-tl-entry{display:flex;flex-direction:column;gap:5px}"
+			+ ".kb-tl-row{cursor:pointer;border-radius:7px;padding:2px 4px;margin:0 -4px;transition:background-color .15s ease}"
+			+ ".kb-tl-row:hover,.kb-tl-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover,#f4f6f8);outline:none}"
+			+ ".kb-tl-expand{margin:2px 0 4px 190px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#f7f8fa)}"
+			+ ".kb-tl-meta{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--dsw-alias-label-tertiary,#888);font:10px/15px Inter,sans-serif;margin-bottom:6px}"
+			+ ".kb-tl-meta b{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".kb-tl-artifact+.kb-tl-artifact{margin-top:6px}"
+			+ ".kb-tl-artifact-title{font:600 9px/13px ui-monospace,monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-bottom:3px}"
+			+ ".kb-tl-artifact-body{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#e8e8e8);border-radius:7px;padding:7px 9px;font:10.5px/15px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222)}"
+			+ "@media (max-width:700px){.kb-tl-expand{margin-left:0}}"
 			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
 			+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
 			+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot{animation:none}}"
@@ -495,6 +505,8 @@ window.__ModuleLoader__.load({
 
 		function Timeline(props) {
 			var items = props.items || [];
+			var expandedState = React.useState(null);
+			var expanded = expandedState[0], setExpanded = expandedState[1];
 			if (items.length === 0) return h("div", { className: "kb-empty", children: "No workflow steps recorded yet." });
 			var min = Infinity, max = -Infinity;
 			items.forEach(function (item) {
@@ -530,16 +542,36 @@ window.__ModuleLoader__.load({
 					var cls = tone(item);
 					var label = item.kind === "phase" ? item.name : item.kind === "judge" ? "judge · " + item.name : item.name;
 					var detail = (item.kind === "phase" ? "attempt " + item.attempt + " · " : "") + (item.includesWait ? "includes human wait · " : "") + fmtDur(item.durationMs);
-					return h("div", { className: "kb-tl-row", key: index },
-						h("div", { className: "kb-tl-label", title: label + " · " + detail },
-							h("span", { className: "kb-tl-name", children: label }),
-							h("span", { className: "kb-tl-detail", children: detail })
-						),
-						h("div", { className: "kb-tl-track" },
-							h("div", { className: "kb-tl-bar " + cls, style: { left: Math.min(99, Math.max(0, left)) + "%", width: Math.min(100, width) + "%" }, title: label + " · " + detail },
-								width > 12 ? h("span", { className: "kb-tl-dur", children: fmtDur(item.durationMs) }) : null
+					return h("div", { className: "kb-tl-entry", key: index },
+						h("div", { className: "kb-tl-row", role: "button", tabIndex: 0, title: "Show details for " + label,
+							onClick: function () { setExpanded(expanded === index ? null : index); },
+							onKeyDown: function (event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setExpanded(expanded === index ? null : index); } } },
+							h("div", { className: "kb-tl-label" },
+								h("span", { className: "kb-tl-name", children: label }),
+								h("span", { className: "kb-tl-detail", children: detail })
+							),
+							h("div", { className: "kb-tl-track" },
+								h("div", { className: "kb-tl-bar " + cls, style: { left: Math.min(99, Math.max(0, left)) + "%", width: Math.min(100, width) + "%" } },
+									width > 12 ? h("span", { className: "kb-tl-dur", children: fmtDur(item.durationMs) }) : null
+								)
 							)
-						)
+						),
+						expanded === index ? h("div", { className: "kb-tl-expand" },
+							h("div", { className: "kb-tl-meta" },
+								h("span", null, "kind ", h("b", { children: item.kind })),
+								item.role ? h("span", null, "role ", h("b", { children: item.role })) : null,
+								item.attempt ? h("span", null, "attempt ", h("b", { children: item.attempt })) : null,
+								item.provider ? h("span", null, h("b", { children: item.provider + "/" + (item.model || "?") })) : null,
+								h("span", null, "status ", h("b", { children: item.status || "unknown" })),
+								h("span", null, "spans ", h("b", { children: item.spans || 1 }))
+							),
+							(item.artifacts || []).length > 0 ? (item.artifacts || []).map(function (artifact) {
+								return h("div", { className: "kb-tl-artifact", key: artifact.kind },
+									h("div", { className: "kb-tl-artifact-title", children: artifact.kind.replace(/^judge_/, "judge · ") }),
+									h("pre", { className: "kb-tl-artifact-body", children: artifact.content })
+								);
+							}) : h("div", { className: "kb-hint", children: item.kind === "judge" ? "No artifact was stored for this older judge call." : "No payload stored for this step." })
+						) : null
 					);
 				})
 			);
@@ -570,22 +602,58 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function TicketAnalytics(props) {
+			var d = props.detail;
+			var t = d.ticket;
+			var u = d.usage || {};
+			var models = Object.keys(u.byModel || {}).map(function (key) { return Object.assign({ key: key }, u.byModel[key]); });
+			var phases = (d.timeline || []).filter(function (item) { return item.kind === "phase"; });
+			var verified = (d.verification && Array.isArray(d.verification.done_when)) ? d.verification.done_when : [];
+			var met = verified.filter(function (x) { return x.met === true; }).length;
+			var statuses = {};
+			(d.spans || []).forEach(function (span) { statuses[span.status] = (statuses[span.status] || 0) + 1; });
+			function card(title, body, tone) {
+				return h("div", { className: "kb-panel kb-analytics-card " + (tone || "kb-tone-run") },
+					h("h3", { children: [h("span", { className: "kb-carddot" }), title] }), body);
+			}
+			function table(headers, rows) {
+				if (rows.length === 0) return h("div", { className: "kb-hint", children: "No data yet." });
+				return h("table", { className: "kb-table" },
+					h("thead", null, h("tr", null, headers.map(function (hdr) { return h("th", { key: hdr, children: hdr }); }))),
+					h("tbody", null, rows.map(function (row, i) { return h("tr", { key: i }, row.map(function (cell, j) { return h("td", { key: j, children: cell }); })); }))
+				);
+			}
+			return h("div", { className: "kb-analytics" },
+				h("div", { className: "kb-analytics-kpis" },
+					h(Kpi, { tone: "kb-tone-run", value: t.attemptCount, label: "Attempts" }),
+					h(Kpi, { tone: "kb-tone-violet", value: fmtTokens((u.inputTokens || 0) + (u.outputTokens || 0)), label: "Tokens" }),
+					h(Kpi, { tone: "kb-tone-idle", value: fmtCost(u.costUsd, u.unpriced), label: "Cost" }),
+					h(Kpi, { tone: "kb-tone-ok", value: met + "/" + verified.length, label: "Conditions met" })
+				),
+				h("div", { className: "kb-analytics-grid" },
+					card("Model usage", table(["provider", "model", "in", "out", "cost"], models.map(function (m) {
+						return [m.provider, m.model, fmtTokens(m.inputTokens), fmtTokens(m.outputTokens), fmtCost(m.costUsd, m.unpriced)];
+					})), "kb-tone-violet"),
+					card("Time by phase", table(["phase", "attempt", "duration"], phases.map(function (item) {
+						return [item.name, item.attempt, fmtDur(item.durationMs) + (item.includesWait ? " · incl. wait" : "")];
+					})), "kb-tone-run"),
+					card("Verification", table(["condition", "met", "confidence"], verified.map(function (x) {
+						return [x.id, x.met === true ? "met" : "not met", x.confidence === undefined ? "—" : x.confidence];
+					})), "kb-tone-ok"),
+					card("Span outcomes", table(["status", "spans"], Object.keys(statuses).sort().map(function (key) { return [key, statuses[key]]; })), "kb-tone-warn")
+				)
+			);
+		}
+
 		function TicketDetail(props) {
 			var d = props.detail;
 			var tabState = React.useState("overview");
 			var tab = tabState[0], setTab = tabState[1];
-			var analyticsState = React.useState(null);
-			var analytics = analyticsState[0], setAnalytics = analyticsState[1];
-			React.useEffect(function () {
-				if (tab === "analytics" && analytics === null) {
-					rpc("analytics", {}).then(function (res) { if (res && res.ok) setAnalytics(res.value); });
-				}
-			}, [tab, analytics]);
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
 			var questionArtifact = d.grill;
 			var awaiting = t.phase === "grill" && questionArtifact && questionArtifact.questions && questionArtifact.questions.length > 0;
-			var tabs = ["overview", "timeline", "sessions", "events", "analytics"];
+			var tabs = ["overview", "timeline", "sessions", "events", "ticket analytics"];
 			return h("div", { className: "kb-detail" },
 				h("div", { className: "kb-hero kb-hero-" + t.column },
 					h("div", { className: "kb-hero-top" },
@@ -624,7 +692,7 @@ window.__ModuleLoader__.load({
 					h(Timeline, { items: d.timeline || [] })) : null,
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
-				tab === "analytics" ? h(AnalyticsPanel, { data: analytics }) : null
+				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null
 			);
 		}
 
