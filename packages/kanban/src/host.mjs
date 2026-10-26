@@ -385,6 +385,9 @@ export default async function kanban(ctx, config = {}) {
               ok: true,
               value: {
                 providers: live.providers,
+                routes: Object.fromEntries(
+                  Object.keys(live.roles).map((role) => [role, engineRef.current.resolveRoute(role, 1)]),
+                ),
                 roles: Object.fromEntries(
                   Object.entries(live.roles).map(([role, entry]) => [
                     role,

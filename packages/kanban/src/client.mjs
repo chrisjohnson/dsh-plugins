@@ -278,6 +278,24 @@ window.__ModuleLoader__.load({
 			+ ".kb-modal .kb-row{margin-top:4px}"
 			+ "@media (prefers-color-scheme:dark){.kb-modal{background:var(--dsw-alias-bg-layer-1,#16181d)}.kb-iconbtn{background:var(--dsw-alias-bg-layer-1,#16181d)}}"
 			+ "@media (max-width:700px){.kb-modal-backdrop{padding:10px}.kb-modal{padding:14px}}"
+			+ ".kb-routing{margin:0 clamp(20px,4vw,48px) 12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff)}"
+			+ ".kb-routing-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}"
+			+ ".kb-routing-title{font:600 11px/16px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
+			+ ".kb-routing-sub{margin-top:1px;color:var(--dsw-alias-label-tertiary,#888);font-size:10px}"
+			+ ".kb-routing-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}"
+			+ ".kb-route{--kb-route-color:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-route-color) 22%,var(--dsw-alias-border-l2,#e2e6ea));border-radius:9px;background:linear-gradient(150deg,color-mix(in srgb,var(--kb-route-color) 6%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:7px 8px;min-width:0}"
+			+ ".kb-route::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--kb-route-color)}"
+			+ ".kb-route-orchestrator{--kb-route-color:#8b5cf6}.kb-route-griller{--kb-route-color:#d97706}.kb-route-planner{--kb-route-color:#2563eb}.kb-route-implementer{--kb-route-color:#0d9488}.kb-route-verifier{--kb-route-color:#7c3aed}.kb-route-reviewer{--kb-route-color:#db2777}"
+			+ ".kb-route-top{display:flex;align-items:baseline;justify-content:space-between;gap:4px}"
+			+ ".kb-route-task{font:600 11px/15px Inter,sans-serif;color:var(--kb-route-color)}"
+			+ ".kb-route-role{font:9px/13px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#999);text-transform:lowercase}"
+			+ ".kb-route-model{margin-top:3px;display:flex;flex-direction:column;line-height:1.2;min-width:0}"
+			+ ".kb-route-model b{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+			+ ".kb-route-model span{font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+			+ ".kb-route-meta{display:flex;flex-wrap:wrap;gap:3px 6px;margin-top:3px;font:9px/13px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".kb-route-default{color:var(--kb-route-color);font-weight:600}"
+			+ "@media (max-width:1100px){.kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}"
+			+ "@media (max-width:650px){.kb-routing{margin-left:12px;margin-right:12px}.kb-routing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
 			+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
 			+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot{animation:none}}"
@@ -995,6 +1013,41 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function RoleRouting(props) {
+			var routes = props.routes || {};
+			var roles = props.roles || {};
+			var labels = { orchestrator: "Judge", griller: "Grill", planner: "Plan", implementer: "Build", verifier: "Verify", reviewer: "Review" };
+			var order = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
+			return h("div", { className: "kb-routing" },
+				h("div", { className: "kb-routing-head" },
+					h("div", null,
+						h("div", { className: "kb-routing-title", children: "Model routing" }),
+						h("div", { className: "kb-routing-sub", children: "Effective route for the next turn of each role" })
+					),
+					h("span", { className: "kb-flow-chip", children: "attempt 1" })
+				),
+				h("div", { className: "kb-routing-grid" }, order.map(function (role) {
+					var route = routes[role] || {};
+					var config = roles[role] || {};
+					var isFallback = config.provider === null || config.provider === undefined || config.model === null || config.model === undefined;
+					return h("div", { className: "kb-route kb-route-" + role, key: role },
+						h("div", { className: "kb-route-top" },
+							h("span", { className: "kb-route-task", children: labels[role] }),
+							h("span", { className: "kb-route-role", children: role })
+						),
+						h("div", { className: "kb-route-model", title: (route.provider || "?") + "/" + (route.model || "?") },
+							h("b", { children: route.provider || "?" }),
+							h("span", { children: "/" + (route.model || "?") })
+						),
+						h("div", { className: "kb-route-meta" },
+							h("span", { children: route.reasoningEffort || "default effort" }),
+							isFallback ? h("span", { className: "kb-route-default", children: "deployment default" }) : null
+						)
+					);
+				}))
+			);
+		}
+
 		function KanbanPage() {
 			var b = React.useState(null);
 			var board = b[0], setBoard = b[1];
@@ -1012,6 +1065,8 @@ window.__ModuleLoader__.load({
 			var analyticsData = analytics[0], setAnalyticsData = analytics[1];
 			var ws = React.useState([]);
 			var workspaces = ws[0], setWorkspaces = ws[1];
+			var rc = React.useState(null);
+			var routing = rc[0], setRouting = rc[1];
 			var poll = React.useRef(0);
 
 			function loadBoard() {
@@ -1028,13 +1083,16 @@ window.__ModuleLoader__.load({
 			}
 			React.useEffect(function () {
 				rpc("workspaces", {}).then(function (res) { if (res && res.ok && res.value) setWorkspaces(res.value.items || []); });
+				function loadRouting() { rpc("config", {}).then(function (res) { if (res && res.ok && res.value) setRouting(res.value); }); }
+				loadRouting();
+				var routingTimer = setInterval(loadRouting, 15000);
 				loadBoard();
 				var timer = setInterval(function () {
 					poll.current += 1;
 					loadBoard();
 					if (selectedId) loadDetail(selectedId);
 				}, 3000);
-				return function () { clearInterval(timer); };
+				return function () { clearInterval(timer); clearInterval(routingTimer); };
 			}, [selectedId]);
 			React.useEffect(function () {
 				if (view === "analytics" && analyticsData === null) {
@@ -1078,6 +1136,7 @@ window.__ModuleLoader__.load({
 					h(Kpi, { tone: "kb-tone-err", value: counts.needs_attention || 0, label: "Needs attention" }),
 					h(Kpi, { tone: "kb-tone-ok", value: counts.done || 0, label: "Done" })
 				) : null,
+				!selectedId && routing ? h(RoleRouting, { routes: routing.routes, roles: routing.roles }) : null,
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
 					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { workspaces: workspaces, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
