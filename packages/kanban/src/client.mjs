@@ -183,12 +183,14 @@ window.__ModuleLoader__.load({
 			+ ".kb-phasechip.run{--kb-accent:#2563eb}.kb-phasechip.warn{--kb-accent:#b45309}.kb-phasechip.err{--kb-accent:#b91c1c}.kb-phasechip.ok{--kb-accent:#15803d}.kb-phasechip.idle{--kb-accent:#64748b}"
 			+ ".kb-cardtitle{font:600 12.5px/17px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
 			+ ".kb-steps{display:flex;gap:3px;margin:1px 0 2px}"
-			+ ".kb-step{height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 15%,transparent)}"
-			+ ".kb-step.done{background:color-mix(in srgb,var(--kb-accent,#3b82f6) 62%,transparent)}"
-			+ ".kb-step.current{background:var(--kb-accent,#3b82f6);box-shadow:0 0 0 8px color-mix(in srgb,var(--kb-accent,#3b82f6) 9%,transparent)}"
+			+ ".kb-step{--kb-step-color:#64748b;height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--kb-step-color) 20%,transparent)}"
+			+ ".kb-step-intake{--kb-step-color:#64748b}.kb-step-grill{--kb-step-color:#d97706}.kb-step-plan{--kb-step-color:#2563eb}.kb-step-implement{--kb-step-color:#0d9488}.kb-step-verify{--kb-step-color:#7c3aed}.kb-step-review{--kb-step-color:#db2777}.kb-step-closed{--kb-step-color:#15803d}"
+			+ ".kb-step.done{background:var(--kb-step-color);opacity:.72}"
+			+ ".kb-step.current{background:var(--kb-step-color);box-shadow:0 0 0 1px color-mix(in srgb,var(--kb-step-color) 45%,transparent)}"
 			+ ".kb-meta{gap:5px;font:500 9.5px/14px Inter,sans-serif;align-items:center}"
 			+ ".kb-next{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font-weight:600;white-space:nowrap}"
 			+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.warn{--kb-accent:#b45309}.kb-next.err{--kb-accent:#b91c1c}.kb-next.ok{--kb-accent:#15803d}.kb-next.idle{--kb-accent:#64748b}"
+			+ ".kb-total{color:var(--dsw-alias-label-secondary,#555);font-variant-numeric:tabular-nums;white-space:nowrap}"
 			+ ".kb-age{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary,#999)}"
 			+ ".kb-empty{padding:20px 10px;border:1px dashed color-mix(in srgb,var(--kb-accent,#888) 22%,transparent);border-radius:10px;background:transparent;font-size:11px}"
 			+ ".kb-detail{gap:12px;max-width:1180px}"
@@ -205,9 +207,7 @@ window.__ModuleLoader__.load({
 			+ ".kb-life-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-bg-layer-2,#eef1f5);border:1px solid var(--dsw-alias-border-l3,#ccc)}"
 			+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent)}"
 			+ ".kb-life.active{color:var(--kb-accent);font-weight:600}.kb-life.active .kb-life-dot{background:var(--kb-accent);border-color:var(--kb-accent);animation:kb-pulse 1.8s ease-out infinite}"
-			+ ".kb-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}"
-			+ ".kb-metrics .kb-kpi{padding:8px 11px}.kb-metrics .kb-kpi-value{font-size:18px;line-height:22px}"
-			+ ".kb-tabs{gap:6px;border-bottom:none;margin:2px 0 0}"
+						+ ".kb-tabs{gap:6px;border-bottom:none;margin:2px 0 0}"
 			+ ".kb-tab{padding:5px 11px;border-radius:999px;border:1px solid transparent;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}"
 			+ ".kb-tab.on{color:var(--dsw-alias-label-primary,#111);border-color:var(--dsw-alias-border-l2,#ddd);background:var(--dsw-alias-bg-layer-1,#fff)}"
@@ -233,7 +233,7 @@ window.__ModuleLoader__.load({
 			+ ".kb-tl-dur{font:600 8px/10px ui-monospace,monospace;color:#fff;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.2)}"
 			+ "@media (max-width:700px){.kb-tl-row{grid-template-columns:120px minmax(0,1fr)}}"
 			+ ".kb-analytics{display:flex;flex-direction:column;gap:14px}"
-			+ ".kb-analytics-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}"
+			+ ".kb-analytics-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}"
 			+ ".kb-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}"
 			+ ".kb-analytics-card{border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 18%,var(--dsw-alias-border-l2,#e5e7eb));background:linear-gradient(150deg,color-mix(in srgb,var(--kb-accent,#3b82f6) 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
 			+ ".kb-analytics-card h3{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary,#555);font:600 10px/14px Inter,sans-serif;letter-spacing:.08em}"
@@ -257,10 +257,22 @@ window.__ModuleLoader__.load({
 			+ ".kb-tl-artifact-title{font:600 9px/13px ui-monospace,monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-bottom:3px}"
 			+ ".kb-tl-artifact-body{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#e8e8e8);border-radius:7px;padding:7px 9px;font:10.5px/15px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222)}"
 			+ "@media (max-width:700px){.kb-tl-expand{margin-left:0}}"
+			+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-tertiary,#888);cursor:pointer;padding:0;flex:none}"
+			+ ".kb-iconbtn:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,#f2f4f7)}"
+			+ ".kb-panelhead{display:flex;align-items:center;justify-content:space-between;gap:8px}"
+			+ ".kb-modal-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.34);backdrop-filter:blur(2px)}"
+			+ ".kb-modal{box-sizing:border-box;width:min(640px,100%);max-height:min(82vh,760px);overflow:auto;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:16px;padding:18px 20px 16px;box-shadow:0 24px 70px rgba(15,23,42,.28)}"
+			+ ".kb-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}"
+			+ ".kb-modal-title{margin:0;font:500 17px/24px Inter,sans-serif;letter-spacing:-.01em}"
+			+ ".kb-modal .kb-form{gap:11px}"
+			+ ".kb-modal .kb-textarea{min-height:120px}"
+			+ ".kb-modal .kb-row{margin-top:4px}"
+			+ "@media (prefers-color-scheme:dark){.kb-modal{background:var(--dsw-alias-bg-layer-1,#16181d)}.kb-iconbtn{background:var(--dsw-alias-bg-layer-1,#16181d)}}"
+			+ "@media (max-width:700px){.kb-modal-backdrop{padding:10px}.kb-modal{padding:14px}}"
 			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
 			+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
 			+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot{animation:none}}"
-			+ "@media (max-width:900px){.kb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+			+ "@media (max-width:900px){.kb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 			+ "@media (max-width:600px){.kb-kpis{grid-template-columns:1fr}}";
 
 		function ensureStyles() {
@@ -351,6 +363,7 @@ window.__ModuleLoader__.load({
 					h("span", { className: "kb-next " + phaseTone(t.column), children: nextAction(t) }),
 					t.attemptCount > 0 ? h("span", { children: "try " + t.attemptCount }) : null,
 					t.spentUsd > 0 ? h("span", { children: fmtUsd(t.spentUsd) }) : null,
+					h("span", { className: "kb-total", title: "Total time on ticket", children: fmtDur(t.totalMs !== undefined ? t.totalMs : Date.now() - new Date(t.createdAt).getTime()) }),
 					h("span", { className: "kb-spacer" }),
 					h("span", { className: "kb-age", children: ago(t.updatedAt) })
 				)
@@ -471,6 +484,53 @@ window.__ModuleLoader__.load({
 
 		// ---------------------------------------------------------------- detail
 
+		function PencilIcon() {
+			return h("svg", { width: 13, height: 13, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+				h("path", { d: "M3 11.8V13h1.2l6.9-6.9-1.2-1.2L3 11.8Z", stroke: "currentColor", strokeWidth: 1.2, strokeLinejoin: "round" }),
+				h("path", { d: "m10.3 4.3 1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4l-1.4 1.4", stroke: "currentColor", strokeWidth: 1.2, strokeLinejoin: "round" })
+			);
+		}
+
+		function Modal(props) {
+			React.useEffect(function () {
+				if (!props.open) return undefined;
+				function onKey(event) { if (event.key === "Escape") props.onClose(); }
+				window.addEventListener("keydown", onKey);
+				return function () { window.removeEventListener("keydown", onKey); };
+			}, [props.open, props.onClose]);
+			if (!props.open) return null;
+			return h("div", { className: "kb-modal-backdrop", onClick: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
+				h("div", { className: "kb-modal", role: "dialog", "aria-modal": "true", "aria-label": props.title },
+					h("div", { className: "kb-modal-head" },
+						h("h2", { className: "kb-modal-title", children: props.title }),
+						h("button", { className: "kb-iconbtn", "aria-label": "Close dialog", title: "Close", onClick: props.onClose, children: "×" })
+					),
+					props.children
+				)
+			);
+		}
+
+		function AcceptanceEditor(props) {
+			var s = React.useState("");
+			var text = s[0], setText = s[1];
+			var b = React.useState(false);
+			var busy = b[0], setBusy = b[1];
+			function submit() {
+				var lines = text.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
+				if (lines.length === 0) return;
+				setBusy(true);
+				Promise.all(lines.map(function (line) { return props.onAcceptance(props.ticketId, line); })).finally(function () { setBusy(false); props.onClose(); });
+			}
+			return h("div", { className: "kb-form" },
+				h("div", { className: "kb-hint", children: "Stored verbatim as human-authored acceptance. One statement per line." }),
+				h("textarea", { className: "kb-textarea", autoFocus: true, value: text, placeholder: "One acceptance statement per line…", onChange: function (event) { setText(event.target.value); } }),
+				h("div", { className: "kb-row" },
+					h("button", { className: "kb-btn primary", disabled: busy || text.trim() === "", onClick: submit, children: busy ? "Adding…" : "Add acceptance" }),
+					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })
+				)
+			);
+		}
+
 		function ModeEditor(props) {
 			var ticket = props.ticket;
 			var s = React.useState({ grill: ticket.grillMode, plan: ticket.planMode, priority: ticket.priority, allowPaid: ticket.allowPaid, budgetUsd: ticket.budgetUsd, workspaceCwd: ticket.workspaceCwd || "" });
@@ -499,7 +559,9 @@ window.__ModuleLoader__.load({
 				h("div", null, h("div", { className: "kb-label", children: "Workspace cwd" }),
 					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, onChange: function (ev) { setForm(Object.assign({}, form, { workspaceCwd: ev.target.value })); } })),
 				invalid ? h("div", { className: "kb-err", children: "plan=now cannot fire after an at-pickup grill. Choose plan=at_pickup, or grill=now." }) : null,
-				h("div", null, h("button", { className: "kb-btn primary", disabled: invalid, onClick: save, children: "Save modes" }))
+				h("div", { className: "kb-row" },
+					h("button", { className: "kb-btn primary", disabled: invalid, onClick: function () { save(); if (props.onClose) props.onClose(); }, children: "Save modes" }),
+					h("button", { className: "kb-btn", onClick: props.onClose || function () {}, children: "Cancel" }))
 			);
 		}
 
@@ -628,7 +690,8 @@ window.__ModuleLoader__.load({
 					h(Kpi, { tone: "kb-tone-run", value: t.attemptCount, label: "Attempts" }),
 					h(Kpi, { tone: "kb-tone-violet", value: fmtTokens((u.inputTokens || 0) + (u.outputTokens || 0)), label: "Tokens" }),
 					h(Kpi, { tone: "kb-tone-idle", value: fmtCost(u.costUsd, u.unpriced), label: "Cost" }),
-					h(Kpi, { tone: "kb-tone-ok", value: met + "/" + verified.length, label: "Conditions met" })
+					h(Kpi, { tone: "kb-tone-ok", value: met + "/" + verified.length, label: "Conditions met" }),
+					h(Kpi, { tone: "kb-tone-warn", value: d.spans.length, label: "Steps" })
 				),
 				h("div", { className: "kb-analytics-grid" },
 					card("Model usage", table(["provider", "model", "in", "out", "cost"], models.map(function (m) {
@@ -649,6 +712,8 @@ window.__ModuleLoader__.load({
 			var d = props.detail;
 			var tabState = React.useState("overview");
 			var tab = tabState[0], setTab = tabState[1];
+			var modalState = React.useState(null);
+			var modal = modalState[0], setModal = modalState[1];
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
 			var questionArtifact = d.grill;
@@ -660,7 +725,8 @@ window.__ModuleLoader__.load({
 						h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
 						h("span", { className: "kb-key", children: t.key }),
 						h("span", { className: "kb-phasechip " + phaseTone(t.column), children: t.column.replace("_", " ") }),
-						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null
+						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null,
+						h("button", { className: "kb-iconbtn", title: "Edit modes and budget", "aria-label": "Edit modes and budget", onClick: function () { setModal("modes"); } }, h(PencilIcon))
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h("div", { className: "kb-hero-meta" },
@@ -671,18 +737,12 @@ window.__ModuleLoader__.load({
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				h("div", { className: "kb-metrics" },
-					h(Kpi, { tone: "kb-tone-idle", value: t.attemptCount, label: "Attempts" }),
-					h(Kpi, { tone: "kb-tone-run", value: d.sessions.length, label: "Session" }),
-					h(Kpi, { tone: "kb-tone-ok", value: fmtUsd(t.spentUsd), label: "Spent" }),
-					h(Kpi, { tone: "kb-tone-violet", value: d.spans.length, label: "Steps" })
-				),
 				awaiting ? h(GrillAnswerForm, { ticket: t, questions: questionArtifact.questions, onSubmit: props.onAnswer }) : null,
 				t.column === "needs_attention" ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
-				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onAcceptance: props.onAcceptance }) : null,
+				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onAcceptance: props.onAcceptance, onEditAcceptance: function () { setModal("acceptance"); } }) : null,
 				tab === "timeline" ? h("div", { className: "kb-panel" },
 					h("h3", { children: "Workflow timeline" }),
 					h("div", { className: "kb-row", style: { marginBottom: 8 } },
@@ -692,7 +752,11 @@ window.__ModuleLoader__.load({
 					h(Timeline, { items: d.timeline || [] })) : null,
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
-				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null
+				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null,
+				h(Modal, { open: modal === "modes", title: "Modes and budget", onClose: function () { setModal(null); } },
+					h(ModeEditor, { ticket: t, onSave: function (patch) { props.onSave(t.id, patch); }, onClose: function () { setModal(null); } })),
+				h(Modal, { open: modal === "acceptance", title: "Add acceptance criteria", onClose: function () { setModal(null); } },
+					h(AcceptanceEditor, { ticketId: t.id, onAcceptance: props.onAcceptance, onClose: function () { setModal(null); } }))
 			);
 		}
 
@@ -750,8 +814,6 @@ window.__ModuleLoader__.load({
 			var t = d.ticket;
 			var usage = d.usage || {};
 			var models = Object.keys(usage.byModel || {});
-			var addState = React.useState("");
-			var addText = addState[0], setAddText = addState[1];
 			return h("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "Ticket" }),
@@ -764,18 +826,14 @@ window.__ModuleLoader__.load({
 						h("b", { children: "Updated" }), h("span", { children: ago(t.updatedAt) }))
 				),
 				h("div", { className: "kb-panel" },
-					h("h3", { children: "Modes and budget" }),
-					h(ModeEditor, { ticket: t, onSave: function (patch) { props.onSave(t.id, patch); } })
-				),
-				h("div", { className: "kb-panel" },
-					h("h3", { children: "Acceptance — the human's words, verbatim" }),
+					h("div", { className: "kb-panelhead" },
+						h("h3", { children: "Acceptance — the human's words, verbatim" }),
+						h("button", { className: "kb-iconbtn", title: "Add acceptance criteria", "aria-label": "Add acceptance criteria", onClick: props.onEditAcceptance }, h(PencilIcon))
+					),
 					d.acceptance.length === 0 ? h("div", { className: "kb-hint", children: "None stored." }) :
 						h("ul", { style: { margin: 0, paddingLeft: 18 } }, d.acceptance.map(function (a, i) {
 							return h("li", { key: i }, h("span", { className: "kb-chip", style: { marginRight: 6 }, children: a.source }), a.statement);
-						})),
-					h("div", { className: "kb-row", style: { marginTop: 8 } },
-						h("input", { className: "kb-input", style: { flex: 1 }, placeholder: "Add a human acceptance statement (stored verbatim)", value: addText, onChange: function (ev) { setAddText(ev.target.value); } }),
-						h("button", { className: "kb-btn", disabled: addText.trim() === "", onClick: function () { props.onAcceptance(t.id, addText.trim()); setAddText(""); }, children: "Add" }))
+						}))
 				),
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "done_when — what verification judges" }),
@@ -1005,6 +1063,7 @@ window.__ModuleLoader__.load({
 						onSave: function (id, patch) { act("update", { id: id, patch: patch }); },
 						onAnswer: function (id, answers) { return act("answer", { id: id, answers: answers }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
+						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						board ? h("div", { className: "kb-flow" },

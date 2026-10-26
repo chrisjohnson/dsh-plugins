@@ -464,6 +464,12 @@ function summary(ticket) {
     needsAttentionReason: ticket.needsAttentionReason,
     updatedAt: ticket.updatedAt,
     createdAt: ticket.createdAt,
+    closedAt: ticket.closedAt ?? null,
+    totalMs: (() => {
+      const created = Date.parse(ticket.createdAt);
+      const closed = ticket.closedAt === null || ticket.closedAt === undefined ? Date.now() : Date.parse(ticket.closedAt);
+      return Number.isFinite(created) && Number.isFinite(closed) ? Math.max(0, closed - created) : 0;
+    })(),
   };
 }
 

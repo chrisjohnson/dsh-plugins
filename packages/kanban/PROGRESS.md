@@ -691,3 +691,28 @@ detail shows `input 24k`, `output 7.7k`, `$0.00`. Commit `b30c80c` on
   span count; judge blocks show stored `judge_*` result artifacts (new runs also
   store `judge_input_*`). Judge calls remain out-of-band (not session turns).
 - Tests: 59 Kanban + 32 capacity = 91 pass; hooks/verify clean. Commit `52cb7ce`.
+
+### 2026-10-26 12:35 — compact ticket header, edit modals, tool visibility
+
+- Removed the four redundant metric badges under the ticket hero (Attempts,
+  Session, Spent, Steps). Steps moved into the ticket analytics tab as a fifth
+  KPI; ticket analytics remains ticket-scoped.
+- Board cards now show **total ticket time** (creation → close/now) alongside
+  attempts, spend and update age.
+- Lifecycle step strips now use the same per-phase colours as the timeline
+  (grill amber, plan blue, build teal, verify violet, review pink, done green).
+- Modes/budget editing moved from the inline overview panel into a modal opened
+  by a pencil button in the hero.
+- Adding acceptance criteria moved into a modal opened by a pencil next to the
+  Acceptance heading; it accepts one statement per line and uses the existing
+  `addAcceptance` action.
+- Per-phase tools are real now: role-specific presets are rebound with
+  `agentPresets.recompose()` and a global-tool mask removes unrelated host
+  tools. Live header evidence: implementer had bash+jobs+fs, verifier had bash+fs
+  without jobs, reviewer had fs without bash. `dsh-tool-fs` still exposes
+  write/edit in read-only phases and schedule tools remain session-scoped; the
+  execution guard denies both.
+- Prompt files updated for the shared-session model; judge timeline blocks expand
+  to show stored result/input artifacts.
+
+Tests: 91 (59 Kanban + 32 capacity); hooks/verify clean.
