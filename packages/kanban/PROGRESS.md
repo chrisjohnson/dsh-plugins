@@ -768,3 +768,16 @@ Commit `c107aa7`; 59 Kanban tests pass, hooks/verify clean.
 - Modal uses a 3-column route grid so provider/model names remain legible.
 
 Commit `59c6494`; 59 Kanban tests pass, hooks/verify clean.
+
+### 2026-10-26 16:40 — editable routing persisted to config
+
+- Routing dialog now shows one role per row.
+- Pencil icon in the dialog header switches to edit mode with provider/model
+  selects populated from the live host catalog.
+- Save validates host provider/model and writes through `configEditor.edit`,
+  preserving the rest of the kanban config object and profile comments; the
+  5-second config watcher applies it live.
+- Verified round trip: reviewer → eGPU/medium-dense persisted, config endpoint
+  reloaded it, then restored to APU/medium-dense and confirmed.
+
+Commit `261bbc5`; 59 Kanban tests pass, hooks/verify clean.
