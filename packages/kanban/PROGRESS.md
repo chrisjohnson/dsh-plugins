@@ -726,3 +726,22 @@ Tests: 91 (59 Kanban + 32 capacity); hooks/verify clean.
   border/fill, and 15px 1.8-stroke icons.
 
 59 Kanban tests pass; hooks/verify clean. Commit `518299f`.
+
+### 2026-10-26 13:45 — timeline joined to artifacts and lifecycle events
+
+- Phase timeline blocks now collect every artifact attached to their agent
+  spans: plan prompt/result, implement prompt/result, verification prompt/result,
+  review prompt/result.
+- Phase blocks also carry the lifecycle events in their window (and the
+  transition event from that phase): `conditions_set`, `planned`,
+  `implemented`, `verified`, `done`, `phase_changed`, `attempt_started`, etc.
+- Clicking a phase block shows metadata, compact artifact cards and lifecycle
+  event payloads; judge blocks still show verdicts; plugin steps now show their
+  command output.
+- `git diff` persists its output as `plugin_git_diff`, so the `git diff` block
+  is no longer "No payload".
+- KAN-4 live API now returns Plan artifacts `[plan, planner_prompt_plan]` and
+  events `[conditions_set, planned, phase_changed]`; Build/Verify/Review have
+  their corresponding artifacts/events.
+
+59 Kanban tests pass; hooks/verify clean. Commit `10e19ce`.
