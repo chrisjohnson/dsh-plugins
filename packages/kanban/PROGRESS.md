@@ -745,3 +745,14 @@ Tests: 91 (59 Kanban + 32 capacity); hooks/verify clean.
   their corresponding artifacts/events.
 
 59 Kanban tests pass; hooks/verify clean. Commit `10e19ce`.
+
+### 2026-10-26 15:45 — model routing panel
+
+- Kanban board now has a **Model routing** strip above the flow: Judge,
+  Grill, Plan, Build, Verify, Review, each with its effective provider/model,
+  reasoning effort and whether it is a deployment-default fallback.
+- Host `config` endpoint resolves each role's effective route through
+  `engine.resolveRoute(role, 1)`, so null config routes show the real fallback.
+- The strip refreshes every 15 s and is hidden while a ticket detail is open.
+
+Commit `c107aa7`; 59 Kanban tests pass, hooks/verify clean.
