@@ -33,6 +33,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | **[dsh-model-capacity](./packages/model-capacity/)** | Process-wide, per-provider model-call capacity: interactive calls queue FIFO, subagent dispatch gets an immediate capacity error with free-route suggestions, and a panel inspects active leases, waiters and reservations. | 0.1.0 | `packages/model-capacity` |
 | **[dsh-better-git-worktree](./packages/better-git-worktree/)** | Run a session in its own self-contained git working copy: a composer Worktree switch, a `worktree_convert` tool, session-list status badges, a header menu, and an archive prompt that decides the working copy's fate. | 0.1.1 | `packages/better-git-worktree` |
  | **[dsh-session-cost](./packages/session-cost/)** | A compact estimated-cost badge in the composer stats bar: reads the session billed-token buckets and prices them with public models.dev rates, hidden at $0. | 0.1.0 | `packages/session-cost` |
+| **[dsh-model-capacity](./packages/model-capacity/)** | Process-wide per-provider model-call capacity: interactive calls queue FIFO, subagent dispatch gets an immediate capacity error with free-route suggestions, and a live Activity page shows queues, reservations and wait history. | 0.1.0 | `packages/model-capacity` |
 
 Install lines for the latest release of each package:
 
@@ -46,6 +47,7 @@ dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.gi
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-capacity-v0.1.0&path:/packages/model-capacity"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-better-git-worktree-v0.1.1&path:/packages/better-git-worktree"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-session-cost-v0.1.0&path:/packages/session-cost"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-model-capacity-v0.1.0&path:/packages/model-capacity"
 ```
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.
