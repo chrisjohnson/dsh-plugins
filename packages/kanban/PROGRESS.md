@@ -756,3 +756,15 @@ Tests: 91 (59 Kanban + 32 capacity); hooks/verify clean.
 - The strip refreshes every 15 s and is hidden while a ticket detail is open.
 
 Commit `c107aa7`; 59 Kanban tests pass, hooks/verify clean.
+
+### 2026-10-26 16:30 — routing moved into a modal
+
+- Removed the permanent Model routing strip from the board.
+- Added a **Model routing** button in the top-right actions; it opens the
+  existing dialog with the six role routes.
+- Removed the misleading “attempt 1” chip. The board-wide view shows the **base
+  route**; the escalation ladder can override it per attempt, which is now stated
+  in the modal copy.
+- Modal uses a 3-column route grid so provider/model names remain legible.
+
+Commit `59c6494`; 59 Kanban tests pass, hooks/verify clean.
