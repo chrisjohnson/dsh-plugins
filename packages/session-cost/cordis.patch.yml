@@ -1,0 +1,16 @@
+# Bundle layer for dsh-session-cost.
+#
+# `dsh plugin --profile web add dsh-session-cost` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, the composer cost badge via the package's `dsh.client`
+# declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key
+# the user then has to restate. This plugin has no user-facing settings — it
+# reads the session's own billed token buckets and prices them with a public
+# models.dev rate table (src/prices.mjs, documented in README.md). Nothing is
+# guessed for the deployment; there is nothing to configure.
+- insert:
+    - id: session-cost
+      name: dsh-session-cost

@@ -5,6 +5,12 @@
 
 ## Unreleased
 
+## 0.1.2
+
+### Fixed
+
+- The row status badge and the header checkout-actions pill no longer render on narrow (mobile) viewports: on a phone the pill crowds the session toolbar (and gets clipped) and the badge eats horizontal room in the session list. Both hide at `max-width: 767px`, pairing with `dsh-better-sidebar`'s `NARROW_MAX_WIDTH` (768). The status stays available on the row's hover card and the checkout actions stay available in the row's "…" menu.
+
 ## 0.1.1
 
 ### Fixed

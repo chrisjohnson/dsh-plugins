@@ -56,6 +56,11 @@ window.__ModuleLoader__.load({
 			+ ".bgw-badge[data-bgw-rebase=true]{box-shadow:0 0 0 2px rgba(234,179,8,.55),0 0 9px 2px rgba(234,179,8,.45);animation:bgw-rebase-pulse 2.2s ease-in-out infinite}"
 			+ "@keyframes bgw-rebase-pulse{0%,100%{box-shadow:0 0 0 2px rgba(234,179,8,.5),0 0 5px 1px rgba(234,179,8,.35)}50%{box-shadow:0 0 0 3px rgba(234,179,8,.7),0 0 12px 3px rgba(234,179,8,.55)}}"
 			+ "@media (prefers-color-scheme:dark){.bgw-badge[data-bgw-state=progressing]{color:#93c5fd}.bgw-badge[data-bgw-state=up_to_date],.bgw-badge[data-bgw-state=in_sync]{color:#86efac}.bgw-badge[data-bgw-state=behind]{color:#fcd34d}}"
+			// Hide the git worktree status on narrow (mobile) viewports: the header
+			// pill crowds the session toolbar (and gets clipped) while the row badge
+			// eats horizontal room in the sidebar; both are decorative at this width.
+			// Breakpoint pairs with dsh-better-sidebar's NARROW_MAX_WIDTH (768).
+			+ "@media (max-width: 767px){.bgw-badge,.bgw-header-action{display:none}}"
 			// The header pill carries the same fill, border and text colour as the row
 			// badge, including on hover (the harness button's grey hover would
 			// otherwise wash the status colour out).
