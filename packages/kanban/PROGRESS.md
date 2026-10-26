@@ -781,3 +781,19 @@ Commit `59c6494`; 59 Kanban tests pass, hooks/verify clean.
   reloaded it, then restored to APU/medium-dense and confirmed.
 
 Commit `261bbc5`; 59 Kanban tests pass, hooks/verify clean.
+
+### 2026-10-26 17:05 — provider-grouped routing picker
+
+- Routing edit rows now use a **single provider-grouped model picker** per role,
+  sourced from the host session model catalog (the same catalog the main session
+  picker uses), instead of separate provider/model dropdowns.
+- Removed the invalid lab APU `medium-dense` model declaration. Lab APU now
+  offers `medium-moe` and `big-moe`; eGPU retains `medium-dense`.
+- Lab Kanban role routes changed from APU/medium-dense to APU/medium-moe; lab
+  agent default changed from APU/medium-dense to APU/big-moe. These are lab
+  config corrections, not plugin defaults.
+- Verified live: APU group is `medium-moe, big-moe`; eGPU group is
+  `medium-moe, big-moe, medium-dense`; all six Kanban roles show APU/medium-moe;
+  edit mode renders one picker per row with provider optgroups.
+
+Commit `96cb5bc`; 59 Kanban tests pass, hooks/verify clean.
