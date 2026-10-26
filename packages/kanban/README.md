@@ -80,6 +80,16 @@ There is no tool that can move a ticket, change a budget, attach a session or
 spawn work. The guard denies any tool name outside `allowTools` even if a preset
 mounts it. Prompts are not controls; the allow-list is.
 
+## Model routing
+
+The board's top-right **Model routing** button opens a dialog with the effective
+base route for each role. The picker is a single grouped list — one row per role,
+models grouped by provider — and is built from the same host session model
+catalog the main session picker uses. A pencil switches into edit mode; Save
+validates the provider/model and writes the `roles.*.provider` and
+`roles.*.model` fields through `configEditor.edit`, preserving the rest of the
+profile's kanban row. The config watcher applies the new route without a restart.
+
 ## Tool visibility across phases
 
 Each role has its own preset. Changing phase rebinds that preset on the one

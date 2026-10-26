@@ -383,20 +383,20 @@ export default async function kanban(ctx, config = {}) {
             };
           case 'config': {
             const configEditor = ctx.get('configEditor');
-            const catalog = {};
-            for (const provider of live.providers) {
+            let groups = [];
+            const sessionController = ctx.get('sessionController');
+            if (sessionController?.modelCatalog !== undefined) {
               try {
-                catalog[provider.name] = (await llm.listModels(provider.name)).map((model) => ({ id: model.id, name: model.name ?? model.id }));
+                groups = (await sessionController.modelCatalog()).groups ?? [];
               } catch (error) {
-                log.warn('could not list models for %s: %s', provider.name, message(error));
-                catalog[provider.name] = [];
+                log.warn('could not load the session model catalog: %s', message(error));
               }
             }
             return {
               ok: true,
               value: {
                 providers: live.providers,
-                catalog,
+                groups,
                 writable: configEditor !== undefined,
                 revision: null,
                 routes: Object.fromEntries(

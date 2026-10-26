@@ -298,7 +298,8 @@ window.__ModuleLoader__.load({
 			+ ".kb-route-rows{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:10px;overflow:hidden}"
 			+ ".kb-route-row{display:grid;grid-template-columns:minmax(120px,150px) minmax(0,1fr) minmax(120px,170px);align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--dsw-alias-border-l1,#eef1f4);border-left:3px solid var(--kb-route-color);background:var(--dsw-alias-bg-layer-1,#fff)}"
 			+ ".kb-route-row:first-child{border-top:0}"
-			+ ".kb-route-edit{grid-template-columns:minmax(100px,135px) minmax(0,1fr) minmax(0,1fr);background:color-mix(in srgb,var(--kb-route-color) 3%,var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".kb-route-edit{grid-template-columns:minmax(100px,135px) minmax(0,1fr);background:color-mix(in srgb,var(--kb-route-color) 3%,var(--dsw-alias-bg-layer-1,#fff))}"
+			+ ".kb-route-picker{width:100%;min-width:0}"
 			+ ".kb-route-label{display:flex;flex-direction:column;min-width:0}"
 			+ ".kb-route-label b{font:600 11px/15px Inter,sans-serif;color:var(--kb-route-color)}"
 			+ ".kb-route-label span{font:9px/13px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#999)}"
@@ -308,7 +309,7 @@ window.__ModuleLoader__.load({
 			+ ".kb-route-effort{display:flex;flex-direction:column;align-items:flex-end;gap:1px;font:9px/13px Inter,sans-serif;text-align:right;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-routing-editfoot{display:flex;align-items:center;gap:8px;margin-top:10px}"
 			+ ".kb-routing-editfoot .kb-err{flex:1}"
-			+ "@media (max-width:560px){.kb-route-row,.kb-route-edit{grid-template-columns:100px minmax(0,1fr);gap:6px}.kb-route-effort,.kb-route-edit select:last-of-type{grid-column:2}.kb-route-effort{align-items:flex-start;text-align:left}}"
+			+ "@media (max-width:560px){.kb-route-row,.kb-route-edit{grid-template-columns:100px minmax(0,1fr);gap:6px}.kb-route-effort{align-items:flex-start;text-align:left}}"
 
 			+ ".kb-modal .kb-routing{margin:0;padding:0;border:0;background:transparent}"
 			+ ".kb-modal .kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}"
@@ -1038,38 +1039,31 @@ window.__ModuleLoader__.load({
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
-			var catalog = props.catalog || {};
 			var labels = { orchestrator: "Judge", griller: "Grill", planner: "Plan", implementer: "Build", verifier: "Verify", reviewer: "Review" };
 			var order = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
-			function providerOptions(role) {
-				var names = Object.keys(catalog);
-				var current = props.editing ? (props.draft[role] || {}).provider : (routes[role] || {}).provider;
-				if (current && names.indexOf(current) === -1) names.unshift(current);
-				return names;
-			}
-			function modelOptions(provider) {
-				return (catalog[provider] || []).map(function (model) { return model.id; });
-			}
 			return h("div", { className: "kb-routing" },
-				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a provider and model for each role. Saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
+				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model for each role. Models are grouped by provider; saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
 					var route = routes[role] || {};
 					var config = roles[role] || {};
 					var isFallback = config.provider === null || config.provider === undefined || config.model === null || config.model === undefined;
 					if (props.editing) {
 						var entry = props.draft[role] || { provider: route.provider || "", model: route.model || "" };
-						var providers = providerOptions(role);
-						var models = modelOptions(entry.provider);
+						var groups = props.groups || [];
+						var current = entry.provider + "\u0000" + entry.model;
+						var known = groups.some(function (group) { return group.id === entry.provider && group.models.some(function (model) { return model.id === entry.model; }); });
 						return h("div", { className: "kb-route-row kb-route-edit kb-route-" + role, key: role },
 							h("div", { className: "kb-route-label" }, h("b", { children: labels[role] }), h("span", { children: role })),
-							h("select", { className: "kb-select", value: entry.provider, onChange: function (event) {
-								var provider = event.target.value;
-								var nextModels = modelOptions(provider);
-								var model = nextModels.indexOf(entry.model) === -1 ? (nextModels[0] || "") : entry.model;
-								props.onDraft(role, { provider: provider, model: model });
-							} }, providers.map(function (provider) { return h("option", { key: provider, value: provider, children: provider }); })),
-							h("select", { className: "kb-select", value: entry.model, onChange: function (event) { props.onDraft(role, { provider: entry.provider, model: event.target.value }); } },
-								models.length === 0 ? h("option", { value: entry.model, children: entry.model || "(no models listed)" }) : models.map(function (model) { return h("option", { key: model, value: model, children: model }); }))
+							h("select", { className: "kb-select kb-route-picker", value: current, onChange: function (event) {
+								var parts = event.target.value.split("\u0000");
+								props.onDraft(role, { provider: parts[0] || "", model: parts[1] || "" });
+							} },
+								known ? null : h("option", { value: current, children: (entry.provider || "?") + " / " + (entry.model || "?") + " (not in catalog)" }),
+								groups.map(function (group) {
+									return h("optgroup", { key: group.id, label: group.id },
+										group.models.map(function (model) { return h("option", { key: model.id, value: group.id + "\u0000" + model.id, children: model.name || model.id }); }));
+								})
+							)
 						);
 					}
 					return h("div", { className: "kb-route-row kb-route-" + role, key: role },
@@ -1218,7 +1212,7 @@ window.__ModuleLoader__.load({
 					routing ? h(RoleRouting, {
 						routes: routing.routes,
 						roles: routing.roles,
-						catalog: routing.catalog,
+						groups: routing.groups,
 						editing: routingEditing,
 						draft: routingDraft,
 						saving: routingSaving,

@@ -28,6 +28,9 @@
   (plus a global-tool mask); prompts were rewritten for the shared-session model.
 - Per-ticket **ticket analytics** is ticket-scoped; the page-level Analytics
   button remains board-wide.
+- Model routing is a top-right modal with one row per role and a single
+  provider-grouped model picker. A pencil enters edit mode; saves persist the
+  role routes to the profile config through `configEditor.edit`.
 - Human-friendly token units (k/m), local routes price at $0.00, and a styled
   analytics dashboard with KPI cards and rate bars.
 - Removed the remaining Kanban-side capacity coupling (`isWaitingForCapacity`,
