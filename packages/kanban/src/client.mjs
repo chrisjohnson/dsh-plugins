@@ -281,7 +281,7 @@ window.__ModuleLoader__.load({
 			+ ".kb-routing{margin:0 clamp(20px,4vw,48px) 12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff)}"
 			+ ".kb-routing-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}"
 			+ ".kb-routing-title{font:600 11px/16px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
-			+ ".kb-routing-sub{margin-top:1px;color:var(--dsw-alias-label-tertiary,#888);font-size:10px}"
+			+ ".kb-routing-sub{margin:0 0 9px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px;line-height:16px}"
 			+ ".kb-routing-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}"
 			+ ".kb-route{--kb-route-color:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-route-color) 22%,var(--dsw-alias-border-l2,#e2e6ea));border-radius:9px;background:linear-gradient(150deg,color-mix(in srgb,var(--kb-route-color) 6%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:7px 8px;min-width:0}"
 			+ ".kb-route::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--kb-route-color)}"
@@ -294,6 +294,9 @@ window.__ModuleLoader__.load({
 			+ ".kb-route-model span{font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
 			+ ".kb-route-meta{display:flex;flex-wrap:wrap;gap:3px 6px;margin-top:3px;font:9px/13px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-route-default{color:var(--kb-route-color);font-weight:600}"
+			+ ".kb-modal .kb-routing{margin:0;padding:0;border:0;background:transparent}"
+			+ ".kb-modal .kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}"
+			+ "@media (max-width:520px){.kb-modal .kb-routing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 			+ "@media (max-width:1100px){.kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}"
 			+ "@media (max-width:650px){.kb-routing{margin-left:12px;margin-right:12px}.kb-routing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 			+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
@@ -1019,13 +1022,7 @@ window.__ModuleLoader__.load({
 			var labels = { orchestrator: "Judge", griller: "Grill", planner: "Plan", implementer: "Build", verifier: "Verify", reviewer: "Review" };
 			var order = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
 			return h("div", { className: "kb-routing" },
-				h("div", { className: "kb-routing-head" },
-					h("div", null,
-						h("div", { className: "kb-routing-title", children: "Model routing" }),
-						h("div", { className: "kb-routing-sub", children: "Effective route for the next turn of each role" })
-					),
-					h("span", { className: "kb-flow-chip", children: "attempt 1" })
-				),
+				h("div", { className: "kb-routing-sub", children: "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-routing-grid" }, order.map(function (role) {
 					var route = routes[role] || {};
 					var config = roles[role] || {};
@@ -1067,6 +1064,8 @@ window.__ModuleLoader__.load({
 			var workspaces = ws[0], setWorkspaces = ws[1];
 			var rc = React.useState(null);
 			var routing = rc[0], setRouting = rc[1];
+			var ro = React.useState(false);
+			var routingOpen = ro[0], setRoutingOpen = ro[1];
 			var poll = React.useRef(0);
 
 			function loadBoard() {
@@ -1125,6 +1124,7 @@ window.__ModuleLoader__.load({
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
+						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
 					)
@@ -1136,7 +1136,6 @@ window.__ModuleLoader__.load({
 					h(Kpi, { tone: "kb-tone-err", value: counts.needs_attention || 0, label: "Needs attention" }),
 					h(Kpi, { tone: "kb-tone-ok", value: counts.done || 0, label: "Done" })
 				) : null,
-				!selectedId && routing ? h(RoleRouting, { routes: routing.routes, roles: routing.roles }) : null,
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
 					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { workspaces: workspaces, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
@@ -1163,7 +1162,9 @@ window.__ModuleLoader__.load({
 							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder })
 						)
 					)
-				)
+				),
+				h(Modal, { open: routingOpen, title: "Model routing", onClose: function () { setRoutingOpen(false); } },
+					routing ? h(RoleRouting, { routes: routing.routes, roles: routing.roles }) : h("div", { className: "kb-hint", children: "Loading routing…" }))
 			);
 
 			function open(id) { setSelectedId(id); loadDetail(id); }
