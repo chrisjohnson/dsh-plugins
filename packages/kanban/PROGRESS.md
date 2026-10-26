@@ -671,3 +671,23 @@ Verified: 91 tests (59 Kanban + 32 capacity), hooks clean, verify 0/0. Live
 while excluding 25 tool spans; board no longer contains a `capacity` field;
 detail shows `input 24k`, `output 7.7k`, `$0.00`. Commit `b30c80c` on
 `feat/kanban` (pushed).
+
+### 2026-10-26 12:20 — per-phase tool presets, ticket analytics, judge details
+
+- Per-ticket **ticket analytics** tab is now ticket-scoped: attempts, tokens,
+  spend, conditions met; model usage, phase durations, verification rows and
+  span outcomes. The page-level Analytics button remains board-wide.
+- Role tools now actually change per phase: each role has its own preset
+  (implementer = fs/search/bash/jobs, verifier = fs/search/bash, reviewer =
+  fs/search, griller = fs), and `agentPresets.recompose()` rebinds the shared
+  session on phase change. A global-tool mask removes browser/image-search/
+  model-switch/schedule where possible. Prompt tool lists were rewritten for the
+  shared-session model.
+- Live session header evidence on a one-shot probe: implementer saw
+  `bash/fs/jobs`; verifier saw `bash/fs` without jobs; reviewer saw `fs` without
+  bash. `dsh-tool-fs` still bundles write/edit for read-only phases and schedule
+  tools remain visible; the execution guard denies both, documented in README.
+- Timeline blocks are clickable: phase metadata, provider/model, status and
+  span count; judge blocks show stored `judge_*` result artifacts (new runs also
+  store `judge_input_*`). Judge calls remain out-of-band (not session turns).
+- Tests: 59 Kanban + 32 capacity = 91 pass; hooks/verify clean. Commit `52cb7ce`.
