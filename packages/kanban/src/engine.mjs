@@ -578,6 +578,16 @@ export class Engine {
 
   async implement(ticket) {
     if (this.stopped(ticket.id)) return { kind: 'stopped' };
+    if (this.store.listConditions(ticket.id).length === 0) {
+      const nextPhase = this.retryPhase(ticket);
+      this.appendEvent(ticket.id, 'done_when_required', {
+        phaseFrom: ticket.phase,
+        phaseTo: nextPhase,
+        payload: { reason: 'implementation requires done_when conditions; replanning' },
+      });
+      this.store.transitionTicket(ticket.id, { phase: nextPhase }, { actor: 'engine', reason: 'done_when required before implement' });
+      return { kind: 'continue' };
+    }
     const config = this.getConfig();
     const attempt = ticket.attemptCount + 1;
     if (attempt > config.maxAttempts) {
@@ -881,6 +891,25 @@ export class Engine {
 
   // ------------------------------------------------------------ retry paths
 
+  /**
+   * Where a human retry should resume. A retry is not always an implementation
+   * retry: failures in intake/triage/grill/plan must re-enter those phases, and
+   * no ticket may reach implement without at least one done_when condition.
+   */
+  retryPhase(ticket) {
+    const hasConditions = this.store.listConditions(ticket.id).length > 0;
+    if (!hasConditions) {
+      if (ticket.planMode === 'one_shot') return 'triage';
+      return ticket.phase === 'plan' ? 'plan' : 'triage';
+    }
+    if (ticket.phase === 'intake' || ticket.phase === 'triage') return 'triage';
+    if (ticket.phase === 'grill') return 'grill';
+    if (ticket.phase === 'plan') return 'plan';
+    if (ticket.phase === 'verify') return 'verify';
+    if (ticket.phase === 'review') return 'review';
+    return 'implement';
+  }
+
   retryOrEscalate(ticket, reason, { attempt, instruction = null }) {
     const config = this.getConfig();
     this.store.addArtifact(
@@ -920,7 +949,7 @@ export class Engine {
   }
 
   needsAttention(ticket, reason, payload = {}) {
-    this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, ...payload } });
+    this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, failedPhase: ticket.phase, ...payload } });
     this.store.setNeedsAttention(ticket.id, reason, payload);
     this.endRun(ticket.id);
     this.appendEvent(ticket.id, 'attempt_history', { payload: this.attemptHistory(ticket.id) });
