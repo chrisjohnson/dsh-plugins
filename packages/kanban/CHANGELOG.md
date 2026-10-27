@@ -3,6 +3,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.2
+
+### Added
+
+- Kanban sidebar link now shows board badges in the Activity-link style: a blue
+  in-flight count and a red needs-attention count, polling the board every five
+  seconds and using the same status colours as the board KPIs.
+
 ## 0.2.1
 
 ### Fixed
