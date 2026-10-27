@@ -3,6 +3,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.5
+
+### Fixed
+
+- Workflow sessions now use DSH's canonical `session-<uuid>` ids and retry
+  workspace attachment until the workspace registry is ready. Historical
+  Kanban sessions are re-attached at boot, so they no longer show as Ungrouped.
+- Restart recovery closes every open workflow session. A plan session that was
+  interrupted by a restart marks the ticket needs-attention instead of silently
+  launching another plan session; review/verify recover to implementation.
+- Opening a ticket's plan session picks the latest plan session rather than the
+  oldest one.
+
 ## 0.2.4
 
 ### Fixed
