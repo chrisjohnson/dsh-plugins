@@ -842,7 +842,8 @@ window.__ModuleLoader__.load({
 			React.useEffect(function () {
 				if (!d) return;
 				var ticket = d.ticket;
-				var planSession = (d.sessions || []).find(function (session) { return session.purpose === "plan" || session.role === "plan"; });
+				var planSessions = (d.sessions || []).filter(function (session) { return session.purpose === "plan" || session.role === "plan"; });
+				var planSession = planSessions.length > 0 ? planSessions[planSessions.length - 1] : null;
 				if (ticket.phase === "plan" && planSession && !autoOpenedSessions.has(ticket.id)) {
 					autoOpenedSessions.add(ticket.id);
 					if (openSessionById) openSessionById(planSession.sessionId);

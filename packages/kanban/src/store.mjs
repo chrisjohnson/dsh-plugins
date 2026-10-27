@@ -464,6 +464,25 @@ export class KanbanStore {
     });
   }
 
+  markSessionClosed(dshSessionId) {
+    const at = nowIso();
+    this.db.prepare('UPDATE sessions SET closed_at = ? WHERE dsh_session_id = ? AND closed_at IS NULL').run(at, dshSessionId);
+  }
+
+  listOpenSessions() {
+    return this.db
+      .prepare('SELECT * FROM sessions WHERE closed_at IS NULL ORDER BY id ASC')
+      .all()
+      .map((row) => ({ ticketId: row.ticket_id, sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose }));
+  }
+
+  listAllSessions() {
+    return this.db
+      .prepare('SELECT * FROM sessions WHERE ticket_id IS NOT NULL ORDER BY id ASC')
+      .all()
+      .map((row) => ({ ticketId: row.ticket_id, sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose }));
+  }
+
   listSessions(ticketId) {
     return this.db
       .prepare('SELECT * FROM sessions WHERE ticket_id = ? ORDER BY id ASC')

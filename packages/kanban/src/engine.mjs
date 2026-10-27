@@ -113,16 +113,36 @@ export class Engine {
   }
 
   async recover() {
+    const openTickets = new Map();
+    for (const session of this.store.listOpenSessions()) {
+      if (session.ticketId !== null && session.ticketId !== undefined) openTickets.set(session.ticketId, session);
+    }
+    for (const [ticketId, session] of openTickets) {
+      await this.driver.closeTicketSessions(ticketId);
+      this.store.markSessionClosed(session.sessionId);
+      const ticket = this.store.getTicket(ticketId);
+      if (ticket === undefined || ticket.column === 'done' || ticket.column === 'discarded') continue;
+      if (ticket.phase === 'plan') {
+        this.appendEvent(ticketId, 'restart_recovered', {
+          phaseFrom: 'plan',
+          phaseTo: 'plan',
+          payload: { sessionId: session.sessionId, reason: 'plan session interrupted by restart' },
+        });
+        this.store.setNeedsAttention(ticketId, 'plan session was interrupted by a restart; retry to plan again', {
+          restartRecovery: true,
+          sessionId: session.sessionId,
+        });
+      } else if (ticket.phase === 'review' || ticket.phase === 'verify') {
+        this.store.transitionTicket(ticketId, { phase: 'implement' }, { actor: 'engine', reason: 'restart recovery' });
+      }
+    }
     for (const span of this.store.runningSpans()) {
       this.store.endSpan(span.id, { status: 'abandoned', error: 'host restarted mid-span' });
-      const ticket = this.store.getTicket(span.ticketId);
-      if (ticket === undefined) continue;
-      await this.driver.closeTicketSessions(ticket.id);
-      if (ticket.phase === 'verify') {
-        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'restart recovery' });
-      } else if (ticket.phase === 'review') {
-        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'restart recovery' });
-      }
+    }
+    for (const session of this.store.listAllSessions()) {
+      const ticket = this.store.getTicket(session.ticketId);
+      if (ticket === undefined || ticket.workspaceCwd === null || ticket.workspaceCwd === undefined) continue;
+      this.driver.attachWorkspace(session.sessionId, ticket.workspaceCwd);
     }
     this.log.info('restart recovery complete');
   }
@@ -245,7 +265,7 @@ export class Engine {
     this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
     this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2), { spanId: turn.spanId });
     this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version } });
-    await this.driver.closeSession(turn.sessionId);
+    await this.closeSession(turn.sessionId);
     const next = this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'plan submitted' });
     return { kind: next.column === 'now' ? 'continue' : 'wait' };
   }
@@ -327,7 +347,7 @@ export class Engine {
     const value = turn.action.value;
     this.store.addArtifact(ticket.id, 'review', JSON.stringify(value, null, 2), { spanId: turn.spanId });
     if (value.verdict === 'pass') {
-      await this.driver.closeSession(turn.sessionId);
+      await this.closeSession(turn.sessionId);
       this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed' });
       return { kind: 'continue' };
     }
@@ -395,7 +415,7 @@ export class Engine {
       this.appendEvent(ticket.id, 'done', { phaseFrom: 'verify', phaseTo: 'closed', payload: { attempt: ticket.attemptCount } });
       return { kind: 'done', ticket: done };
     }
-    await this.driver.closeSession(turn.sessionId);
+    await this.closeSession(turn.sessionId);
     this.appendEvent(ticket.id, 'verification_failed', { phaseFrom: 'verify', phaseTo: 'implement', payload: { gaps } });
     this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: `verification failed: ${gaps.join('; ')}` });
     return { kind: 'continue' };
@@ -595,7 +615,7 @@ export class Engine {
   needsAttention(ticket, reason, payload = {}) {
     this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, failedPhase: ticket.phase, ...payload } });
     this.store.setNeedsAttention(ticket.id, reason, payload);
-    void this.driver.closeTicketSessions(ticket.id);
+    void this.closeTicketSessions(ticket.id);
     this.endRun(ticket.id);
     this.appendEvent(ticket.id, 'attempt_history', { payload: this.attemptHistory(ticket.id) });
     return { kind: 'needs_attention' };
@@ -642,12 +662,20 @@ export class Engine {
     this.store.appendEvent(ticketId, kind, { phaseFrom, phaseTo, actor, payload });
   }
 
+  async closeSession(sessionId) {
+    await this.driver.closeSession(sessionId);
+    this.store.markSessionClosed(sessionId);
+  }
+
   async closeTicketSessions(ticketId) {
     await this.driver.closeTicketSessions(ticketId);
+    for (const session of this.store.listSessions(ticketId)) {
+      if (session.closedAt === null) this.store.markSessionClosed(session.sessionId);
+    }
   }
 
   async abortTicket(ticketId) {
-    await this.driver.closeTicketSessions(ticketId);
+    await this.closeTicketSessions(ticketId);
   }
 }
 

@@ -118,7 +118,7 @@ export class SessionDriver {
     const config = this.getConfig();
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     await mkdir(cwd, { recursive: true }).catch(() => {});
-    const sessionId = randomUUID();
+    const sessionId = `session-${randomUUID()}`;
     const liveRef = {
       handle: null,
       role,
@@ -155,12 +155,7 @@ export class SessionDriver {
     liveRef.handle = handle;
     liveRef.routeKey = routeKey(route);
     this.#applySandboxMode(liveRef);
-    try {
-      const workspace = this.ctx.get('workspaceRegistry')?.list?.().find((item) => item.path === cwd);
-      if (workspace?.attachSession) await workspace.attachSession(sessionId);
-    } catch (error) {
-      this.log.warn('workflow session: workspace attach failed: %s', String(error?.message ?? error));
-    }
+    void this.#attachWorkspace(sessionId, cwd, 0);
     try {
       const titles = this.ctx.get('sessionTitle');
       if (titles?.rename) titles.rename(handle.agent.session, `${ticket.key} · ${purpose}`);
@@ -179,6 +174,31 @@ export class SessionDriver {
     live.role = role;
     live.phase.role = role;
     this.#applySandboxMode(live);
+  }
+
+  async #attachWorkspace(sessionId, cwd, attempt) {
+    const workspace = this.ctx.get('workspaceRegistry')?.list?.().find((item) => item.path === cwd);
+    if (workspace === undefined || !workspace?.attachSession) {
+      if (attempt >= 20) {
+        this.log.warn('workflow session: no registered workspace matched %s', cwd);
+        return;
+      }
+      setTimeout(() => { void this.#attachWorkspace(sessionId, cwd, attempt + 1); }, 250);
+      return;
+    }
+    try {
+      await workspace.attachSession(sessionId);
+    } catch (error) {
+      if (attempt >= 20) {
+        this.log.warn('workflow session: workspace attach failed: %s', String(error?.message ?? error));
+        return;
+      }
+      setTimeout(() => { void this.#attachWorkspace(sessionId, cwd, attempt + 1); }, 250);
+    }
+  }
+
+  attachWorkspace(sessionId, cwd) {
+    void this.#attachWorkspace(sessionId, cwd, 0);
   }
 
   #applySandboxMode(live) {
