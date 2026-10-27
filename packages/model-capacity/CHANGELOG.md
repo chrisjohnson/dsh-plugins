@@ -3,6 +3,17 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.0
+
+### Added
+
+- **Adjust limits** dialog on the Activity page: edit each provider's
+  `maxConcurrent`/`unlimited`, the default per-provider limit and the queue
+  bound, then save. The dialog writes the complete `limits` section back to the
+  profile's `model-capacity` row through `configEditor.edit`; the running
+  manager is updated immediately and the existing config watcher sees the new
+  row atomically.
+
 ## 0.1.0
 
 ### Added

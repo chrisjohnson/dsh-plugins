@@ -127,6 +127,27 @@ window.__ModuleLoader__.load({
 			+ ".mc-btn.danger{color:#b42318;border-color:#e7b4ae}"
 			+ ".mc-btn:disabled{opacity:.4;cursor:default}"
 			+ ".mc-empty{padding:10px 0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px}"
+			+ ".mc-page-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}"
+			+ ".mc-btn.primary{background:var(--dsw-alias-button-primary-fill,#2563eb);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}"
+			+ ".mc-btn.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#1d4ed8)}"
+			+ ".mc-input{box-sizing:border-box;width:100%;height:30px;border:1px solid var(--dsw-alias-border-l3,#cbd2da);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);padding:0 8px;font:12px/18px Inter,sans-serif}"
+			+ ".mc-input:disabled{opacity:.5}"
+			+ ".mc-modal-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.34);backdrop-filter:blur(2px)}"
+			+ ".mc-modal{box-sizing:border-box;width:min(560px,100%);max-height:82vh;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:14px;background:var(--dsw-alias-bg-layer-1,#fff);padding:18px;box-shadow:0 24px 70px rgba(15,23,42,.28)}"
+			+ ".mc-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}"
+			+ ".mc-modal-title{margin:0;font:600 17px/23px Inter,sans-serif;letter-spacing:-.01em}"
+			+ ".mc-modal-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px}"
+			+ ".mc-modal-section{display:flex;flex-direction:column;gap:7px;margin-bottom:14px}"
+			+ ".mc-limit-row{display:grid;grid-template-columns:minmax(0,1fr) auto 72px auto;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:9px;padding:8px 9px;background:var(--dsw-alias-bg-layer-2,#f7f8fa)}"
+			+ ".mc-limit-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 11px/16px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111)}"
+			+ ".mc-limit-unlimited{display:inline-flex;align-items:center;gap:4px;font:10px/14px Inter,sans-serif;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap}"
+			+ ".mc-limit-number{padding:0 6px;text-align:right}"
+			+ ".mc-limit-label{font:10px/14px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".mc-modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:10px}"
+			+ ".mc-modal-grid label{display:flex;flex-direction:column;gap:4px}"
+			+ ".mc-modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1,#e8ebef)}"
+			+ "@media (max-width:560px){.mc-limit-row{grid-template-columns:minmax(0,1fr) 72px}.mc-limit-unlimited{grid-column:1}.mc-limit-row .mc-limit-label{display:none}.mc-modal-grid{grid-template-columns:1fr}}"
+
 			+ ".mc-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance,16px) - var(--dsh-composer-side-clearance,16px) - var(--dsh-composer-dock-inset,8px) - var(--dsh-composer-dock-inset,8px));max-width:calc(var(--dsh-composer-card-max-width,760px) - var(--dsh-composer-dock-inset,8px) - var(--dsh-composer-dock-inset,8px));margin:0 auto 8px;border:.5px solid #e9c47e;border-radius:10px;background:#fffaf0;padding:7px 10px;display:flex;align-items:center;gap:10px;font:12px/18px Inter,sans-serif;color:#6d4a00}"
 			+ ".mc-dock .mc-grow{white-space:normal}"
 			+ ".mc-waits{margin:6px 0;border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#f7f8fa);overflow:hidden;max-width:var(--dsh-chat-content-width,760px)}"
@@ -392,6 +413,86 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function limitsDraft(snapshot) {
+			var rows = [];
+			var seen = new Set();
+			(snapshot.limits || []).forEach(function (limit) {
+				seen.add(limit.provider);
+				rows.push({ provider: limit.provider, unlimited: limit.unlimited === true, maxConcurrent: limit.maxConcurrent || 1 });
+			});
+			(snapshot.providers || []).forEach(function (provider) {
+				if (seen.has(provider.name)) return;
+				rows.push({ provider: provider.name, unlimited: provider.unlimited === true, maxConcurrent: provider.unlimited ? 1 : (provider.limit || 1) });
+			});
+			return {
+				rows: rows,
+				defaultMaxConcurrent: snapshot.defaultMaxConcurrent || 1,
+				queueLimitPerProvider: snapshot.queueLimitPerProvider || 1000
+			};
+		}
+
+		function LimitsDialog(props) {
+			var initial = limitsDraft(props.snapshot);
+			var s = React.useState(initial);
+			var draft = s[0], setDraft = s[1];
+			var b = React.useState(false);
+			var busy = b[0], setBusy = b[1];
+			var e = React.useState(null);
+			var error = e[0], setError = e[1];
+			function row(index, patch) {
+				var next = Object.assign({}, draft);
+				var rows = next.rows.slice();
+				rows[index] = Object.assign({}, rows[index], patch);
+				next.rows = rows;
+				setDraft(next);
+			}
+			function save() {
+				var limits = draft.rows.map(function (entry) {
+					return entry.unlimited ? { provider: entry.provider, unlimited: true } : { provider: entry.provider, maxConcurrent: Number(entry.maxConcurrent) };
+				});
+				setBusy(true);
+				setError(null);
+				rpc("setLimits", { limits: limits, defaultMaxConcurrent: Number(draft.defaultMaxConcurrent), queueLimitPerProvider: Number(draft.queueLimitPerProvider) }).then(function (res) {
+					if (res && res.ok) props.onSaved();
+					else setError(res && res.error ? res.error.message : "Could not save limits.");
+				}, function () { setError("Could not reach the Host."); }).finally(function () { setBusy(false); });
+			}
+			return h("div", { className: "mc-modal-backdrop", onClick: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
+				h("div", { className: "mc-modal", role: "dialog", "aria-modal": "true", "aria-label": "Adjust capacity limits" },
+					h("div", { className: "mc-modal-head" },
+						h("div", null,
+							h("h2", { className: "mc-modal-title", children: "Adjust capacity limits" }),
+							h("div", { className: "mc-modal-sub", children: "Saving writes the model-capacity row in the profile config." })
+						),
+						h("button", { className: "mc-btn", onClick: props.onClose, children: "×" })
+					),
+					h("div", { className: "mc-modal-section" },
+						draft.rows.length === 0 ? h("div", { className: "mc-empty", children: "No providers discovered yet." }) :
+							draft.rows.map(function (entry, index) {
+								return h("div", { className: "mc-limit-row", key: entry.provider },
+									h("div", { className: "mc-limit-name", title: entry.provider, children: entry.provider }),
+									h("label", { className: "mc-limit-unlimited" },
+										h("input", { type: "checkbox", checked: entry.unlimited, onChange: function (event) { row(index, { unlimited: event.target.checked }); } }),
+										"unlimited"
+									),
+									h("input", { className: "mc-input mc-limit-number", type: "number", min: 1, step: 1, value: entry.maxConcurrent, disabled: entry.unlimited, onChange: function (event) { row(index, { maxConcurrent: event.target.value }); } }),
+									h("span", { className: "mc-limit-label", children: "concurrent calls" })
+								);
+							})
+					),
+					h("div", { className: "mc-modal-grid" },
+						h("label", null, h("span", { className: "mc-limit-label", children: "Default per-provider limit" }), h("input", { className: "mc-input", type: "number", min: 1, step: 1, value: draft.defaultMaxConcurrent, onChange: function (event) { setDraft(Object.assign({}, draft, { defaultMaxConcurrent: event.target.value })); } })),
+						h("label", null, h("span", { className: "mc-limit-label", children: "Queue limit per provider" }), h("input", { className: "mc-input", type: "number", min: 1, step: 1, value: draft.queueLimitPerProvider, onChange: function (event) { setDraft(Object.assign({}, draft, { queueLimitPerProvider: event.target.value })); } }))
+					),
+					error ? h("div", { className: "mc-notice", children: error }) : null,
+					h("div", { className: "mc-modal-foot" },
+						h("button", { className: "mc-btn", onClick: props.onClose, children: "Cancel" }),
+						h("button", { className: "mc-btn primary", disabled: busy, onClick: save, children: busy ? "Saving…" : "Save limits" })
+					)
+				)
+			);
+		}
+
 		function CapacityPanel() {
 			var pair = useSnapshot(1500);
 			var snapshot = pair[0], error = pair[1];
@@ -399,6 +500,8 @@ window.__ModuleLoader__.load({
 			var notice = n[0], setNotice = n[1];
 			var b = React.useState(null);
 			var busy = b[0], setBusy = b[1];
+			var o = React.useState(false);
+			var limitsOpen = o[0], setLimitsOpen = o[1];
 			var totals = snapshot ? snapshot.totals : { active: 0, waiting: 0, reservations: 0 };
 			function run(method, payload, key) {
 				setBusy(key);
@@ -414,7 +517,10 @@ window.__ModuleLoader__.load({
 							h("h1", { className: "mc-title", children: "Activity" }),
 							h("div", { className: "mc-page-sub", children: "Live model activity · per-provider admission control · FIFO · click any session card to open it" })
 						),
-						h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : ""), children: [h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing"] })
+						h("div", { className: "mc-page-actions" },
+							h("button", { className: "mc-btn", disabled: snapshot === null || snapshot.writable === false, onClick: function () { setLimitsOpen(true); }, children: "Adjust limits" }),
+							h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : ""), children: [h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing"] })
+						)
 					),
 					notice ? h("div", { className: "mc-notice", children: notice }) : null,
 					error ? h("div", { className: "mc-notice", children: error }) : null,
@@ -438,7 +544,8 @@ window.__ModuleLoader__.load({
 									});
 								}))
 							)
-				)
+				),
+				limitsOpen && snapshot ? h(LimitsDialog, { snapshot: snapshot, onClose: function () { setLimitsOpen(false); }, onSaved: function () { setLimitsOpen(false); setNotice("Limits updated."); } }) : null
 			);
 		}
 

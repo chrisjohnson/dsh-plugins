@@ -62,6 +62,10 @@ still applies if it appears). The config is watched through the host
 `configEditor` and swapped atomically; an invalid reload keeps the previous
 limits.
 
+The Activity page's **Adjust limits** dialog edits these fields directly. Saving
+writes the complete limits section back through `configEditor.edit`, applies the
+new manager limits immediately, and persists the change in the profile YAML.
+
 ## Behavior
 
 | Caller | Behavior |
