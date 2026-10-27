@@ -19,18 +19,12 @@ import { estimateTurnCost, priceUsage } from './usage.mjs';
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
 
-function ticketStateBlock(ticket, acceptance) {
+function ticketStateBlock(ticket, _acceptance) {
   return [
-    `Key: ${ticket.key}`,
     `Title: ${ticket.title}`,
-    `Column: ${ticket.column}`,
-    `Workspace: ${ticket.workspaceCwd ?? '(engine default)'}`,
     '',
     'Body:',
     ticket.body?.trim() === '' ? '(empty)' : ticket.body,
-    '',
-    'Acceptance (human, verbatim):',
-    acceptance.length === 0 ? '(none)' : acceptance.map((a) => `- ${a.statement}`).join('\n'),
   ].join('\n');
 }
 

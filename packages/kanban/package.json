@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Ticket-centric work organizer and workflow engine for DeepSeek Harness: a local SQLite board whose phases are driven by code, spawning sandboxed role sessions, gating on per-provider capacity, and recording a complete time/token ledger.",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,8 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0",
     "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0",
+    "@deepseek-ai/dsh-sandbox-policy": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
   },
   "dsh": {
     "bundle": {
