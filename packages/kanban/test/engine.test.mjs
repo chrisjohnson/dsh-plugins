@@ -248,6 +248,29 @@ test('paid route without allow_paid refuses instead of downgrading', async () =>
   assert.match(t.needsAttentionReason, /allow_paid/)
 })
 
+
+test('retryPhase resumes pre-plan failures before implementation', () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  assert.equal(engine.retryPhase(ticket), 'triage')
+  store.transitionTicket(ticket.id, { phase: 'plan' })
+  assert.equal(engine.retryPhase(store.getTicket(ticket.id)), 'plan')
+  const condition = { id: 'builds', statement: 'it builds', howVerified: 'npm test', ordinal: 0 }
+  store.replaceConditions(ticket.id, 1, [condition], 'plan')
+  store.transitionTicket(ticket.id, { phase: 'implement' })
+  assert.equal(engine.retryPhase(store.getTicket(ticket.id)), 'implement')
+})
+
+test('implement refuses to start with no done_when and returns to planning', async () => {
+  const { store, engine } = setup({ implementer: [PASS_CLAIM], verifier: [VERIFY_PASS], reviewer: [REVIEW_PASS] })
+  const ticket = pickedUp(store)
+  store.transitionTicket(ticket.id, { phase: 'implement' })
+  const result = await engine.implement(store.getTicket(ticket.id))
+  assert.equal(result.kind, 'continue')
+  assert.equal(store.getTicket(ticket.id).phase, 'triage')
+  assert.ok(store.listEvents(ticket.id).some((event) => event.kind === 'done_when_required'))
+})
+
 test('restart recovery abandons running spans and requeues work', async () => {
   const { store, engine } = setup({ implementer: [PASS_CLAIM], verifier: [VERIFY_PASS], reviewer: [REVIEW_PASS] })
   const ticket = pickedUp(store)

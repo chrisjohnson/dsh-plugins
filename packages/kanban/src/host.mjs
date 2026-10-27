@@ -298,7 +298,8 @@ export default async function kanban(ctx, config = {}) {
               if (p.patch !== undefined && typeof p.patch === 'object') {
                 store.updateTicket(ticket.id, p.patch, { actor: 'human', reason: 'needs_attention resolution' });
               }
-              const updated = store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'human retry' });
+              const resumePhase = engineRef.current.retryPhase(ticket);
+              const updated = store.transitionTicket(ticket.id, { column: 'now', phase: resumePhase }, { actor: 'human', reason: 'human retry' });
               void engineRef.current.tick();
               return { ok: true, value: { ticket: updated } };
             }

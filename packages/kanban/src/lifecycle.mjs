@@ -98,9 +98,9 @@ const PHASE_EDGES = {
   triage: ['grill', 'plan', 'implement'],
   grill: ['plan', 'triage', 'implement'],
   plan: ['implement'],
-  implement: ['verify', 'implement'],
-  verify: ['review', 'implement'],
-  review: ['implement', 'closed'],
+  implement: ['verify', 'implement', 'triage'],
+  verify: ['review', 'implement', 'triage'],
+  review: ['implement', 'closed', 'triage'],
   closed: [],
 };
 

@@ -3,6 +3,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.1.5
+
+### Fixed
+
+- Human retry now resumes the failed phase instead of always forcing
+  `implement`: failures in intake/triage/grill/plan re-enter those phases.
+- Implementation refuses to start without at least one `done_when` condition and
+  resets to planning (`done_when_required`), so a retry can never bypass plan and
+  reach verification with an empty condition set.
+- The lifecycle now permits the explicit replan reset from
+  implement/verify/review back to triage.
+- `needs_attention_reason` events record the failed phase.
+
 ## 0.1.4
 
 ### Fixed
