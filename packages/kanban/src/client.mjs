@@ -270,6 +270,12 @@ window.__ModuleLoader__.load({
 			+ ".kb-tl-event-payload{margin:3px 0 0;max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#ececec);border-radius:6px;padding:5px 7px;font:10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-secondary,#444)}"
 			+ ".kb-tl-artifact-body{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsw-alias-border-l1,#e8e8e8);border-radius:7px;padding:7px 9px;font:10.5px/15px ui-monospace,monospace;color:var(--dsw-alias-label-primary,#222)}"
 			+ "@media (max-width:700px){.kb-tl-expand{margin-left:0}}"
+			+ ".kb-nav-icon-wrap{position:relative;display:inline-flex;align-items:center;flex:none}"
+			+ ".kb-nav-badges{position:absolute;left:calc(100% + 58px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;z-index:2}"
+			+ ".kb-nav-badge{display:inline-flex;align-items:center;justify-content:center;height:14px;min-width:14px;padding:0 6px;border-radius:999px;border:1px solid;box-sizing:border-box;font:600 9px/12px ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.02em}"
+			+ ".kb-nav-badge.run{color:#1d4ed8;background:rgba(37,99,235,.12);border-color:rgba(37,99,235,.38)}"
+			+ ".kb-nav-badge.attn{color:#b91c1c;background:rgba(185,28,28,.12);border-color:rgba(185,28,28,.35)}"
+			+ "@media (prefers-color-scheme:dark){.kb-nav-badge.run{color:#93c5fd;background:rgba(37,99,235,.22);border-color:rgba(96,165,250,.45)}.kb-nav-badge.attn{color:#fca5a5;background:rgba(185,28,28,.22);border-color:rgba(248,113,113,.42)}}"
 			+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l3,#cbd2da);border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f4f6f8);color:var(--dsw-alias-label-secondary,#555);cursor:pointer;padding:0;flex:none}"
 			+ ".kb-iconbtn:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,#f2f4f7)}"
 			+ ".kb-panelhead{display:flex;align-items:center;justify-content:space-between;gap:8px}"
@@ -337,14 +343,39 @@ window.__ModuleLoader__.load({
 
 		// ------------------------------------------------------------------ icon
 
+		function useKanbanBadges() {
+			var s = React.useState({ inFlight: 0, attention: 0 });
+			var badges = s[0], setBadges = s[1];
+			React.useEffect(function () {
+				var alive = true;
+				function load() {
+					if (!connection) return;
+					rpc("board", {}).then(function (res) {
+						if (!alive || !res || !res.ok || !res.value) return;
+						var counts = res.value.counts || {};
+						setBadges({ inFlight: Number(counts.now) || 0, attention: Number(counts.needs_attention) || 0 });
+					}, function () {});
+				}
+				load();
+				var timer = setInterval(load, 5000);
+				return function () { alive = false; clearInterval(timer); };
+			}, []);
+			return badges;
+		}
+
 		function KanbanIcon(props) {
 			var size = props && props.size ? props.size : 16;
-			return h(
-				"svg",
-				{ width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
-				h("rect", { x: 1.5, y: 1.5, width: 3.4, height: 13, rx: 1, fill: "currentColor", opacity: 0.9 }),
-				h("rect", { x: 6.3, y: 1.5, width: 3.4, height: 9, rx: 1, fill: "currentColor", opacity: 0.65 }),
-				h("rect", { x: 11.1, y: 1.5, width: 3.4, height: 11, rx: 1, fill: "currentColor", opacity: 0.45 })
+			var badges = useKanbanBadges();
+			return h("span", { className: "kb-nav-icon-wrap" },
+				h("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+					h("rect", { x: 1.5, y: 1.5, width: 3.4, height: 13, rx: 1, fill: "currentColor", opacity: 0.9 }),
+					h("rect", { x: 6.3, y: 1.5, width: 3.4, height: 9, rx: 1, fill: "currentColor", opacity: 0.65 }),
+					h("rect", { x: 11.1, y: 1.5, width: 3.4, height: 11, rx: 1, fill: "currentColor", opacity: 0.45 })
+				),
+				badges.inFlight > 0 || badges.attention > 0 ? h("span", { className: "kb-nav-badges" },
+					badges.inFlight > 0 ? h("span", { className: "kb-nav-badge run", title: badges.inFlight + " in flight", children: badges.inFlight }) : null,
+					badges.attention > 0 ? h("span", { className: "kb-nav-badge attn", title: badges.attention + " needs attention", children: badges.attention }) : null
+				) : null
 			);
 		}
 
