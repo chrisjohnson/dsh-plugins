@@ -3,6 +3,29 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.0
+
+### Changed
+
+- Replaced phase JSON-in-message results with scoped action tools:
+  `kanban_submit_plan`, `kanban_submit_implementation`,
+  `kanban_submit_review` and `kanban_submit_verification`.
+- Every workflow session now starts once in the **standard preset**. The plugin
+  no longer registers per-role presets, rebinds presets mid-session, or provides
+  a custom system prompt.
+- Grill + plan is one flat session. Interactive mode uses the native
+  `ask_user_question` tool; autonomous mode uses the self-judgement prompt.
+- Implement + review share one session. Both action tools stay available and
+  return errors when called in the wrong phase; write/edit are guarded off
+  during review.
+- Verify moved to the end and runs in its own session.
+- Phase order is now `plan → implement → review → verify → closed`.
+- New ticket choices: planning timing (`now` or `at_pickup`) and question mode
+  (`interactive` or `autonomous`).
+- Historical tickets/sessions are intentionally discarded by the V3 migration.
+- Sessions close explicitly on plan/review/verify completion so continue-kicker
+  sees a completed or aborted tail rather than an idle error.
+
 ## 0.1.5
 
 ### Fixed

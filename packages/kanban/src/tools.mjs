@@ -4,14 +4,15 @@
 // when its configured allow-list names it; the guard is monotonic (it can deny,
 // never allow) and runs for every call in the role agent's scope.
 //
-// The plugin registers no board tools at all, so no allow-list entry can name
-// one: ticket mutation has no tool surface inside a role session.
+// Kanban action tools are registered inside the target session and enforce their
+// own phase; the guard lets those names through and checks ordinary tools.
 
 export function roleToolGuard(role, allow) {
   const allowed = new Set(Array.isArray(allow) ? allow : [])
   return function guard(execution) {
     const name = execution === null || execution === undefined ? undefined : execution.name
     if (typeof name !== 'string' || name === '') return `kanban: role "${role}" may not call an unnamed tool`
+    if (name.startsWith('kanban_')) return undefined
     return allowed.has(name) ? undefined : `kanban: role "${role}" may not call "${name}"`
   }
 }
@@ -24,6 +25,7 @@ export function phaseToolGuard(getRole, getRoles) {
     const allow = entry === undefined || !Array.isArray(entry.allowTools) ? [] : entry.allowTools
     const name = execution === null || execution === undefined ? undefined : execution.name
     if (typeof name !== 'string' || name === '') return `kanban: role "${role}" may not call an unnamed tool`
+    if (name.startsWith('kanban_')) return undefined
     return allow.includes(name) ? undefined : `kanban: role "${role}" may not call "${name}"`
   }
 }

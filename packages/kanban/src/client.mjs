@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
 
 		var connection = null;
 		var openSessionById = null;
+		var autoOpenedSessions = new Set();
 		var rpcSeq = 0;
 
 		function rpc(method, payload) {
@@ -349,13 +350,13 @@ window.__ModuleLoader__.load({
 
 		// ------------------------------------------------------------------ board
 
-		var PHASES = ["intake", "grill", "plan", "implement", "verify", "review", "closed"];
+		var PHASES = ["plan", "implement", "review", "verify", "closed"];
 		function phaseIndex(phase) {
 			var i = PHASES.indexOf(phase);
 			return i < 0 ? 0 : i;
 		}
 		function phaseLabel(phase) {
-			return phase === "implement" ? "Build" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
+			return phase === "implement" ? "Build" : phase === "verify" ? "Verify" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
 		}
 		function phaseProgress(ticket) {
 			return h("div", { className: "kb-steps", title: "Lifecycle: " + PHASES.map(phaseLabel).join(" → ") },
@@ -371,7 +372,7 @@ window.__ModuleLoader__.load({
 		}
 		function nextAction(t) {
 			if (t.column === "needs_attention") return "Needs your decision";
-			if (t.phase === "grill") return "Answers needed";
+			if (t.phase === "plan" && t.planQuestions === "interactive") return "Grilling / planning";
 			if (t.column === "blocked") return "Blocked";
 			if (t.column === "done" || t.column === "discarded") return "Closed";
 			if (t.column === "now") return t.group === "waiting" ? "Waiting on you" : t.group === "active" ? "Running" : "Queued";
@@ -476,13 +477,13 @@ window.__ModuleLoader__.load({
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
-			var invalid = form.grill === "at_pickup" && form.plan === "now";
+			var invalid = false;
 			function field(key, value) {
 				var next = Object.assign({}, form);
 				next[key] = value;
@@ -496,8 +497,8 @@ window.__ModuleLoader__.load({
 					title: form.title,
 					body: form.body,
 					acceptance: form.acceptance.split("\n").map(function (x) { return x.trim(); }).filter(Boolean),
-					grillMode: form.grill,
-					planMode: form.plan,
+					planTiming: form.timing,
+					planQuestions: form.questions,
 					priority: Number(form.priority) || 0,
 					allowPaid: !!form.allowPaid,
 					budgetUsd: Number(form.budget) || 0,
@@ -506,7 +507,7 @@ window.__ModuleLoader__.load({
 				}).then(function (res) {
 					setBusy(false);
 					if (res && res.ok) {
-						setForm({ title: "", body: "", acceptance: "", grill: "judgement", plan: "at_pickup", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
+						setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
 						props.onCreated(res.value.ticket);
 					} else {
 						setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -538,12 +539,12 @@ window.__ModuleLoader__.load({
 					)
 				),
 				h("div", { className: "kb-row" },
-					h("div", null, h("div", { className: "kb-label", children: "Grill" }),
-						h("select", { className: "kb-select", value: form.grill, onChange: function (ev) { field("grill", ev.target.value); } },
-							h("option", { value: "now", children: "now" }), h("option", { value: "at_pickup", children: "at pickup" }), h("option", { value: "judgement", children: "judgement" }))),
-					h("div", null, h("div", { className: "kb-label", children: "Plan" }),
-						h("select", { className: "kb-select", value: form.plan, onChange: function (ev) { field("plan", ev.target.value); } },
-							h("option", { value: "now", disabled: form.grill === "at_pickup", children: "now" }), h("option", { value: "at_pickup", children: "at pickup" }), h("option", { value: "one_shot", children: "one shot" }))),
+					h("div", null, h("div", { className: "kb-label", children: "Planning" }),
+						h("select", { className: "kb-select", value: form.timing, onChange: function (ev) { field("timing", ev.target.value); } },
+							h("option", { value: "at_pickup", children: "When started" }), h("option", { value: "now", children: "Now" }))),
+					h("div", null, h("div", { className: "kb-label", children: "Questions" }),
+						h("select", { className: "kb-select", value: form.questions, onChange: function (ev) { field("questions", ev.target.value); } },
+							h("option", { value: "interactive", children: "Ask me" }), h("option", { value: "autonomous", children: "Decide autonomously" }))),
 					h("div", null, h("div", { className: "kb-label", children: "Priority" }),
 						h("input", { className: "kb-input", type: "number", value: form.priority, style: { width: 80 }, onChange: function (ev) { field("priority", ev.target.value); } })),
 					h("label", { className: "kb-row", style: { gap: 6, marginTop: 18 } },
@@ -552,8 +553,7 @@ window.__ModuleLoader__.load({
 					h("div", null, h("div", { className: "kb-label", children: "Budget USD" }),
 						h("input", { className: "kb-input", type: "number", value: form.budget, style: { width: 100 }, onChange: function (ev) { field("budget", ev.target.value); } }))
 				),
-				invalid ? h("div", { className: "kb-err", children: "plan=now cannot fire after an at-pickup grill. Choose plan=at_pickup, or grill=now." }) : null,
-				err ? h("div", { className: "kb-err", children: err }) : null,
+								err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy || invalid || form.title.trim() === "", onClick: submit, children: busy ? "Creating…" : "Create ticket" }),
 					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })
@@ -615,21 +615,21 @@ window.__ModuleLoader__.load({
 
 		function ModeEditor(props) {
 			var ticket = props.ticket;
-			var s = React.useState({ grill: ticket.grillMode, plan: ticket.planMode, priority: ticket.priority, allowPaid: ticket.allowPaid, budgetUsd: ticket.budgetUsd, workspaceCwd: ticket.workspaceCwd || "" });
+			var s = React.useState({ timing: ticket.planTiming, questions: ticket.planQuestions, priority: ticket.priority, allowPaid: ticket.allowPaid, budgetUsd: ticket.budgetUsd, workspaceCwd: ticket.workspaceCwd || "" });
 			var form = s[0], setForm = s[1];
-			var invalid = form.grill === "at_pickup" && form.plan === "now";
+			var invalid = false;
 			function save() {
 				if (invalid) return;
-				props.onSave({ grillMode: form.grill, planMode: form.plan, priority: Number(form.priority) || 0, allowPaid: !!form.allowPaid, budgetUsd: Number(form.budgetUsd) || 0, workspaceCwd: form.workspaceCwd || null });
+				props.onSave({ planTiming: form.timing, planQuestions: form.questions, priority: Number(form.priority) || 0, allowPaid: !!form.allowPaid, budgetUsd: Number(form.budgetUsd) || 0, workspaceCwd: form.workspaceCwd || null });
 			}
 			return h("div", { className: "kb-form" },
 				h("div", { className: "kb-row" },
-					h("div", null, h("div", { className: "kb-label", children: "Grill" }),
-						h("select", { className: "kb-select", value: form.grill, onChange: function (ev) { setForm(Object.assign({}, form, { grill: ev.target.value })); } },
-							h("option", { value: "now", children: "now" }), h("option", { value: "at_pickup", children: "at pickup" }), h("option", { value: "judgement", children: "judgement" }))),
-					h("div", null, h("div", { className: "kb-label", children: "Plan" }),
-						h("select", { className: "kb-select", value: form.plan, onChange: function (ev) { setForm(Object.assign({}, form, { plan: ev.target.value })); } },
-							h("option", { value: "now", disabled: form.grill === "at_pickup", children: "now" }), h("option", { value: "at_pickup", children: "at pickup" }), h("option", { value: "one_shot", children: "one shot" }))),
+					h("div", null, h("div", { className: "kb-label", children: "Planning" }),
+						h("select", { className: "kb-select", value: form.timing, onChange: function (ev) { setForm(Object.assign({}, form, { timing: ev.target.value })); } },
+							h("option", { value: "at_pickup", children: "When started" }), h("option", { value: "now", children: "Now" }))),
+					h("div", null, h("div", { className: "kb-label", children: "Questions" }),
+						h("select", { className: "kb-select", value: form.questions, onChange: function (ev) { setForm(Object.assign({}, form, { questions: ev.target.value })); } },
+							h("option", { value: "interactive", children: "Ask me" }), h("option", { value: "autonomous", children: "Decide autonomously" }))),
 					h("div", null, h("div", { className: "kb-label", children: "Priority" }),
 						h("input", { className: "kb-input", type: "number", style: { width: 80 }, value: form.priority, onChange: function (ev) { setForm(Object.assign({}, form, { priority: ev.target.value })); } })),
 					h("label", { className: "kb-row", style: { gap: 6, marginTop: 18 } },
@@ -640,8 +640,7 @@ window.__ModuleLoader__.load({
 				),
 				h("div", null, h("div", { className: "kb-label", children: "Workspace cwd" }),
 					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, onChange: function (ev) { setForm(Object.assign({}, form, { workspaceCwd: ev.target.value })); } })),
-				invalid ? h("div", { className: "kb-err", children: "plan=now cannot fire after an at-pickup grill. Choose plan=at_pickup, or grill=now." }) : null,
-				h("div", { className: "kb-row" },
+								h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: invalid, onClick: function () { save(); if (props.onClose) props.onClose(); }, children: "Save modes" }),
 					h("button", { className: "kb-btn", onClick: props.onClose || function () {}, children: "Cancel" }))
 			);
@@ -670,12 +669,10 @@ window.__ModuleLoader__.load({
 			}
 			return h("div", { className: "kb-timeline" },
 				h("div", { className: "kb-tl-legend" },
-					h("span", { className: "kb-tl-key kb-tl-griller", children: "Grill" }),
 					h("span", { className: "kb-tl-key kb-tl-planner", children: "Plan" }),
 					h("span", { className: "kb-tl-key kb-tl-implementer", children: "Build" }),
-					h("span", { className: "kb-tl-key kb-tl-verifier", children: "Verify" }),
 					h("span", { className: "kb-tl-key kb-tl-reviewer", children: "Review" }),
-					h("span", { className: "kb-tl-key kb-tl-judge", children: "Orchestrator judge" }),
+					h("span", { className: "kb-tl-key kb-tl-verifier", children: "Verify" }),
 					h("span", { className: "kb-tl-key kb-tl-plugin", children: "Plugin step" })
 				),
 				items.map(function (item, index) {
@@ -811,10 +808,17 @@ window.__ModuleLoader__.load({
 			var tab = tabState[0], setTab = tabState[1];
 			var modalState = React.useState(null);
 			var modal = modalState[0], setModal = modalState[1];
+			React.useEffect(function () {
+				if (!d) return;
+				var ticket = d.ticket;
+				var planSession = (d.sessions || []).find(function (session) { return session.purpose === "plan" || session.role === "plan"; });
+				if (ticket.phase === "plan" && planSession && !autoOpenedSessions.has(ticket.id)) {
+					autoOpenedSessions.add(ticket.id);
+					if (openSessionById) openSessionById(planSession.sessionId);
+				}
+			}, [d]);
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
-			var questionArtifact = d.grill;
-			var awaiting = t.phase === "grill" && questionArtifact && questionArtifact.questions && questionArtifact.questions.length > 0;
 			var tabs = ["overview", "timeline", "sessions", "events", "ticket analytics"];
 			return h("div", { className: "kb-detail" },
 				h("div", { className: "kb-hero kb-hero-" + t.column },
@@ -834,7 +838,6 @@ window.__ModuleLoader__.load({
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				awaiting ? h(GrillAnswerForm, { ticket: t, questions: questionArtifact.questions, onSubmit: props.onAnswer }) : null,
 				t.column === "needs_attention" ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
@@ -857,31 +860,6 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function GrillAnswerForm(props) {
-			var s = React.useState({});
-			var answers = s[0], setAnswers = s[1];
-			var b = React.useState(false);
-			var busy = b[0], setBusy = b[1];
-			return h("div", { className: "kb-panel", style: { borderColor: "#f0c987", background: "#fffdf7" } },
-				h("h3", { children: "Waiting on you — grill answers" }),
-				h("div", { className: "kb-answers" },
-					props.questions.map(function (q, i) {
-						return h("div", { className: "kb-answerrow", key: i },
-							h("div", { className: "kb-q", children: (i + 1) + ". " + q }),
-							h("input", { className: "kb-input", style: { flex: 1 }, value: answers[i] || "", onChange: function (ev) { var n = Object.assign({}, answers); n[i] = ev.target.value; setAnswers(n); } }));
-					})),
-				h("div", { style: { marginTop: 8 } },
-					h("button", {
-						className: "kb-btn primary", disabled: busy,
-						onClick: function () {
-							setBusy(true);
-							var list = props.questions.map(function (_, i) { return (answers[i] || "").trim(); });
-							props.onSubmit(props.ticket.id, list).finally(function () { setBusy(false); });
-						},
-						children: busy ? "Sending…" : "Answer and continue"
-					}))
-			);
-		}
 
 		function NeedsAttention(props) {
 			var s = React.useState("");
@@ -916,6 +894,8 @@ window.__ModuleLoader__.load({
 					h("h3", { children: "Ticket" }),
 					h("div", { className: "kb-kv" },
 						h("b", { children: "Workspace" }), h("span", { children: t.workspaceCwd || "(engine default)" }),
+						h("b", { children: "Planning" }), h("span", { children: t.planTiming === "now" ? "now" : "when started" }),
+						h("b", { children: "Questions" }), h("span", { children: t.planQuestions === "autonomous" ? "decide autonomously" : "ask me" }),
 						h("b", { children: "Attempts" }), h("span", { children: t.attemptCount + " / " + (props.maxAttempts || 3) }),
 						h("b", { children: "Spend" }), h("span", { children: fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)") }),
 						h("b", { children: "Allow paid" }), h("span", { children: t.allowPaid ? "yes" : "no" }),
@@ -934,7 +914,7 @@ window.__ModuleLoader__.load({
 				),
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "done_when — what verification judges" }),
-					d.conditions.length === 0 ? h("div", { className: "kb-hint", children: "No conditions yet (plan or triage will produce them)." }) :
+					d.conditions.length === 0 ? h("div", { className: "kb-hint", children: "No conditions yet; the plan session produces them." }) :
 						h("table", { className: "kb-table" },
 							h("thead", null, h("tr", null, h("th", { children: "id" }), h("th", { children: "statement" }), h("th", { children: "how verified" }), h("th", { children: "source" }))),
 							h("tbody", null, d.conditions.map(function (c) {
@@ -981,13 +961,13 @@ window.__ModuleLoader__.load({
 			var s = React.useState("");
 			var sessionId = s[0], setSessionId = s[1];
 			return h("div", { className: "kb-panel" },
-				h("h3", { children: "Workflow session (shared across phases)" }),
+				h("h3", { children: "Workflow sessions" }),
 				d.sessions.length === 0 ? h("div", { className: "kb-hint", children: "No sessions attached." }) :
 					h("table", { className: "kb-table" },
-						h("thead", null, h("tr", null, h("th", { children: "role" }), h("th", { children: "session" }), h("th", { children: "provider/model" }), h("th", { children: "created" }), h("th", { children: "" }))),
+						h("thead", null, h("tr", null, h("th", { children: "purpose" }), h("th", { children: "session" }), h("th", { children: "provider/model" }), h("th", { children: "created" }), h("th", { children: "" }))),
 						h("tbody", null, d.sessions.map(function (session) {
 							return h("tr", { key: session.id },
-								h("td", { children: session.role }),
+								h("td", { children: session.purpose || session.role }),
 								h("td", null, h("code", { style: { fontSize: 10 }, children: session.sessionId }),
 									h("button", { className: "kb-btn", style: { marginLeft: 8 }, onClick: function () { if (openSessionById) openSessionById(session.sessionId); }, children: "Open" })),
 								h("td", { children: (session.provider || "?") + "/" + (session.model || "?") }),
@@ -1071,8 +1051,8 @@ window.__ModuleLoader__.load({
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
-			var labels = { orchestrator: "Judge", griller: "Grill", planner: "Plan", implementer: "Build", verifier: "Verify", reviewer: "Review" };
-			var order = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
+			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", verifier: "Verify" };
+			var order = ["planner", "implementer", "reviewer", "verifier"];
 			return h("div", { className: "kb-routing" },
 				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model for each role. Models are grouped by provider; saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
@@ -1147,6 +1127,8 @@ window.__ModuleLoader__.load({
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
 			var poll = React.useRef(0);
+			var knownPlanSessions = React.useRef(new Set());
+			var planSeen = React.useRef(false);
 
 			function loadBoard() {
 				rpc("board", {}).then(function (res) {
@@ -1173,6 +1155,26 @@ window.__ModuleLoader__.load({
 				}, 3000);
 				return function () { clearInterval(timer); clearInterval(routingTimer); };
 			}, [selectedId]);
+			React.useEffect(function () {
+				if (!board) return;
+				var columns = board.columns || {};
+				var tickets = [].concat(columns.now || [], columns.backlog || []);
+				var initial = !planSeen.current;
+				planSeen.current = true;
+				for (var i = 0; i < tickets.length; i += 1) {
+					var ticket = tickets[i];
+					if (ticket.phase !== "plan" || !ticket.planSessionId) continue;
+					var key = ticket.id + ":" + ticket.planSessionId;
+					if (initial) { knownPlanSessions.current.add(key); continue; }
+					if (knownPlanSessions.current.has(key)) continue;
+					knownPlanSessions.current.add(key);
+					if (!autoOpenedSessions.has(ticket.id)) {
+						autoOpenedSessions.add(ticket.id);
+						if (openSessionById) openSessionById(ticket.planSessionId);
+						break;
+					}
+				}
+			}, [board]);
 			React.useEffect(function () {
 				if (view === "analytics" && analyticsData === null) {
 					rpc("analytics", {}).then(function (res) { if (res && res.ok) setAnalyticsData(res.value); });
@@ -1201,7 +1203,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
 						h("h1", { className: "kb-title", children: "Work" }),
-						h("div", { className: "kb-sub", children: board ? "Ticket flow from intake to review · every phase shares one session" : "Loading the board…" })
+						h("div", { className: "kb-sub", children: board ? "Ticket flow from plan to verification · sequential workflow sessions" : "Loading the board…" })
 					),
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
@@ -1225,7 +1227,6 @@ window.__ModuleLoader__.load({
 						detail: detail,
 						onBack: function () { setSelectedId(null); setDetail(null); },
 						onSave: function (id, patch) { act("update", { id: id, patch: patch }); },
-						onAnswer: function (id, answers) { return act("answer", { id: id, answers: answers }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
 						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); }
@@ -1264,7 +1265,7 @@ window.__ModuleLoader__.load({
 			function startRoutingEdit() {
 				if (!routing || routing.writable === false) return;
 				var draft = {};
-				["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"].forEach(function (role) {
+				["planner", "implementer", "reviewer", "verifier"].forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
 					draft[role] = { provider: route.provider || "", model: route.model || "" };
 				});
@@ -1283,7 +1284,7 @@ window.__ModuleLoader__.load({
 			}
 			function saveRouting() {
 				if (!routing) return;
-				var roles = ["orchestrator", "griller", "planner", "implementer", "verifier", "reviewer"];
+				var roles = ["planner", "implementer", "reviewer", "verifier"];
 				var routes = roles.map(function (role) { return { role: role, provider: routingDraft[role].provider, model: routingDraft[role].model }; });
 				setRoutingSaving(true);
 				setRoutingError(null);

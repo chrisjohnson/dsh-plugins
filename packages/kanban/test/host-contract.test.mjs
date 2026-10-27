@@ -13,14 +13,6 @@ async function sources() {
   return out
 }
 
-test('the plugin registers no tools: role sessions have no board mutation surface', async () => {
-  const files = await sources()
-  for (const [name, text] of Object.entries(files)) {
-    assert.equal(/\.tools\.register\s*\(/.test(text), false, `${name} registers a tool`)
-    assert.equal(/registerTool\s*\(/.test(text), false, `${name} registers a tool`)
-  }
-})
-
 test('every HTTP route is under the authenticated /api fence', async () => {
   const host = (await sources())['host.mjs']
   assert.match(host, /const API_BASE = '\/api\/kanban'/)
@@ -38,15 +30,18 @@ test('no credentials, provider endpoints or provider wire code', async () => {
   }
 })
 
-test('role allow-lists are the documented sets and never name the board', async () => {
-  const { DEFAULT_TOOLS } = await import('../src/config.mjs')
-  for (const [role, tools] of Object.entries(DEFAULT_TOOLS)) {
-    for (const name of tools) {
-      assert.equal(/kanban|ticket|board|budget/i.test(name), false, `${role} may call ${name}`)
-    }
-  }
-  assert.ok(DEFAULT_TOOLS.implementer.includes('edit'))
-  assert.equal(DEFAULT_TOOLS.reviewer.includes('bash'), false)
-  assert.equal(DEFAULT_TOOLS.griller.includes('write'), false)
-  assert.deepEqual(DEFAULT_TOOLS.orchestrator, [])
+test('the only model-facing tools are scoped phase actions', async () => {
+  const files = await sources()
+  assert.match(files['actions.mjs'], /kanban_submit_plan/)
+  assert.match(files['actions.mjs'], /kanban_submit_implementation/)
+  assert.match(files['actions.mjs'], /kanban_submit_review/)
+  assert.match(files['actions.mjs'], /kanban_submit_verification/)
+  assert.equal(/kanban_(create|move|update|delete)/.test(files['actions.mjs']), false)
+})
+
+test('the standard preset is mounted once and no preset is recomposed', async () => {
+  const dispatch = (await sources())['dispatch.mjs']
+  assert.match(dispatch, /presets\.mount\(agentCtx, 'standard'\)/)
+  assert.equal(/recompose\s*\(/.test(dispatch), false)
+  assert.equal(/ensurePresets/.test(dispatch), false)
 })
