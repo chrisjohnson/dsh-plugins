@@ -154,6 +154,18 @@ export default async function kanban(ctx, config = {}) {
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
         byColumn[ticket.column]?.push(item);
       }
+      const awaiting = new Set(tickets.filter((ticket) => ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id)).map((ticket) => ticket.id));
+      for (const ticket of byColumn.now.slice()) {
+        if (!awaiting.has(ticket.id)) continue;
+        byColumn.now = byColumn.now.filter((item) => item.id !== ticket.id);
+        byColumn.needs_attention.push({
+          ...ticket,
+          column: 'needs_attention',
+          group: 'waiting',
+          awaitingQuestion: true,
+          needsAttentionReason: 'Waiting on your answer',
+        });
+      }
       const now = byColumn.now.map((ticket) => {
         const full = store.getTicket(ticket.id);
         const latest = store.listEvents(ticket.id, { limit: 1 })[0];
@@ -163,8 +175,11 @@ export default async function kanban(ctx, config = {}) {
       const groups = { active: [], waiting: [], blocked: [] };
       for (const ticket of now) groups[ticket.group]?.push(ticket);
       byColumn.now = now;
+      const counts = store.counts();
+      counts.now = byColumn.now.length;
+      counts.needs_attention = byColumn.needs_attention.length;
       return {
-        counts: store.counts(),
+        counts,
         columns: byColumn,
         now: groups,
         inFlight: now.filter((t) => t.group === 'active' || t.group === 'waiting'),
@@ -183,7 +198,10 @@ export default async function kanban(ctx, config = {}) {
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
       return {
-        ticket,
+        ticket: ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id)
+          ? { ...ticket, column: 'needs_attention', needsAttentionReason: 'Waiting on your answer' }
+          : ticket,
+        awaitingQuestion: ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id),
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
         sessions: store.listSessions(ticket.id),

@@ -213,6 +213,13 @@ export class SessionDriver {
     return id !== undefined && this.live.has(id) ? id : undefined;
   }
 
+  isAwaitingUser(ticketId) {
+    for (const [sessionId, waiter] of this.waiters) {
+      if (waiter.awaitingUser && this.live.get(sessionId)?.ticketId === ticketId) return true;
+    }
+    return false;
+  }
+
   #settleTurn(session, event, waiter) {
     this.waiters.delete(session.id);
     clearInterval(waiter.timer);
