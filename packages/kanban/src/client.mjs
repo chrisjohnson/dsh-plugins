@@ -108,6 +108,9 @@ window.__ModuleLoader__.load({
 			+ ".kb-card{border:.5px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);padding:8px 9px;cursor:pointer;display:flex;flex-direction:column;gap:5px}"
 			+ ".kb-card:hover{border-color:var(--dsw-alias-label-tertiary,#999)}"
 			+ ".kb-card.dragging{opacity:.4}"
+			+ ".kb-card-ghost{opacity:.62;border-style:dashed;border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l2,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 5%,var(--dsw-alias-bg-base,#fff));box-shadow:0 5px 16px rgba(15,23,42,.10);pointer-events:none;transform:translateY(1px)}"
+			+ ".kb-card-ghost .kb-next{color:var(--dsw-alias-state-business-primary,#2563eb)}"
+			+ ".kb-col.drop-target{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l1,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 3%,var(--dsw-alias-bg-layer-2,#f7f8fa))}"
 			+ ".kb-card.attn{border-left:3px solid #c0392b}"
 			+ ".kb-key{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
 			+ ".kb-cardtitle{font:500 12.5px/17px Inter,sans-serif;color:var(--dsw-alias-label-primary,#111);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}"
@@ -375,27 +378,46 @@ window.__ModuleLoader__.load({
 			return "Ready when promoted";
 		}
 
+		function DropGhost(props) {
+			var t = props.ticket;
+			return h("div", { className: "kb-card kb-card-ghost", "aria-hidden": "true" },
+				h("div", { className: "kb-cardtop" },
+					h("span", { className: "kb-key", children: t.key }),
+					h("span", { className: "kb-phasechip " + phaseTone(props.column), children: phaseLabel(t.phase) })
+				),
+				h("div", { className: "kb-cardtitle", children: t.title }),
+				phaseProgress(t),
+				h("div", { className: "kb-meta" },
+					h("span", { className: "kb-next " + phaseTone(props.column), children: "Drop here" })
+				)
+			);
+		}
+
 		function Card(props) {
 			var t = props.ticket;
 			var working = t.column === "now" && t.group === "active";
 			return h(
 				"div",
 				{
-					className: "kb-card kb-card-" + t.column + (working ? " working" : "") + (t.column === "needs_attention" ? " attn" : ""),
+					className: "kb-card kb-card-" + t.column + (working ? " working" : "") + (t.column === "needs_attention" ? " attn" : "") + (props.dragging ? " dragging" : ""),
 					draggable: true,
 					onDragStart: function (ev) {
 						ev.dataTransfer.setData("text/kanban", t.id);
 						ev.dataTransfer.effectAllowed = "move";
+						if (props.onDragStart) props.onDragStart(t.id);
 					},
+					onDragEnd: function () { if (props.onDragEnd) props.onDragEnd(); },
 					onDragOver: function (ev) {
 						ev.preventDefault();
+						ev.stopPropagation();
 						ev.dataTransfer.dropEffect = "move";
+						if (props.onDragOverCard) props.onDragOverCard(props.column, t.id);
 					},
 					onDrop: function (ev) {
 						ev.preventDefault();
 						ev.stopPropagation();
 						var id = ev.dataTransfer.getData("text/kanban");
-						if (id) props.onReorder(id, t.id);
+						if (id) props.onDropCard(id, props.column, t.id);
 					},
 					onClick: function () { props.onOpen(t.id); },
 					title: t.title
@@ -419,15 +441,25 @@ window.__ModuleLoader__.load({
 
 		function Column(props) {
 			var items = props.items || [];
+			var dragging = props.dragId !== null && props.dragId !== undefined;
+			var active = dragging && props.dropTarget && props.dropTarget.column === props.column;
+			var ghost = active && props.dragTicket ? h(DropGhost, { key: "drop-ghost", ticket: props.dragTicket, column: props.column }) : null;
+			var rendered = items.map(function (t) { return h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onReorder: props.onReorder, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd, onDragOverCard: props.onDragOverCard, onDropCard: props.onDropCard }); });
+			if (ghost) {
+				var beforeId = props.dropTarget.beforeId;
+				var index = beforeId === null || beforeId === undefined ? -1 : items.findIndex(function (t) { return t.id === beforeId; });
+				if (index < 0) rendered.push(ghost);
+				else rendered.splice(index, 0, ghost);
+			}
 			return h(
 				"div",
 				{
-					className: "kb-col kb-col-" + props.column + (props.attention ? " attn" : ""),
-					onDragOver: function (ev) { ev.preventDefault(); },
+					className: "kb-col kb-col-" + props.column + (props.attention ? " attn" : "") + (active ? " drop-target" : ""),
+					onDragOver: function (ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; if (props.onDragOverColumn) props.onDragOverColumn(props.column); },
 					onDrop: function (ev) {
 						ev.preventDefault();
 						var id = ev.dataTransfer.getData("text/kanban");
-						if (id) props.onMove(id, props.column);
+						if (id) { props.onMove(id, props.column); if (props.onDragEnd) props.onDragEnd(); }
 					}
 				},
 				h("div", { className: "kb-colhead" },
@@ -436,9 +468,9 @@ window.__ModuleLoader__.load({
 					h("span", { className: "kb-count", children: items.length })
 				),
 				h("div", { className: "kb-list" },
-					items.length === 0
+					items.length === 0 && ghost === null
 						? h("div", { className: "kb-empty", children: props.column === "backlog" ? "Nothing queued" : props.column === "done" ? "Nothing shipped yet" : "Nothing here" })
-						: items.map(function (t) { return h(Card, { key: t.id, ticket: t, onOpen: props.onOpen, onReorder: props.onReorder }); })
+						: rendered
 				)
 			);
 		}
@@ -1110,6 +1142,10 @@ window.__ModuleLoader__.load({
 			var routingSaving = rsv[0], setRoutingSaving = rsv[1];
 			var rerr = React.useState(null);
 			var routingError = rerr[0], setRoutingError = rerr[1];
+			var dr = React.useState(null);
+			var dragId = dr[0], setDragId = dr[1];
+			var dp = React.useState(null);
+			var dropTarget = dp[0], setDropTarget = dp[1];
 			var poll = React.useRef(0);
 
 			function loadBoard() {
@@ -1159,6 +1195,8 @@ window.__ModuleLoader__.load({
 			var columns = board ? board.columns : { backlog: [], now: [], blocked: [], needs_attention: [], done: [], discarded: [] };
 			var nowGroups = board ? board.now : { active: [], waiting: [], blocked: [] };
 			var counts = board ? board.counts : {};
+			var allTickets = Object.keys(columns).reduce(function (list, column) { return list.concat(columns[column] || []); }, []);
+			var dragTicket = dragId === null ? null : allTickets.find(function (ticket) { return ticket.id === dragId; }) || null;
 			return h("div", { className: "kb-root" },
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
@@ -1199,11 +1237,11 @@ window.__ModuleLoader__.load({
 							h("span", { className: "kb-flow-chip", children: (nowGroups.blocked || []).length + " blocked" })
 						) : null,
 						h("div", { className: "kb-cols" },
-							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder }),
-							h(Column, { column: "now", label: "In flight", items: columns.now, onOpen: open, onMove: move, onReorder: reorder }),
-							h(Column, { column: "blocked", label: "Blocked", items: columns.blocked, onOpen: open, onMove: move, onReorder: reorder }),
-							h(Column, { column: "needs_attention", label: "Needs attention", items: columns.needs_attention, attention: true, onOpen: open, onMove: move, onReorder: reorder }),
-							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder })
+							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
+							h(Column, { column: "now", label: "In flight", items: columns.now, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
+							h(Column, { column: "blocked", label: "Blocked", items: columns.blocked, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
+							h(Column, { column: "needs_attention", label: "Needs attention", items: columns.needs_attention, attention: true, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
+							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard })
 						)
 					)
 				),
