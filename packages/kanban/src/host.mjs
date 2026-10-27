@@ -9,11 +9,10 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { providerPolicy, resolveConfig, routeForAttempt } from './config.mjs';
+import { resolveConfig } from './config.mjs';
 import { KanbanStore } from './store.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
-import { createJudge } from './judge.mjs';
 import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
@@ -30,7 +29,6 @@ const ENDPOINTS = [
   'create',
   'update',
   'move',
-  'answer',
   'resolve',
   'action',
   'reorder',
@@ -78,38 +76,14 @@ export default async function kanban(ctx, config = {}) {
     },
   });
 
-  const resolveRoute = (role, attempt) => {
-    const route = routeForAttempt(getConfig(), role, attempt);
-    if (route.provider !== null && route.model !== null) return route;
-    const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
-    return {
-      ...route,
-      provider: route.provider ?? selection?.provider ?? null,
-      model: route.model ?? selection?.model ?? null,
-      reasoningEffort: route.reasoningEffort ?? selection?.reasoningEffort ?? null,
-    };
-  };
-  const judge = createJudge({
-    llm,
-    getConfig,
-    resolveRoute,
-    budgetCheck: ({ route, ticket, promptChars, maxTokens }) => {
-      const policy = providerPolicy(getConfig(), route.provider);
-      if (policy.tier !== 'paid') return { ok: true };
-      if (ticket === null || ticket === undefined) return { ok: true };
-      if (!ticket.allowPaid) return { ok: false, reason: `orchestrator is routed to paid provider ${route.provider} but allow_paid is false` };
-      return { ok: true };
-    },
-  });
   const driver = new SessionDriver({
     ctx,
     log,
     getConfig,
   });
-  const engine = new Engine({ ctx, store, driver, judge, getConfig, getPrompts, log });
+  const engine = new Engine({ ctx, store, driver, getConfig, getPrompts, log });
   engine.configHash = configHash;
   engine.runInConfig = (snapshot, fn) => als.run({ ...snapshot, __prompts: prompts }, fn);
-  await driver.ensurePresets();
 
   const engineRef = { current: engine };
   const reloadState = { lastJson: null, timer: null };
@@ -142,8 +116,7 @@ export default async function kanban(ctx, config = {}) {
         engineRef.current.configHash = shortHash(hashText(JSON.stringify(next.config)));
         reloadState.lastJson = json;
         try {
-          await driver.ensurePresets();
-        } catch (error) {
+                } catch (error) {
           log.warn('config reload: preset registration failed: %s', message(error));
         }
         log.info('config reloaded atomically (%d key(s))', Object.keys(next.config).length);
@@ -176,11 +149,15 @@ export default async function kanban(ctx, config = {}) {
       const tickets = store.listTickets();
       const active = new Map([...engine.active.keys()].map((id) => [id, true]));
       const byColumn = { backlog: [], now: [], blocked: [], needs_attention: [], done: [], discarded: [] };
-      for (const ticket of tickets) byColumn[ticket.column]?.push(summary(ticket));
+      for (const ticket of tickets) {
+        const item = summary(ticket);
+        if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
+        byColumn[ticket.column]?.push(item);
+      }
       const now = byColumn.now.map((ticket) => {
         const full = store.getTicket(ticket.id);
         const latest = store.listEvents(ticket.id, { limit: 1 })[0];
-        const waiting = latest?.kind === 'awaiting_human' || full.phase === 'grill';
+        const waiting = latest?.kind === 'awaiting_human' || (full.phase === 'plan' && full.planQuestions === 'interactive');
         return { ...ticket, group: nowGroup(full, { active: active.has(ticket.id), waiting }) };
       });
       const groups = { active: [], waiting: [], blocked: [] };
@@ -203,7 +180,6 @@ export default async function kanban(ctx, config = {}) {
         content: store.getArtifact(artifact.id)?.content ?? '',
       }));
       const plan = store.latestArtifact(ticket.id, 'plan');
-      const grill = store.latestArtifact(ticket.id, 'grill_questions');
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
       return {
@@ -218,7 +194,6 @@ export default async function kanban(ctx, config = {}) {
         events,
         artifacts,
         plan: plan === undefined ? null : safeJson(plan.content),
-        grill: grill === undefined ? null : safeJson(grill.content),
         review: review === undefined ? null : safeJson(review.content),
         verification: verification === undefined ? null : safeJson(verification.content),
         nowGroup: nowGroup(ticket, { active: engine.active.has(ticket.id) }),
@@ -270,17 +245,12 @@ export default async function kanban(ctx, config = {}) {
             if (column === 'discarded' || column === 'done') {
               const t = store.getTicket(String(p.id));
               if (t === undefined) return fail('not_found', 'no such ticket');
-              if (column === 'done') return fail('bad_request', 'done is set by a passing review, not by dragging');
+              if (column === 'done') return fail('bad_request', 'done is set by a passing verification, not by dragging');
               await engineRef.current.abortTicket(t.id);
             }
             const updated = store.transitionTicket(String(p.id), { column }, { actor: 'human', reason: p.reason ?? 'human move' });
             void engineRef.current.tick();
             return { ok: true, value: { ticket: updated } };
-          }
-          case 'answer': {
-            if (!Array.isArray(p.answers)) return fail('bad_request', 'answers must be an array of strings');
-            const result = await engineRef.current.answerGrill(String(p.id), p.answers.map(String));
-            return { ok: true, value: { outcome: result?.kind ?? 'accepted' } };
           }
           case 'resolve': {
             const ticket = requireTicket(String(p.id));
@@ -418,7 +388,7 @@ export default async function kanban(ctx, config = {}) {
                 roles: Object.fromEntries(
                   Object.entries(live.roles).map(([role, entry]) => [
                     role,
-                    { preset: entry.preset, provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort, allowTools: entry.allowTools },
+                    { provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort, allowTools: entry.allowTools },
                   ]),
                 ),
                 confidenceThreshold: live.confidenceThreshold,
@@ -521,6 +491,8 @@ function summary(ticket) {
     priority: ticket.priority,
     sortOrder: ticket.sortOrder,
     attemptCount: ticket.attemptCount,
+    planTiming: ticket.planTiming,
+    planQuestions: ticket.planQuestions,
     spentUsd: ticket.spentUsd,
     budgetUsd: ticket.budgetUsd,
     allowPaid: ticket.allowPaid,
@@ -549,11 +521,10 @@ function tree(spans) {
 
 
 const TIMELINE_LABELS = {
-  griller: 'Grill',
   planner: 'Plan',
   implementer: 'Build',
-  verifier: 'Verify',
   reviewer: 'Review',
+  verifier: 'Verify',
 };
 
 /**
@@ -621,11 +592,11 @@ function timelineView(spans, artifacts = [], events = [], now = Date.now()) {
       });
     }
   }
-  const rolePhase = { griller: 'grill', planner: 'plan', implementer: 'implement', verifier: 'verify', reviewer: 'review' };
+  const rolePhase = { planner: 'plan', implementer: 'implement', reviewer: 'review', verifier: 'verify' };
   const EVENT_KINDS = new Set([
-    'phase_changed', 'conditions_set', 'planned', 'implemented', 'verified', 'done',
+    'phase_changed', 'conditions_set', 'planned', 'implemented', 'review', 'verification_failed', 'done',
     'retry_scheduled', 'needs_attention_reason', 'stalled', 'recovered',
-    'awaiting_human', 'grill_answered', 'attempt_started', 'attempt_history', 'triage_forced_plan',
+    'awaiting_human', 'attempt_started', 'attempt_history',
   ]);
   for (const group of groups.values()) {
     const phase = rolePhase[group.role];

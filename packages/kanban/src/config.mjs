@@ -8,33 +8,25 @@
 // on a bare clone. The host half resolves `null` routes against the host's
 // model catalog; this half only decides whether a value is *shaped* correctly.
 
-export const ROLES = ['orchestrator', 'griller', 'planner', 'implementer', 'verifier', 'reviewer'];
+export const ROLES = ['planner', 'implementer', 'reviewer', 'verifier'];
 
 export const DEFAULT_TOOLS = {
-  // Implementer: everything needed to change a repo, and nothing that can move
-  // a ticket. There is no board tool to call; the guard below removes every
-  // name outside this list even if the preset mounts it.
-  implementer: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill'],
-  // Planner emits the plan as its final JSON; the engine writes the artifact.
-  planner: ['read', 'read_image', 'glob', 'grep'],
-  // Verifier may run the tests named by how_verified, and may not write source.
+  // Planning is read-only by intent; the guard also blocks write/edit.
+  planner: ['read', 'read_image', 'glob', 'grep', 'bash', 'ask_user_question', 'subagent', 'subagent_fork'],
+  implementer: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
+  // Review inspects; the engine's edit guard blocks write/edit in review.
+  reviewer: ['read', 'read_image', 'glob', 'grep', 'bash'],
   verifier: ['read', 'read_image', 'glob', 'grep', 'bash'],
-  // Reviewer reads the diff and the verifier output; it never runs commands.
-  reviewer: ['read', 'read_image', 'glob', 'grep'],
-  // Griller reads the ticket/acceptance and asks the human through the board.
-  griller: ['read'],
-  // The orchestrator is an out-of-band LLM call, not a session.
-  orchestrator: [],
 };
 
-/** Default prompt file per role, relative to `promptsDir`. */
+/** Prompt files, relative to promptsDir. */
 export const DEFAULT_PROMPTS = {
-  orchestrator: 'orchestrator.md',
-  griller: 'griller.md',
-  planner: 'planner.md',
-  implementer: 'implementer.md',
-  verifier: 'verifier.md',
-  reviewer: 'reviewer.md',
+  'plan-human': 'plan-human.md',
+  'plan-self': 'plan-self.md',
+  implement: 'implement.md',
+  rework: 'rework.md',
+  review: 'review.md',
+  verify: 'verify.md',
 };
 
 export const DEFAULT_CONFIG = {
@@ -46,55 +38,31 @@ export const DEFAULT_CONFIG = {
   /** Provider concurrency/pricing. Unknown providers are admitted one at a time at an unknown price. */
   providers: [],
 
-  /** role -> preset + route + prompt + tool allow-list. `preset:null` means the deployment default preset. */
+  /** role -> route + tool allow-list. Roles are model routes, not system prompts. */
   roles: {
-    orchestrator: {
-      preset: null,
-      provider: null,
-      model: null,
-      reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.orchestrator,
-      allowTools: [],
-    },
-    griller: {
-      preset: 'kanban-griller',
-      provider: null,
-      model: null,
-      reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.griller,
-      allowTools: DEFAULT_TOOLS.griller,
-    },
     planner: {
-      preset: 'kanban-planner',
       provider: null,
       model: null,
       reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.planner,
       allowTools: DEFAULT_TOOLS.planner,
     },
     implementer: {
-      preset: 'kanban-implementer',
       provider: null,
       model: null,
       reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.implementer,
       allowTools: DEFAULT_TOOLS.implementer,
     },
-    verifier: {
-      preset: 'kanban-verifier',
-      provider: null,
-      model: null,
-      reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.verifier,
-      allowTools: DEFAULT_TOOLS.verifier,
-    },
     reviewer: {
-      preset: 'kanban-reviewer',
       provider: null,
       model: null,
       reasoningEffort: null,
-      prompt: DEFAULT_PROMPTS.reviewer,
       allowTools: DEFAULT_TOOLS.reviewer,
+    },
+    verifier: {
+      provider: null,
+      model: null,
+      reasoningEffort: null,
+      allowTools: DEFAULT_TOOLS.verifier,
     },
   },
 
@@ -130,26 +98,13 @@ export const DEFAULT_CONFIG = {
   /** Directory holding prompt markdown. `null` resolves to the package's `prompts/`. */
   promptsDir: null,
 
-  /** Agent-initiated model switching is recorded but never trusted. */
-  allowAgentModelSwitch: false,
-  /** A failed verification starts a fresh session by default (poisoned-trajectory avoidance). */
-  reuseSessionOnRetry: false,
-
-  /** Bounded continuation prompts inside one attempt. */
-  maxContinuations: 2,
-  /** Bounded adjudication calls per attempt. */
-  maxAdjudications: 2,
-
-  /** Modes a ticket gets when the caller names none. */
-  defaultGrillMode: 'judgement',
-  defaultPlanMode: 'at_pickup',
-
-  /** Per-role prompt body overrides: `{ implementer: "..." }`. Content still hashes. */
-  promptOverrides: {},
+  /** New-ticket defaults. */
+  defaultPlanTiming: 'at_pickup',
+  defaultPlanQuestions: 'interactive',
 };
 
 const TOP_LEVEL_KEYS = new Set(Object.keys(DEFAULT_CONFIG));
-const ROLE_KEYS = new Set(['preset', 'provider', 'model', 'reasoningEffort', 'prompt', 'allowTools']);
+const ROLE_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'allowTools']);
 const PROVIDER_KEYS = new Set([
   'name',
   'tier',
@@ -255,16 +210,11 @@ function validateRoles(roles, errors) {
     for (const key of Object.keys(entry)) {
       if (!ROLE_KEYS.has(key)) errors.push(new ConfigError(`unknown key "${key}"`, at));
     }
-    optionalString(entry.preset, `${at}.preset`, errors);
     optionalString(entry.provider, `${at}.provider`, errors);
     optionalString(entry.model, `${at}.model`, errors);
     optionalString(entry.reasoningEffort, `${at}.reasoningEffort`, errors);
-    if (!isNonEmptyString(entry.prompt)) errors.push(new ConfigError('prompt must be a file name', `${at}.prompt`));
     if (!Array.isArray(entry.allowTools) || entry.allowTools.some((name) => !isNonEmptyString(name))) {
       errors.push(new ConfigError('allowTools must be an array of tool names', `${at}.allowTools`));
-    }
-    if (role === 'orchestrator' && entry.allowTools !== undefined && entry.allowTools.length > 0) {
-      errors.push(new ConfigError('the orchestrator is not a session and may not allow tools', `${at}.allowTools`));
     }
   }
 }
@@ -347,29 +297,11 @@ export function resolveConfig(input = {}) {
     errors.push(new ConfigError('must be an integer >= 1', 'retentionDays'));
   }
   optionalString(config.promptsDir, 'promptsDir', errors);
-  for (const key of ['allowAgentModelSwitch', 'reuseSessionOnRetry']) {
-    if (typeof config[key] !== 'boolean') errors.push(new ConfigError('must be a boolean', key));
+  if (!['now', 'at_pickup'].includes(config.defaultPlanTiming)) {
+    errors.push(new ConfigError('must be now or at_pickup', 'defaultPlanTiming'));
   }
-  for (const key of ['maxContinuations', 'maxAdjudications']) {
-    if (!Number.isInteger(config[key]) || config[key] < 0) {
-      errors.push(new ConfigError('must be an integer >= 0', key));
-    }
-  }
-  for (const key of ['defaultGrillMode', 'defaultPlanMode']) {
-    const valid = key === 'defaultGrillMode' ? ['now', 'at_pickup', 'judgement'] : ['now', 'at_pickup', 'one_shot'];
-    if (!valid.includes(config[key])) {
-      errors.push(new ConfigError(`must be one of ${valid.join(', ')}`, key));
-    }
-  }
-  if (!isObject(config.promptOverrides)) {
-    errors.push(new ConfigError('must be an object of role -> prompt text', 'promptOverrides'));
-  } else {
-    for (const [role, text] of Object.entries(config.promptOverrides)) {
-      if (!ROLES.includes(role)) errors.push(new ConfigError(`unknown role "${role}"`, 'promptOverrides'));
-      else if (typeof text !== 'string' || text.trim() === '') {
-        errors.push(new ConfigError('must be a non-empty string', `promptOverrides.${role}`));
-      }
-    }
+  if (!['interactive', 'autonomous'].includes(config.defaultPlanQuestions)) {
+    errors.push(new ConfigError('must be interactive or autonomous', 'defaultPlanQuestions'));
   }
 
   if (errors.length > 0) {

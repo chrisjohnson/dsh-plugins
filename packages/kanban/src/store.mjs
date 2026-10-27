@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { assertTransition, compareQueue, validateModes } from './lifecycle.mjs';
+import { assertTransition, compareQueue, validateTicketModes } from './lifecycle.mjs';
 
 export class StoreError extends Error {
   constructor(code, message, details = {}) {
@@ -29,8 +29,8 @@ const TICKET_FIELDS = [
   'budgetUsd',
   'workspaceCwd',
   'confidenceThreshold',
-  'grillMode',
-  'planMode',
+  'planTiming',
+  'planQuestions',
 ];
 
 function ticketFromRow(row) {
@@ -42,8 +42,8 @@ function ticketFromRow(row) {
     body: row.body,
     column: row.col,
     phase: row.phase,
-    grillMode: row.grill_mode,
-    planMode: row.plan_mode,
+    planTiming: row.plan_timing,
+    planQuestions: row.plan_questions,
     priority: Number(row.priority),
     sortOrder: Number(row.sort_order),
     allowPaid: Number(row.allow_paid) === 1,
@@ -160,15 +160,20 @@ export class KanbanStore {
     return event;
   }
 
+  /** Public event append used by the engine's non-ticket state transitions. */
+  appendEvent(ticketId, kind, options = {}) {
+    return this.#event(ticketId, kind, options);
+  }
+
   // ---------------------------------------------------------------- tickets
 
   createTicket(input) {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (title === '') throw new StoreError('bad_request', 'title is required');
-    const grillMode = input.grillMode ?? 'judgement';
-    const planMode = input.planMode ?? 'at_pickup';
-    const modes = validateModes(grillMode, planMode);
-    if (!modes.ok) throw new StoreError('invalid_modes', modes.reason, { grillMode, planMode });
+    const planTiming = input.planTiming ?? 'at_pickup';
+    const planQuestions = input.planQuestions ?? 'interactive';
+    const modes = validateTicketModes(planTiming, planQuestions);
+    if (!modes.ok) throw new StoreError('invalid_modes', modes.reason, { planTiming, planQuestions });
     const allowPaid = input.allowPaid === true;
     const budgetUsd = input.budgetUsd === undefined || input.budgetUsd === null ? 0 : Number(input.budgetUsd);
     if (!Number.isFinite(budgetUsd) || budgetUsd < 0) throw new StoreError('bad_request', 'budgetUsd must be >= 0');
@@ -191,18 +196,18 @@ export class KanbanStore {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO tickets (id, key, title, body, col, phase, grill_mode, plan_mode, priority, sort_order,
+          `INSERT INTO tickets (id, key, title, body, col, phase, plan_timing, plan_questions, priority, sort_order,
              allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
              needs_attention_reason, confidence_threshold, created_at, updated_at, version)
-           VALUES (?, ?, ?, ?, 'backlog', 'intake', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, 1)`,
+           VALUES (?, ?, ?, ?, 'backlog', 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, 1)`,
         )
         .run(
           id,
           key,
           title,
           typeof input.body === 'string' ? input.body : '',
-          grillMode,
-          planMode,
+          planTiming,
+          planQuestions,
           priority,
           sortOrder,
           allowPaid ? 1 : 0,
@@ -224,9 +229,8 @@ export class KanbanStore {
       }
       this.#event(id, 'created', {
         actor: 'human',
-        payload: { key, title, grillMode, planMode, priority, allowPaid, budgetUsd },
+        payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd },
       });
-      // A `now` grill/plan fires at creation (the ticket's "backlog" moment).
       return this.getTicket(id);
     });
   }
@@ -255,8 +259,8 @@ export class KanbanStore {
       if (patch[field] === undefined) continue;
       next[field] = patch[field];
     }
-    if (patch.grillMode !== undefined || patch.planMode !== undefined) {
-      const modes = validateModes(next.grillMode, next.planMode);
+    if (patch.planTiming !== undefined || patch.planQuestions !== undefined) {
+      const modes = validateTicketModes(next.planTiming, next.planQuestions);
       if (!modes.ok) throw new StoreError('invalid_modes', modes.reason);
     }
     if (next.allowPaid && !(next.budgetUsd > 0)) {
@@ -269,7 +273,7 @@ export class KanbanStore {
       this.db
         .prepare(
           `UPDATE tickets SET title = ?, body = ?, priority = ?, sort_order = ?, allow_paid = ?, budget_usd = ?,
-             workspace_cwd = ?, confidence_threshold = ?, grill_mode = ?, plan_mode = ?, updated_at = ?, version = version + 1
+             workspace_cwd = ?, confidence_threshold = ?, plan_timing = ?, plan_questions = ?, updated_at = ?, version = version + 1
            WHERE id = ?`,
         )
         .run(
@@ -281,8 +285,8 @@ export class KanbanStore {
           next.budgetUsd,
           next.workspaceCwd,
           next.confidenceThreshold,
-          next.grillMode,
-          next.planMode,
+          next.planTiming,
+          next.planQuestions,
           at,
           ticket.id,
         );
@@ -356,7 +360,7 @@ export class KanbanStore {
     if (typeof statement !== 'string' || statement.trim() === '') {
       throw new StoreError('bad_request', 'acceptance statement is required');
     }
-    if (!['human', 'grill', 'triage'].includes(source)) throw new StoreError('bad_request', 'bad acceptance source');
+    if (source !== 'human') throw new StoreError('bad_request', 'bad acceptance source');
     return this.transact(() => {
       const row = this.db.prepare('SELECT COALESCE(MAX(ordinal), 0) AS n FROM acceptance WHERE ticket_id = ?').get(ticketId);
       const ordinal = Number(row?.n ?? 0) + 1;
@@ -429,22 +433,22 @@ export class KanbanStore {
 
   // --------------------------------------------------------------- sessions
 
-  attachSession({ ticketId = null, dshSessionId, role, preset = null, provider = null, model = null }) {
+  attachSession({ ticketId = null, dshSessionId, role, purpose = null, preset = null, provider = null, model = null }) {
     if (typeof dshSessionId !== 'string' || dshSessionId === '') throw new StoreError('bad_request', 'dshSessionId is required');
     return this.transact(() => {
       const at = nowIso();
       const existing = this.db.prepare('SELECT * FROM sessions WHERE dsh_session_id = ?').get(dshSessionId);
       if (existing !== undefined) {
-        this.db.prepare('UPDATE sessions SET ticket_id = ?, role = ?, provider = ?, model = ?, closed_at = NULL WHERE id = ?').run(ticketId, role, provider, model, existing.id);
-        if (existing.ticket_id !== ticketId || existing.role !== role) {
-          this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role, retroactive: true } });
+        this.db.prepare('UPDATE sessions SET ticket_id = ?, role = ?, purpose = ?, provider = ?, model = ?, closed_at = NULL WHERE id = ?').run(ticketId, role, purpose, provider, model, existing.id);
+        if (existing.ticket_id !== ticketId || existing.role !== role || existing.purpose !== purpose) {
+          this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role, purpose, retroactive: true } });
         }
         return Number(existing.id);
       }
       const result = this.db
-        .prepare('INSERT INTO sessions (ticket_id, dsh_session_id, role, preset, provider, model, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)')
-        .run(ticketId, dshSessionId, role, preset, provider, model, at);
-      this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role } });
+        .prepare('INSERT INTO sessions (ticket_id, dsh_session_id, role, purpose, preset, provider, model, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)')
+        .run(ticketId, dshSessionId, role, purpose, preset, provider, model, at);
+      this.#event(ticketId, 'session_attached', { payload: { sessionId: dshSessionId, role, purpose } });
       return Number(result.lastInsertRowid);
     });
   }
@@ -469,6 +473,7 @@ export class KanbanStore {
         ticketId: row.ticket_id,
         sessionId: row.dsh_session_id,
         role: row.role,
+        purpose: row.purpose,
         preset: row.preset,
         provider: row.provider,
         model: row.model,

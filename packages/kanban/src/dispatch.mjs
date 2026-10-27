@@ -1,21 +1,20 @@
-// dsh-kanban: role-session dispatcher.
+// dsh-kanban: workflow session dispatch.
 //
-// Code creates a session from a role preset, sends one prompt, and waits for the
-// turn to stop. It never asks an agent what to do next: the final message is
-// returned as data to the engine.
+// Sessions are grouped by purpose, not by role:
+//   plan          grill questions + plan submission (one flat session)
+//   build         implement <-> review (one session)
+//   verify        mechanical end gate (one session)
 //
-// Turn-stop detection has two signals, in this order:
-//   1. the host's `session/event` feed (`turn/end`) — the real event;
-//   2. polling the live agent's status on the worker tick, for the case where a
-//      listener was attached after the event fired (restart, HMR).
-// The watchdog is separate: a turn with no event for `stallTimeoutMs` resolves
-// as stalled and the engine abandons its span.
+// Every session starts once in the standard preset. Phase changes do not rebind
+// a preset or replace a system prompt: they change the tool guard/mask and the
+// next user prompt.
 
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
+import { registerActionTools } from './actions.mjs';
 import { phaseToolGuard } from './tools.mjs';
 
 export class DispatchError extends Error {
@@ -26,37 +25,15 @@ export class DispatchError extends Error {
   }
 }
 
-const CORE_PRESET_PLUGINS = [
-  {
-    id: 'persona',
-    name: '@deepseek-ai/dsh-persona',
-    config: {
-      prefix: 'You are a workflow agent in a DeepSeek Harness workflow session.',
-      suffix: 'Your working directory is {{cwd}}.',
-    },
-  },
-  { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions', config: { maxBytes: 65536 } },
-];
-
-const TOOL_PLUGINS = {
-  fs: { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
-  search: { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search', config: { sampleOverCapGlobResults: false } },
-  bash: { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash' },
-  jobs: { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
-};
-
-/** One role preset carries exactly the tools that role may use. */
-function presetPlugins(role, config) {
-  const allow = new Set(Array.isArray(config.roles[role]?.allowTools) ? config.roles[role].allowTools : []);
-  const plugins = [...CORE_PRESET_PLUGINS];
-  if (['read', 'read_image', 'write', 'edit'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.fs);
-  if (['glob', 'grep'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.search);
-  if (allow.has('bash')) plugins.push(TOOL_PLUGINS.bash);
-  if (['job_list', 'job_output', 'job_kill'].some((name) => allow.has(name))) plugins.push(TOOL_PLUGINS.jobs);
-  return plugins;
+/** Session purpose for a phase/role. */
+export function purposeForRole(role) {
+  if (role === 'planner') return 'plan';
+  if (role === 'implementer' || role === 'reviewer') return 'build';
+  if (role === 'verifier') return 'verify';
+  throw new DispatchError(`no workflow session purpose for role ${role}`, { code: 'NO_PURPOSE' });
 }
 
-/** Existing sessions can be reused for a continuation, but never across tickets. */
+/** Existing sessions can be reused within a purpose, never across purposes. */
 export class SessionDriver {
   constructor({ ctx, log, getConfig }) {
     this.ctx = ctx;
@@ -65,11 +42,12 @@ export class SessionDriver {
     this.log = log;
     this.getConfig = getConfig;
     this.waiters = new Map();
-    /** sessionId -> {handle, role, preset, ticketId} */
+    /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
-    /** ticketId -> the one shared workflow session */
+    /** `${ticketId}:${purpose}` -> sessionId */
     this.ticketSessions = new Map();
-    this.registeredPresets = new Map();
+    /** sessionId -> action recorded by the current turn */
+    this.actions = new Map();
     this.disposed = false;
     this.offEvent = null;
   }
@@ -78,6 +56,13 @@ export class SessionDriver {
     this.offEvent = this.ctx.on('session/event', (session, event) => {
       const waiter = this.waiters.get(session.id);
       if (waiter === undefined) return;
+      if (event.type === 'tool/call') {
+        const name = event.data?.name ?? event.data?.call?.name;
+        if (name === 'ask_user_question') waiter.awaitingUser = true;
+      } else if (event.type === 'tool/result') {
+        const name = event.data?.name ?? event.data?.message?.name;
+        if (name === 'ask_user_question') waiter.awaitingUser = false;
+      }
       waiter.lastEventAt = Date.now();
       if (event.type === 'turn/end') {
         try {
@@ -101,136 +86,126 @@ export class SessionDriver {
     }
     for (const waiter of this.waiters.values()) {
       clearInterval(waiter.timer);
-      waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'plugin stopped' });
+      waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'plugin stopped', action: null });
     }
     this.waiters.clear();
+    this.actions.clear();
   }
 
-  /** Register the shipped role presets once. A pre-existing id is reused, never re-registered. */
-  async ensurePresets() {
-    const presets = this.ctx.get('agentPresets');
-    if (presets === undefined) throw new DispatchError('agentPresets service is missing; role presets cannot be bound', { code: 'NO_PRESETS' });
-    const config = this.getConfig();
-    const byId = new Map();
-    for (const role of ['griller', 'planner', 'implementer', 'verifier', 'reviewer']) {
-      const id = config.roles[role].preset;
-      if (typeof id === 'string' && id.startsWith('kanban-') && !byId.has(id)) byId.set(id, role);
-    }
-    for (const [id, role] of byId) {
-      if (this.registeredPresets.has(id)) continue;
-      const existing = await presets.resolve(id).catch(() => undefined);
-      if (existing !== undefined) {
-        this.registeredPresets.set(id, null);
-        continue;
-      }
-      const dispose = await presets.register({
-        id,
-        name: id.replace('kanban-', 'Kanban '),
-        description: `Role-scoped workflow preset (${role}) owned by dsh-kanban`,
-        plugins: presetPlugins(role, config),
-      });
-      this.registeredPresets.set(id, dispose);
-    }
+  recordAction(sessionId, action) {
+    if (this.actions.has(sessionId)) throw new Error('an action was already submitted for this turn');
+    this.actions.set(sessionId, action);
   }
 
-  /**
-   * Return the one live workflow session for a ticket, creating it on first use.
-   * Every phase runs as a turn in this session; role changes rebind a
-   * role-specific preset so the model-facing tool schemas change with the phase.
-   */
-  async ensureTicketSession({ ticket, role, route }) {
+  takeAction(sessionId) {
+    const action = this.actions.get(sessionId) ?? null;
+    this.actions.delete(sessionId);
+    return action;
+  }
+
+  /** Return the live session for one ticket purpose, creating it on first use. */
+  async ensureTicketSession({ ticket, role, route, purpose }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
-    const existingId = this.ticketSessions.get(ticket.id);
+    const key = `${ticket.id}:${purpose}`;
+    const existingId = this.ticketSessions.get(key);
     if (existingId !== undefined) {
       const existing = this.live.get(existingId);
-      if (existing !== undefined) return { sessionId: existingId, handle: existing.handle, preset: existing.preset };
-      this.ticketSessions.delete(ticket.id);
+      if (existing !== undefined) return { sessionId: existingId, handle: existing.handle };
+      this.ticketSessions.delete(key);
     }
     if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
     const config = this.getConfig();
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     await mkdir(cwd, { recursive: true }).catch(() => {});
-    const presets = this.ctx.get('agentPresets');
-    if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
-    const requested = config.roles[role].preset;
-    const resolved = await presets.resolve(requested ?? undefined);
-    if (resolved.broken !== undefined) {
-      throw new DispatchError(`preset ${resolved.id} is broken: ${resolved.broken}`, { code: 'PRESET_BROKEN' });
-    }
     const sessionId = randomUUID();
-    const liveRef = { handle: null, role, phase: { role }, preset: resolved.id, ticketId: ticket.id, routeKey: null, maskDispose: null, applyMask: null };
+    const liveRef = {
+      handle: null,
+      role,
+      purpose,
+      phase: { role },
+      ticketId: ticket.id,
+      preset: 'standard',
+      routeKey: null,
+      maskDispose: null,
+      actionDispose: null,
+      applyMask: null,
+    };
     const handle = await this.agents.create({
       sessionId,
-      meta: { cwd, agentPreset: resolved.id },
+      meta: { cwd, agentPreset: 'standard' },
       agentOptions: {
         provider: route.provider,
         model: route.model,
         ...(route.reasoningEffort === null || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
       },
       setup: async (agentCtx) => {
-        await presets.mount(agentCtx, resolved.id);
-        // Preset tools are the role's own layer; this mask removes the global
-        // tools (browser, schedule, model switching, ...) that are not in the
-        // phase allow-list. Together with preset rebinding this makes the
-        // model-facing surface follow the role.
+        const presets = this.ctx.get('agentPresets');
+        if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
+        await presets.mount(agentCtx, 'standard');
+        const roleConfig = this.getConfig().roles[role];
+        const allow = Array.isArray(roleConfig?.allowTools) ? roleConfig.allowTools : [];
         liveRef.applyMask = (nextRole) => {
-          const roleConfig = this.getConfig().roles[nextRole];
-          const allow = Array.isArray(roleConfig?.allowTools) ? roleConfig.allowTools : [];
+          const nextConfig = this.getConfig().roles[nextRole];
+          const nextAllow = Array.isArray(nextConfig?.allowTools) ? nextConfig.allowTools : [];
           try {
             if (liveRef.maskDispose !== null) {
               liveRef.maskDispose();
               liveRef.maskDispose = null;
             }
-            if (allow.length === 0) return;
+            if (nextAllow.length === 0) return;
             const visible = new Set(agentCtx.tools.schemas().map((schema) => schema.name));
-            const keep = allow.filter((name) => visible.has(name));
+            const keep = nextAllow.filter((name) => visible.has(name));
             if (keep.length > 0) liveRef.maskDispose = agentCtx.tools.restrict({ allow: keep });
             else if (visible.size > 0) liveRef.maskDispose = agentCtx.tools.restrict({ deny: [...visible] });
           } catch (error) {
-            this.log.warn('workflow session: global tool mask could not be applied: %s', String(error?.message ?? error));
+            this.log.warn('workflow session: tool mask could not be applied: %s', String(error?.message ?? error));
           }
         };
         liveRef.applyMask(role);
+        liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, purpose, liveRef, driver: this });
         agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
+        agentCtx.tools.guard((execution) => {
+          const name = execution.name;
+          if (purpose === 'plan' && (name === 'write' || name === 'edit')) {
+            return 'write/edit tools are not available while planning; this session is read-only';
+          }
+          if (purpose === 'build' && liveRef.phase.role === 'reviewer' && (name === 'write' || name === 'edit')) {
+            return 'write/edit tools are not available during review';
+          }
+          if (purpose === 'verify' && (name === 'write' || name === 'edit')) {
+            return 'write/edit tools are not available during verification';
+          }
+          if (purpose === 'plan' && name === 'ask_user_question' && ticket.planQuestions === 'autonomous') {
+            return 'this ticket uses autonomous judgement; ask the user no questions';
+          }
+          return undefined;
+        });
       },
     });
     liveRef.handle = handle;
     liveRef.routeKey = routeKey(route);
     this.live.set(sessionId, liveRef);
-    this.ticketSessions.set(ticket.id, sessionId);
-    return { sessionId, handle, preset: resolved.id };
+    this.ticketSessions.set(key, sessionId);
+    return { sessionId, handle };
   }
 
-  /**
-   * Switch the shared session's phase. Rebinding the preset is what actually
-   * adds/removes the model-facing tools; the guard is execution-time defense.
-   */
-  async setPhase(sessionId, role) {
+  /** Change the role inside one session without changing preset or system prompt. */
+  setPhase(sessionId, role) {
     const live = this.live.get(sessionId);
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
-    const previous = live.role;
     live.role = role;
     live.phase.role = role;
-    if (previous === role) return;
-    const presets = this.ctx.get('agentPresets');
-    if (presets === undefined) throw new DispatchError('agentPresets service is missing; cannot switch phase tools', { code: 'NO_PRESETS' });
-    const requested = this.getConfig().roles[role].preset;
-    try {
-      await presets.recompose(live.handle.agent.ctx, requested ?? undefined);
-      live.preset = this.getConfig().roles[role].preset;
-      if (typeof live.applyMask === 'function') live.applyMask(role);
-    } catch (error) {
-      throw new DispatchError(`could not switch phase tools to ${role}: ${String(error?.message ?? error)}`, { code: 'PHASE_PRESET' });
-    }
+    if (typeof live.applyMask === 'function') live.applyMask(role);
   }
 
-  /** Point the shared session at the next phase's provider/model route. */
   setRoute(sessionId, route) {
     const live = this.live.get(sessionId);
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
     const key = routeKey(route);
     if (live.routeKey === key) return;
-    if (this.sessionController === undefined) throw new DispatchError('sessionController service is missing; cannot select the next request route', { code: 'NO_SESSION_CONTROLLER' });
+    if (this.sessionController === undefined) {
+      throw new DispatchError('sessionController service is missing; cannot select the next request route', { code: 'NO_SESSION_CONTROLLER' });
+    }
     this.sessionController.selectForNextRequest(live.handle.agent, {
       provider: route.provider,
       model: route.model,
@@ -239,12 +214,10 @@ export class SessionDriver {
     live.routeKey = key;
   }
 
-  liveTicketSession(ticketId) {
-    const id = this.ticketSessions.get(ticketId);
+  liveTicketSession(ticketId, purpose) {
+    const id = this.ticketSessions.get(`${ticketId}:${purpose}`);
     return id !== undefined && this.live.has(id) ? id : undefined;
   }
-
-
 
   #settleTurn(session, event, waiter) {
     this.waiters.delete(session.id);
@@ -273,27 +246,26 @@ export class SessionDriver {
       turn,
       events: turnEvents,
       session,
+      action: this.takeAction(session.id),
     });
   }
 
-  /**
-   * Send one prompt and wait for its turn to end.
-   * @returns {Promise<{status:'ok'|'failed'|'stalled'|'disposed', finalText:string|null, usage:object|null, reason:object|null, error:string|null, startedMono:bigint}>}
-   */
   sendTurn({ sessionId, prompt, stallTimeoutMs }) {
     const live = this.live.get(sessionId);
     if (live === undefined) return Promise.reject(new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' }));
     if (this.waiters.has(sessionId)) return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
+    this.actions.delete(sessionId);
     const startedMono = process.hrtime.bigint();
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId };
+      const waiter = { resolve, reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId, awaitingUser: false };
       const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
       const timer = setInterval(() => {
         if (this.waiters.get(sessionId) !== waiter) return;
+        if (waiter.awaitingUser) return;
         if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
         this.waiters.delete(sessionId);
         clearInterval(timer);
-        waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'no turn event within stallTimeoutMs', startedMono });
+        waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'no turn event within stallTimeoutMs', startedMono, action: null });
       }, interval);
       if (typeof timer.unref === 'function') timer.unref();
       waiter.timer = timer;
@@ -308,19 +280,16 @@ export class SessionDriver {
     });
   }
 
-  /**
-   * Fallback signal: the worker tick asks whether a waiting agent has already
-   * gone idle, which covers a turn/end event that fired before our listener.
-   */
   reconcileTurns() {
     const now = Date.now();
     for (const [sessionId, waiter] of [...this.waiters]) {
       const live = this.live.get(sessionId);
       if (live === undefined) continue;
+      if (waiter.awaitingUser) continue;
       if (now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
         this.waiters.delete(sessionId);
         clearInterval(waiter.timer);
-        waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'stalled', startedMono: waiter.startedMono });
+        waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'stalled', startedMono: waiter.startedMono, action: null });
         continue;
       }
       if (live.handle.agent.status === 'idle' && now - waiter.lastEventAt > 1500) {
@@ -339,24 +308,38 @@ export class SessionDriver {
     }
   }
 
-  async closeSession(sessionId, { dispose = true } = {}) {
+  /** Abort and dispose a workflow session so continue-kicker sees an aborted end, not an idle error. */
+  async closeSession(sessionId) {
     const live = this.live.get(sessionId);
     if (live === undefined) return;
     this.live.delete(sessionId);
-    for (const [ticketId, id] of this.ticketSessions) if (id === sessionId) this.ticketSessions.delete(ticketId);
+    for (const [key, id] of this.ticketSessions) if (id === sessionId) this.ticketSessions.delete(key);
+    if (typeof live.actionDispose === 'function') live.actionDispose();
+    if (typeof live.maskDispose === 'function') live.maskDispose();
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
       this.waiters.delete(sessionId);
       clearInterval(waiter.timer);
-      waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'session closed' });
+      waiter.resolve({ status: 'disposed', finalText: null, usage: null, reason: null, error: 'session closed', action: null });
     }
-    if (dispose) {
-      try {
-        await live.handle.dispose();
-      } catch (error) {
-        this.log.warn('session %s dispose failed: %s', sessionId, String(error?.message ?? error));
-      }
+    try {
+      if (live.handle.agent?.status === 'running') live.handle.agent.cancel({ kind: 'user' });
+    } catch {
+      // Cancellation is best-effort; disposal below still tears the scope down.
     }
+    try {
+      await live.handle.dispose();
+    } catch (error) {
+      this.log.warn('session %s dispose failed: %s', sessionId, String(error?.message ?? error));
+    }
+  }
+
+  async closeTicketSessions(ticketId) {
+    const ids = [];
+    for (const [key, id] of this.ticketSessions) {
+      if (key.startsWith(`${ticketId}:`)) ids.push(id);
+    }
+    for (const id of ids) await this.closeSession(id);
   }
 
   isLive(sessionId) {

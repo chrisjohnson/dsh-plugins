@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS tickets (
   title TEXT NOT NULL,
   body TEXT NOT NULL DEFAULT '',
   col TEXT NOT NULL CHECK (col IN ('backlog','now','blocked','needs_attention','done','discarded')),
-  phase TEXT NOT NULL CHECK (phase IN ('intake','triage','grill','plan','implement','verify','review','closed')),
-  grill_mode TEXT NOT NULL CHECK (grill_mode IN ('now','at_pickup','judgement')),
-  plan_mode TEXT NOT NULL CHECK (plan_mode IN ('now','at_pickup','one_shot')),
+  phase TEXT NOT NULL CHECK (phase IN ('plan','implement','review','verify','closed')),
+  plan_timing TEXT NOT NULL CHECK (plan_timing IN ('now','at_pickup')),
+  plan_questions TEXT NOT NULL CHECK (plan_questions IN ('interactive','autonomous')),
   priority INTEGER NOT NULL DEFAULT 0,
   sort_order REAL NOT NULL DEFAULT 0,
   allow_paid INTEGER NOT NULL DEFAULT 0 CHECK (allow_paid IN (0,1)),
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS acceptance (
   ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL,
   statement TEXT NOT NULL,
-  source TEXT NOT NULL CHECK (source IN ('human','grill','triage')),
+  source TEXT NOT NULL CHECK (source IN ('human')),
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS acceptance_ticket ON acceptance(ticket_id, ordinal);
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS conditions (
   condition_id TEXT NOT NULL,
   statement TEXT NOT NULL,
   how_verified TEXT NOT NULL,
-  source TEXT NOT NULL CHECK (source IN ('plan','triage')),
+  source TEXT NOT NULL CHECK (source IN ('plan')),
   created_at TEXT NOT NULL,
   UNIQUE (ticket_id, plan_version, condition_id)
 );
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
   dsh_session_id TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL,
+  purpose TEXT,
   preset TEXT,
   provider TEXT,
   model TEXT,
@@ -165,6 +166,21 @@ const V2 = `
 SELECT 1;
 `;
 
+const V3 = `
+-- The flat-plan workflow reset. Historical workflow data is intentionally
+-- discarded: the session topology and ticket modes changed incompatibly.
+DROP TABLE IF EXISTS usage;
+DROP TABLE IF EXISTS verifications;
+DROP TABLE IF EXISTS spans;
+DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS conditions;
+DROP TABLE IF EXISTS acceptance;
+DROP TABLE IF EXISTS tickets;
+` + V1;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -175,5 +191,10 @@ export const MIGRATIONS = [
     version: 2,
     name: 'drop-legacy-concurrency',
     sql: V2,
+  },
+  {
+    version: 3,
+    name: 'flat-plan-workflow',
+    sql: V3,
   },
 ];
