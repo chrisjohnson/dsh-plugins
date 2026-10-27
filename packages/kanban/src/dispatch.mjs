@@ -61,6 +61,7 @@ export class SessionDriver {
   constructor({ ctx, log, getConfig }) {
     this.ctx = ctx;
     this.agents = ctx.get('agents');
+    this.sessionController = ctx.get('sessionController');
     this.log = log;
     this.getConfig = getConfig;
     this.waiters = new Map();
@@ -229,8 +230,8 @@ export class SessionDriver {
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
     const key = routeKey(route);
     if (live.routeKey === key) return;
-    if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
-    this.agents.selectForNextRequest(live.handle.agent, {
+    if (this.sessionController === undefined) throw new DispatchError('sessionController service is missing; cannot select the next request route', { code: 'NO_SESSION_CONTROLLER' });
+    this.sessionController.selectForNextRequest(live.handle.agent, {
       provider: route.provider,
       model: route.model,
       ...(route.reasoningEffort === null || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),

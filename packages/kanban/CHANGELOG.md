@@ -3,6 +3,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.1.2
+
+### Fixed
+
+- Phases with different model routes now switch the shared session through
+  `ctx.sessionController.selectForNextRequest()` instead of the core agent
+  registry, which does not expose that operation. This fixes the production
+  plan transition failure (`this.agents.selectForNextRequest is not a function`).
+
 ## 0.1.1
 
 ### Fixed
