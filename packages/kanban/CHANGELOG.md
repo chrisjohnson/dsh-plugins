@@ -3,6 +3,16 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.1.3
+
+### Added
+
+- Dragging a ticket now renders a dashed shadow copy of the card in the target
+  column at the hovered insertion point. The target column is outlined while
+  hovered, so the drop destination is visible before release.
+- Dropping a card onto a card in another column now moves it to that column
+  before applying the within-column order.
+
 ## 0.1.2
 
 ### Fixed
