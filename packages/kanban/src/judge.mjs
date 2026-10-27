@@ -60,7 +60,7 @@ export async function streamOnce(llm, { provider, model, reasoningEffort = null,
   return { ok: true, failure: null, text, usage, finish };
 }
 
-export function createJudge({ llm, getConfig, budgetCheck = () => ({ ok: true }) }) {
+export function createJudge({ llm, getConfig, budgetCheck = () => ({ ok: true }), resolveRoute = null }) {
   /**
    * One JSON call with at most two attempts. The second attempt uses the
    * escalation rung when the ladder offers a different route and the budget
@@ -70,8 +70,9 @@ export function createJudge({ llm, getConfig, budgetCheck = () => ({ ok: true })
     let last = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const config = getConfig();
-      const base = routeForAttempt(config, 'orchestrator', attempt);
-      const route = base;
+      const route = resolveRoute === null
+        ? routeForAttempt(config, 'orchestrator', attempt)
+        : resolveRoute('orchestrator', attempt);
       if (route.provider === null || route.model === null) {
         throw new JudgeError('no orchestrator route configured (roles.orchestrator.provider/model)', { code: 'NO_ROUTE' });
       }
