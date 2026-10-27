@@ -1308,6 +1308,35 @@ window.__ModuleLoader__.load({
 				if (id === beforeId) return;
 				act("reorder", { id: id, beforeId: beforeId });
 			}
+			function startDrag(id) {
+				setDragId(id);
+				setDropTarget(null);
+			}
+			function finishDrag() {
+				setDragId(null);
+				setDropTarget(null);
+			}
+			function dragOverColumn(column) {
+				if (dragId === null || column === "done") return;
+				setDropTarget({ column: column, beforeId: null });
+			}
+			function dragOverCard(column, beforeId) {
+				if (dragId === null || column === "done") return;
+				setDropTarget({ column: column, beforeId: beforeId });
+			}
+			function dropCard(id, column, beforeId) {
+				if (column === "done") { finishDrag(); return; }
+				var source = allTickets.find(function (ticket) { return ticket.id === id; });
+				finishDrag();
+				if (source === undefined) return;
+				if (source.column === column) {
+					reorder(id, beforeId);
+					return;
+				}
+				act("move", { id: id, column: column }).then(function (res) {
+					if (res && res.ok && beforeId) reorder(id, beforeId);
+				});
+			}
 		}
 
 		// ------------------------------------------------------------------ apply

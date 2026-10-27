@@ -3,6 +3,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.1.4
+
+### Fixed
+
+- Restore the missing drag-event handlers (`startDrag`, `finishDrag`,
+  `dragOverColumn`, `dragOverCard`, `dropCard`) that caused the Kanban page to
+  crash with `ReferenceError: startDrag is not defined`.
+
 ## 0.1.3
 
 ### Added
