@@ -3,6 +3,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.1.1
+
+### Fixed
+
+- The orchestrator/judge now falls back to the deployment default model when
+  `roles.orchestrator.provider/model` are unset, instead of failing with
+  “no orchestrator route configured”. This matches the phase roles, which
+  already inherited the default route.
+
 ## 0.1.0
 
 ### Added

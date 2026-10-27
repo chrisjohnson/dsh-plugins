@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { providerPolicy, resolveConfig } from './config.mjs';
+import { providerPolicy, resolveConfig, routeForAttempt } from './config.mjs';
 import { KanbanStore } from './store.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
@@ -78,9 +78,21 @@ export default async function kanban(ctx, config = {}) {
     },
   });
 
+  const resolveRoute = (role, attempt) => {
+    const route = routeForAttempt(getConfig(), role, attempt);
+    if (route.provider !== null && route.model !== null) return route;
+    const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
+    return {
+      ...route,
+      provider: route.provider ?? selection?.provider ?? null,
+      model: route.model ?? selection?.model ?? null,
+      reasoningEffort: route.reasoningEffort ?? selection?.reasoningEffort ?? null,
+    };
+  };
   const judge = createJudge({
     llm,
     getConfig,
+    resolveRoute,
     budgetCheck: ({ route, ticket, promptChars, maxTokens }) => {
       const policy = providerPolicy(getConfig(), route.provider);
       if (policy.tier !== 'paid') return { ok: true };
