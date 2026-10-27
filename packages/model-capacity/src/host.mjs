@@ -13,7 +13,7 @@ import { CapacityManager } from './semaphore.mjs';
 
 const PLUGIN_NAME = 'dsh-model-capacity';
 const API_BASE = '/api/modelCapacity';
-const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'dismissReservation', 'forceRelease'];
+const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'dismissReservation', 'forceRelease', 'setLimits'];
 
 export default class ModelCapacity extends Service {
   constructor(ctx, config = {}) {
@@ -311,6 +311,10 @@ export default class ModelCapacity extends Service {
       enabled: isEnabled(this.config),
       asOf: snap.asOf,
       totals: snap.totals,
+      limits: this.config.limits,
+      defaultMaxConcurrent: this.config.defaultMaxConcurrent,
+      queueLimitPerProvider: this.config.queueLimitPerProvider,
+      writable: this.ctx.get('configEditor') !== undefined,
       providers,
       catalog: this.catalog,
       metadata: { sessions: this.sessionMeta.size, updatedAt: this.metaUpdatedAt, error: this.metaError },
@@ -379,6 +383,35 @@ export default class ModelCapacity extends Service {
             case 'forceRelease':
               if (typeof p.leaseId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'leaseId is required', details: {} } };
               return { ok: true, value: this.forceRelease(p.leaseId) };
+            case 'setLimits': {
+              const editor = this.ctx.get('configEditor');
+              if (editor === undefined) return { ok: false, error: { code: 'forbidden', message: 'this profile does not accept configuration edits', details: {} } };
+              const row = editor.configuration().find((item) => item.entry?.id === 'model-capacity' || item.entry?.id?.endsWith(':model-capacity'));
+              if (row === undefined) return { ok: false, error: { code: 'not_found', message: 'model-capacity has no config entry', details: {} } };
+              const limits = Array.isArray(p.limits) ? p.limits.map((entry) => {
+                const provider = String(entry?.provider ?? '');
+                if (provider === '') throw new ConfigError('provider is required', 'limits');
+                if (entry?.unlimited === true) return { provider, unlimited: true };
+                return { provider, maxConcurrent: Number(entry?.maxConcurrent) };
+              }) : [];
+              const defaultMaxConcurrent = Number(p.defaultMaxConcurrent ?? this.config.defaultMaxConcurrent);
+              const queueLimitPerProvider = Number(p.queueLimitPerProvider ?? this.config.queueLimitPerProvider);
+              const candidate = resolveConfig({ ...this.config, limits, defaultMaxConcurrent, queueLimitPerProvider });
+              await editor.edit(row.entry, (current, inherited) => {
+                const next = { ...(structuredClone(inherited ?? {})), ...(structuredClone(current ?? {})) };
+                next.limits = limits;
+                next.defaultMaxConcurrent = defaultMaxConcurrent;
+                next.queueLimitPerProvider = queueLimitPerProvider;
+                return next;
+              });
+              this.config = candidate.config;
+              this.manager.defaultLimit = candidate.config.defaultMaxConcurrent;
+              this.manager.queueLimitPerProvider = candidate.config.queueLimitPerProvider;
+              this.manager.configure(candidate.config.limits);
+              this.#seedBuckets();
+              this.#reportUnknownProviders();
+              return { ok: true, value: this.snapshot() };
+            }
             default:
               return { ok: false, error: { code: 'unknown_endpoint', message: `unknown endpoint ${endpoint}`, details: {} } };
           }
@@ -417,7 +450,7 @@ export default class ModelCapacity extends Service {
     let last = JSON.stringify(this.config);
     this.reloadTimer = setInterval(() => {
       try {
-        const row = editor.configuration().find((item) => item.entry?.id === 'model-capacity');
+        const row = editor.configuration().find((item) => item.entry?.id === 'model-capacity' || item.entry?.id?.endsWith(':model-capacity'));
         if (row === undefined) return;
         const json = JSON.stringify(row.override ?? {});
         if (json === last) return;
