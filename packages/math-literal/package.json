@@ -1,0 +1,55 @@
+{
+  "name": "dsh-math-literal",
+  "version": "0.1.0",
+  "description": "Keeps single-$ dollars literal in DeepSeek Harness web chat: unpaired $ in settled markdown renders as a literal dollar sign (matching the streaming arm) instead of opening an inline-math pair, while real math ($$..$$, \\(..\\), \\[..\\]) keeps rendering.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "markdown",
+    "math",
+    "latex",
+    "katex",
+    "rendering"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "mdast-util-from-markdown": "^2.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/math-literal"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/math-literal#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
