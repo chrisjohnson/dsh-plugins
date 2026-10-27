@@ -3,6 +3,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.4
+
+### Fixed
+
+- A plan session waiting on a native `ask_user_question` now appears in the
+  Needs Attention group/count with the red status styling. It returns to In
+  Flight automatically once the question is answered; the ticket does not enter
+  the stalled/retry path.
+
 ## 0.2.3
 
 ### Fixed

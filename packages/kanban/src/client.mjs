@@ -869,7 +869,7 @@ window.__ModuleLoader__.load({
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				t.column === "needs_attention" ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
+				t.column === "needs_attention" && !d.awaitingQuestion ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
