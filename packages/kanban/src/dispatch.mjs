@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
 
 import { registerActionTools } from './actions.mjs';
 import { phaseToolGuard } from './tools.mjs';
@@ -126,9 +127,8 @@ export class SessionDriver {
       ticketId: ticket.id,
       preset: 'standard',
       routeKey: null,
-      maskDispose: null,
       actionDispose: null,
-      applyMask: null,
+      sandboxMode: null,
     };
     const handle = await this.agents.create({
       sessionId,
@@ -142,40 +142,10 @@ export class SessionDriver {
         const presets = this.ctx.get('agentPresets');
         if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
         await presets.mount(agentCtx, 'standard');
-        const roleConfig = this.getConfig().roles[role];
-        const allow = Array.isArray(roleConfig?.allowTools) ? roleConfig.allowTools : [];
-        liveRef.applyMask = (nextRole) => {
-          const nextConfig = this.getConfig().roles[nextRole];
-          const nextAllow = Array.isArray(nextConfig?.allowTools) ? nextConfig.allowTools : [];
-          try {
-            if (liveRef.maskDispose !== null) {
-              liveRef.maskDispose();
-              liveRef.maskDispose = null;
-            }
-            if (nextAllow.length === 0) return;
-            const visible = new Set(agentCtx.tools.schemas().map((schema) => schema.name));
-            const keep = nextAllow.filter((name) => visible.has(name));
-            if (keep.length > 0) liveRef.maskDispose = agentCtx.tools.restrict({ allow: keep });
-            else if (visible.size > 0) liveRef.maskDispose = agentCtx.tools.restrict({ deny: [...visible] });
-          } catch (error) {
-            this.log.warn('workflow session: tool mask could not be applied: %s', String(error?.message ?? error));
-          }
-        };
-        liveRef.applyMask(role);
         liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, purpose, liveRef, driver: this });
         agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
         agentCtx.tools.guard((execution) => {
-          const name = execution.name;
-          if (purpose === 'plan' && (name === 'write' || name === 'edit')) {
-            return 'write/edit tools are not available while planning; this session is read-only';
-          }
-          if (purpose === 'build' && liveRef.phase.role === 'reviewer' && (name === 'write' || name === 'edit')) {
-            return 'write/edit tools are not available during review';
-          }
-          if (purpose === 'verify' && (name === 'write' || name === 'edit')) {
-            return 'write/edit tools are not available during verification';
-          }
-          if (purpose === 'plan' && name === 'ask_user_question' && ticket.planQuestions === 'autonomous') {
+          if (purpose === 'plan' && execution.name === 'ask_user_question' && ticket.planQuestions === 'autonomous') {
             return 'this ticket uses autonomous judgement; ask the user no questions';
           }
           return undefined;
@@ -184,6 +154,19 @@ export class SessionDriver {
     });
     liveRef.handle = handle;
     liveRef.routeKey = routeKey(route);
+    this.#applySandboxMode(liveRef);
+    try {
+      const workspace = this.ctx.get('workspaceRegistry')?.list?.().find((item) => item.path === cwd);
+      if (workspace?.attachSession) await workspace.attachSession(sessionId);
+    } catch (error) {
+      this.log.warn('workflow session: workspace attach failed: %s', String(error?.message ?? error));
+    }
+    try {
+      const titles = this.ctx.get('sessionTitle');
+      if (titles?.rename) titles.rename(handle.agent.session, `${ticket.key} · ${purpose}`);
+    } catch (error) {
+      this.log.warn('workflow session: title pin failed: %s', String(error?.message ?? error));
+    }
     this.live.set(sessionId, liveRef);
     this.ticketSessions.set(key, sessionId);
     return { sessionId, handle };
@@ -195,7 +178,18 @@ export class SessionDriver {
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
     live.role = role;
     live.phase.role = role;
-    if (typeof live.applyMask === 'function') live.applyMask(role);
+    this.#applySandboxMode(live);
+  }
+
+  #applySandboxMode(live) {
+    const mode = live.purpose === 'plan' || live.purpose === 'verify' || live.role === 'reviewer' ? 'read-only' : 'workspace-write';
+    if (live.sandboxMode === mode) return;
+    try {
+      setSandboxMode(live.handle.agent.session, mode);
+      live.sandboxMode = mode;
+    } catch (error) {
+      this.log.warn('workflow session: sandbox mode %s could not be applied: %s', mode, String(error?.message ?? error));
+    }
   }
 
   setRoute(sessionId, route) {
@@ -315,7 +309,6 @@ export class SessionDriver {
     this.live.delete(sessionId);
     for (const [key, id] of this.ticketSessions) if (id === sessionId) this.ticketSessions.delete(key);
     if (typeof live.actionDispose === 'function') live.actionDispose();
-    if (typeof live.maskDispose === 'function') live.maskDispose();
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
       this.waiters.delete(sessionId);

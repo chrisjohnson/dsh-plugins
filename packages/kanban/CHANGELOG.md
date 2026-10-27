@@ -3,6 +3,21 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.1
+
+### Fixed
+
+- Plan sessions run in the native **read-only** sandbox mode; review and
+  verification also run read-only. Implementation runs in workspace-write.
+  The ineffective custom tool mask was removed in favor of the native access
+  mode plus the existing phase tool guard.
+- Workflow sessions are attached to the selected workspace, so they appear
+  under that workspace instead of Ungrouped.
+- Workflow sessions pin their title (`KAN-n · purpose`) immediately, preventing
+  the auxiliary session-title model call from creating a second activity lease.
+- The plan prompt now includes only the ticket title and body, not the column,
+  workspace path, or acceptance block.
+
 ## 0.2.0
 
 ### Changed
