@@ -3,6 +3,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.2.3
+
+### Fixed
+
+- The plan session's initial ticket state now includes the starting human
+  acceptance criteria, so the planner can extend or fill them out with the
+  starting point in view.
+
 ## 0.2.2
 
 ### Added
