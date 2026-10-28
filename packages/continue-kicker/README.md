@@ -129,6 +129,8 @@ The service is the **same decision, not a second one**: `kick()` runs `decide()`
 
 `bypassCooldown: true` opens only the cooldown gate. It exists because a caller that just watched a turn fail is asking for recovery, not re-analysing a halt it kicked a second ago; every other gate (the per-kind switches, the subagent scope, `maxConsecutiveKicks`) still applies.
 
+One consequence of removing that spacing is worth knowing about: a kick message only lands in the session's event log when the turn it starts claims it, so a caller that asks for kicks back to back can be reading a log one kick behind its own sending. The guard takes the higher of the log count and the kicks this process has actually sent, so the lag cannot buy an extra kick; a genuine user message or a normally completed turn resets both together.
+
 **The service is optional for the consumer.** A caller must resolve it lazily (`ctx.get` at use time, not at boot), duck-type `typeof kicker?.kick === 'function'`, and degrade to its own behaviour when it is absent — the same rule `dsh-kanban` follows for the `betterGitWorktree` service. Nothing here requires a caller: with no consumer installed the plugin behaves exactly as before.
 
 ## Logging

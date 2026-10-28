@@ -36,7 +36,7 @@ import { format } from 'node:util'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 import { resolveSettings } from './config.mjs'
-import { decide, PLUGIN_SOURCE_KIND } from './decide.mjs'
+import { countConsecutiveKicks, decide, PLUGIN_SOURCE_KIND } from './decide.mjs'
 
 const PLUGIN_NAME = 'continue-kicker'
 
@@ -63,6 +63,7 @@ export default function continueKicker(ctx, config = {}) {
 
   const liveAgents = new Set() // session ids with a live watcher
   const lastKick = new Map() // sessionId -> timestamp of last kick
+  const kickCounts = new Map() // sessionId -> consecutive kicks sent since the last reset
   const pendingTimers = new Map() // sessionId -> scheduled re-analysis timer
   const scopeSkipped = new Set() // sessionIds already logged as scope-excluded
 
@@ -84,21 +85,41 @@ export default function continueKicker(ctx, config = {}) {
     }
   }
 
+  /**
+   * The consecutive-kick count to guard with. The event log is the source of
+   * truth, but a follow-up message only reaches it when the turn it starts
+   * claims it, so a caller that asks for kicks back to back (dsh-kanban's
+   * recovery loop, with the cooldown bypassed) can read a log one kick behind.
+   * The higher of the log count and what this process has actually sent wins.
+   * A reset in the log (genuine user message, normally completed turn) takes the
+   * in-memory count down with it, so a session a human picked back up is not
+   * still capped by kicks from before.
+   */
+  function trackedKicks(sessionId, events) {
+    const logCount = countConsecutiveKicks(events, settings)
+    const tracked = logCount === 0 ? 0 : Math.max(logCount, kickCounts.get(sessionId) ?? 0)
+    kickCounts.set(sessionId, tracked)
+    return tracked
+  }
+
   /** One analysis of one session, from either door. */
   function analyse(agent, { bypassCooldown = false } = {}) {
+    const events = agent.session?.snapshotEvents()
     return decide({
-      events: agent.session?.snapshotEvents(),
+      events,
       settings,
       lastKickAt: lastKick.get(agent.id) ?? 0,
       now: Date.now(),
       isSubagent: isSubagent(agent),
       bypassCooldown,
+      knownKicks: trackedKicks(agent.id, events),
     })
   }
 
   /** Send the follow-up the decision asked for and record the cooldown. */
   function sendKick(agent, decision) {
     lastKick.set(agent.id, Date.now())
+    kickCounts.set(agent.id, decision.consecutive)
     const message = createUserMessage({
       content: [{ type: 'text', text: decision.text }],
       source: { kind: PLUGIN_SOURCE_KIND, form: 'notice', summary: decision.summary },
@@ -203,6 +224,7 @@ export default function continueKicker(ctx, config = {}) {
     pendingTimers.delete(sessionId)
     liveAgents.delete(sessionId)
     lastKick.delete(sessionId)
+    kickCounts.delete(sessionId)
     scopeSkipped.delete(sessionId)
   })
 

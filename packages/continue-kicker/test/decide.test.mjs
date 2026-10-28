@@ -200,6 +200,31 @@ test('bypassCooldown skips the cooldown gate and nothing else', () => {
   assert.equal(decide({ ...base, events: completedTurn(), bypassCooldown: true }).action, 'skip')
 })
 
+// A follow-up message reaches the session log when the turn it starts claims it,
+// so a caller that asks for kicks back to back can read a log that is one kick
+// behind. knownKicks is what it has actually sent; the guard uses the higher
+// count so the lag cannot buy an extra kick.
+test('knownKicks closes the gap when the event log lags a kick behind', () => {
+  const maxed = { ...settings, maxConsecutiveKicks: 3 }
+  // The log shows two kicks; the caller says it already sent three.
+  const twoInLog = [userMessage('user'), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn()]
+  assert.equal(countConsecutiveKicks(twoInLog, maxed), 2)
+  const third = decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 3 })
+  assert.equal(third.action, 'stop')
+  assert.match(third.why, /runaway guard/)
+  // With the log up to date the same call is the third kick, not a refusal.
+  const fromLog = decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 0 })
+  assert.equal(fromLog.action, 'kick')
+  assert.equal(fromLog.consecutive, 3)
+  // knownKicks below the log count never lowers it.
+  assert.equal(decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 1 }).consecutive, 3)
+  // A reset in the log (here: a genuine user message) is what clears the caller's
+  // own count; decide itself just takes the max.
+  const afterUser = [kickMessage(), kickMessage(), kickMessage(), userMessage('user'), ...maxTokensTurn()]
+  assert.equal(countConsecutiveKicks(afterUser, maxed), 0)
+  assert.equal(decide({ ...base, events: afterUser, settings: maxed, knownKicks: 0 }).action, 'kick')
+})
+
 test('maxConsecutiveKicks 0 skips quietly instead of raising the runaway error', () => {
   const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxConsecutiveKicks: 0 } })
   assert.equal(d.action, 'skip')
