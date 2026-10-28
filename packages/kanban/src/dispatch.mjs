@@ -226,10 +226,17 @@ export class SessionDriver {
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
     const key = routeKey(route);
     if (live.routeKey === key) return;
-    if (this.sessionController === undefined) {
-      throw new DispatchError('sessionController service is missing; cannot select the next request route', { code: 'NO_SESSION_CONTROLLER' });
+    // The plugin can be mounted before the API session controller is published.
+    // Resolve lazily; if it is genuinely unavailable, keep the session's current
+    // route rather than failing the workflow turn.
+    const controller = this.sessionController ?? this.ctx.get('sessionController');
+    if (controller === undefined) {
+      this.log.warn('sessionController unavailable; keeping the current route for %s', sessionId);
+      live.routeKey = key;
+      return;
     }
-    this.sessionController.selectForNextRequest(live.handle.agent, {
+    this.sessionController = controller;
+    controller.selectForNextRequest(live.handle.agent, {
       provider: route.provider,
       model: route.model,
       ...(route.reasoningEffort === null || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),

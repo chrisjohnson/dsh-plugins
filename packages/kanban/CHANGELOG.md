@@ -3,6 +3,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.6
+
+### Fixed
+
+- Resolve `sessionController` lazily when switching a workflow session's model
+  route. If the service is not published yet, keep the session's current route
+  instead of failing the turn with `NO_SESSION_CONTROLLER`.
+
 ## 0.3.4
 
 ### Fixed
