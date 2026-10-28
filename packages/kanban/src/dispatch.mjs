@@ -266,13 +266,16 @@ export class SessionDriver {
     // Resolve lazily; if it is genuinely unavailable, keep the session's current
     // route rather than failing the workflow turn.
     const controller = this.sessionController ?? this.ctx.get('sessionController');
-    if (controller === undefined) {
-      this.log.warn('sessionController unavailable; keeping the current route for %s', sessionId);
+    const selector = typeof controller?.selectForNextRequest === 'function'
+      ? controller
+      : controller?.agents;
+    if (typeof selector?.selectForNextRequest !== 'function') {
+      this.log.warn('sessionController route selector unavailable; keeping the current route for %s', sessionId);
       live.routeKey = key;
       return;
     }
     this.sessionController = controller;
-    controller.selectForNextRequest(live.handle.agent, {
+    selector.selectForNextRequest(live.handle.agent, {
       provider: route.provider,
       model: route.model,
       ...(route.reasoningEffort === null || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),

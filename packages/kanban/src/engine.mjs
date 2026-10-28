@@ -136,21 +136,18 @@ export class Engine {
       this.store.markSessionClosed(session.sessionId);
       const ticket = this.store.getTicket(ticketId);
       if (ticket === undefined || ticket.column === 'done' || ticket.column === 'discarded') continue;
-      if (ticket.phase === 'plan') {
-        this.appendEvent(ticketId, 'restart_recovered', {
-          phaseFrom: 'plan',
-          phaseTo: 'plan',
-          payload: { sessionId: session.sessionId, reason: 'plan session interrupted by restart' },
-        });
-        this.store.setNeedsAttention(ticketId, 'plan session was interrupted by a restart; retry to plan again', {
-          restartRecovery: true,
-          sessionId: session.sessionId,
-        });
-      } else if (ticket.phase === 'review') {
-        this.store.transitionTicket(ticketId, { phase: 'implement' }, { actor: 'engine', reason: 'restart recovery' });
-      } else if (ticket.phase === 'verify') {
-        this.store.setNeedsAttention(ticketId, 'approval session was interrupted by a restart; approve, discard, or open approval again');
-      }
+      const phase = ticket.phase === 'verify' ? 'approval' : ticket.phase;
+      const reason = `${phase} session was interrupted by a restart; open the existing session to continue, or retry`;
+      this.appendEvent(ticketId, 'restart_recovered', {
+        phaseFrom: ticket.phase,
+        phaseTo: ticket.phase,
+        payload: { sessionId: session.sessionId, reason },
+      });
+      this.store.setNeedsAttention(ticketId, reason, {
+        restartRecovery: true,
+        sessionId: session.sessionId,
+        phase,
+      });
     }
     for (const span of this.store.runningSpans()) {
       this.store.endSpan(span.id, { status: 'abandoned', error: 'host restarted mid-span' });
@@ -763,6 +760,10 @@ export class Engine {
   }
 
   needsAttention(ticket, reason, payload = {}) {
+    if (this.driver?.isTicketBusy?.(ticket.id) === true) {
+      this.log.info('ticket %s failure ignored: another session is still active', ticket.key);
+      return { kind: 'busy' };
+    }
     this.reactivations.delete(ticket.id);
     this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, failedPhase: ticket.phase, ...payload } });
     this.store.setNeedsAttention(ticket.id, reason, payload);
