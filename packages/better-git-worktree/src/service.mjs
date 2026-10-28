@@ -21,6 +21,7 @@
 // sidebar poll therefore costs no git process in the steady state.
 
 import { existsSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 
 import { TtlCache, gitFetch } from './git-runner.mjs'
@@ -240,6 +241,60 @@ export function createService(deps) {
       }
     })
     return { record, reused: false }
+  }
+
+  /**
+   * Create a managed working copy for a repository path, independent of any
+   * session. It is registered as pending and adopted by the first session whose
+   * cwd resolves to the managed root.
+   */
+  async function createForPath(path, options = {}) {
+    if (typeof path !== 'string' || path.trim() === '') throw new Error('createForPath needs a repository path')
+    if (!registry.writable) throw new Error(`the worktree registry cannot be written (${registry.problem}); not creating a working copy it could not record`)
+    const root = await repoRoot(path)
+    if (root === undefined) throw new Error(`${path} is not inside a git repository`)
+    if (registry.list().some((record) => record.managedRoot === root)) {
+      throw new Error(`${root} is already a managed git worktree`)
+    }
+    const branchName = await currentBranch(root)
+    const base = (await defaultBranch(root)) ?? branchName
+    const baseRef = await baseRefFor(root, base)
+    const created = await createWorktree({ repoRoot: root, home })
+    const pendingId = `pending-${randomUUID()}`
+    const record = registry.put({
+      sessionId: pendingId,
+      origin: 'kanban',
+      repoRoot: created.repoRoot,
+      managedRoot: created.managedRoot,
+      branch: created.branch,
+      petName: created.petName,
+      baseBranch: base,
+      baseRef,
+      baseOid: created.baseOid,
+      activated: false,
+      pending: true,
+      createdAt: Date.now(),
+      title: typeof options.title === 'string' ? options.title : undefined,
+    })
+    lastFetchAt.set(created.repoRoot, Date.now())
+    return {
+      repoRoot: created.repoRoot,
+      managedRoot: created.managedRoot,
+      branch: created.branch,
+      petName: created.petName,
+      baseOid: created.baseOid,
+      pendingId,
+      record,
+    }
+  }
+
+  /** Re-key a pending path-created record to the session now rooted there. */
+  function adoptForCwd(cwd, sessionId) {
+    const record = registry.findByRoot(cwd)
+    if (record === undefined || record.pending !== true || record.sessionId === sessionId) return false
+    registry.remove(record.sessionId)
+    registry.put({ ...record, sessionId, pending: false, activated: true, sourceSessionId: undefined })
+    return true
   }
 
   /**
@@ -533,6 +588,8 @@ export function createService(deps) {
     warmAll,
     kickFetch,
     createForSession,
+    createForPath,
+    adoptForCwd,
     convertSession,
     removeWorkingCopy,
     handleRpc,

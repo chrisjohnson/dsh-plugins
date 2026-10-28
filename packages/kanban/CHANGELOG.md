@@ -3,6 +3,17 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.2
+
+### Added
+
+- Opt-in **Worktree** toggle in the new-ticket form, shown only when
+  `dsh-better-git-worktree` is mounted. Confirming creates a managed working
+  copy through that plugin's host service, registers it as a workspace, and
+  points the ticket at it. The worktree copy is adopted by the first workflow
+  session in the managed root.
+- `capabilities` and `worktree` Kanban endpoints.
+
 ## 0.3.1
 
 ### Added
