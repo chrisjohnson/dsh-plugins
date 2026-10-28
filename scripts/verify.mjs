@@ -194,7 +194,10 @@ function verifyPackage(dir, manifest, rootReadme) {
       if (range !== DSH_PEER_RANGE) {
         at('peer-range', `peerDependencies["${dep}"] = "${range}"; every @deepseek-ai/dsh* peer in this repository uses exactly "${DSH_PEER_RANGE}" (dsh checks these at boot and skips a bundle whose range misses the runtime)`);
       }
-    } else if (!admitsPrereleases(String(range))) {
+    } else if (dep.startsWith('@deepseek-ai/') && !admitsPrereleases(String(range))) {
+      // Only the harness's own line ships prerelease builds. A third-party peer
+      // (an exact pin on another plugin, playwright-core) has no prerelease
+      // line to admit, so the rule would only force a meaningless extra branch.
       at('peer-prerelease', `peerDependencies["${dep}"] = "${range}" silently excludes every prerelease build of the harness; add an explicit branch, e.g. "${DSH_PEER_RANGE}"`);
     }
   }
