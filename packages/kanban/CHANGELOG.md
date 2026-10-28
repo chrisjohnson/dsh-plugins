@@ -5,6 +5,22 @@
 
 ## Unreleased
 
+## 0.4.1
+
+### Fixed
+
+- A reactivated ticket is parked again when its turn ends. The 0.3.7 busy guard in
+  `needsAttention()` also stopped the realtime settle: the driver handled
+  `turn/end` for the activity bookkeeping **before** releasing the engine's own
+  turn waiter, so `isTicketBusy` answered "yes" using the very turn that had just
+  ended, the park was skipped, and the ticket stayed in In flight with no reason.
+  The approval intro was the case that hit it — an approval-waiting ticket opened
+  as an approval session left Needs attention and never came back.
+- `settleSessionTurn` now records `session_settled` only when the ticket actually
+  moved. If a different session of the same ticket is genuinely mid-turn the
+  settle is deferred (the mark is kept, In flight stays the honest column) instead
+  of claiming a settle that never happened.
+
 ## 0.4.0
 
 ### Added
