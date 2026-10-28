@@ -36,6 +36,8 @@ const ENDPOINTS = [
   'analytics',
   'config',
   'setRoutes',
+  'capabilities',
+  'worktree',
   'events',
 ];
 
@@ -407,6 +409,32 @@ export default async function kanban(ctx, config = {}) {
                 counts: store.counts(),
               },
             };
+          case 'capabilities':
+            return {
+              ok: true,
+              value: {
+                worktree: typeof ctx.get('betterGitWorktree')?.createForPath === 'function',
+              },
+            };
+          case 'worktree': {
+            const service = ctx.get('betterGitWorktree');
+            if (typeof service?.createForPath !== 'function') return fail('unavailable', 'dsh-better-git-worktree is not mounted');
+            const ticket = p.id === undefined ? undefined : requireTicket(String(p.id));
+            const base = typeof p.workspaceCwd === 'string' && p.workspaceCwd !== ''
+              ? p.workspaceCwd
+              : ticket?.workspaceCwd ?? live.defaultWorkspaceCwd ?? process.cwd();
+            const title = typeof p.title === 'string' && p.title.trim() !== '' ? p.title.trim() : (ticket?.title ?? 'Kanban worktree');
+            const created = await service.createForPath({ path: base, title });
+            try {
+              await ctx.get('workspaceRegistry')?.create?.(created.managedRoot, title);
+            } catch (error) {
+              log.warn('worktree workspace registration failed: %s', message(error));
+            }
+            const updated = ticket === undefined
+              ? undefined
+              : store.updateTicket(ticket.id, { workspaceCwd: created.managedRoot }, { actor: 'human', reason: 'worktree created' });
+            return { ok: true, value: { worktree: created, ticket: updated ?? null } };
+          }
           case 'config': {
             const configEditor = ctx.get('configEditor');
             let groups = [];

@@ -5,6 +5,18 @@
 
 ## Unreleased
 
+## 0.1.3
+
+### Added
+
+- Host service `betterGitWorktree.createForPath({ path, title })` so another
+  plugin can create a managed working copy from a repository path without a
+  source session. The copy is registered as pending and adopted by the first
+  session whose cwd is that managed root.
+- `adoptForCwd` re-keys pending path-created records during agent creation.
+
+
+
 ## 0.1.2
 
 ### Fixed

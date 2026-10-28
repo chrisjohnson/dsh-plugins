@@ -509,18 +509,39 @@ window.__ModuleLoader__.load({
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
+			var wc = React.useState(false);
+			var worktreeConfirm = wc[0], setWorktreeConfirm = wc[1];
+			var wb = React.useState(false);
+			var worktreeBusy = wb[0], setWorktreeBusy = wb[1];
+			var we = React.useState(null);
+			var worktreeError = we[0], setWorktreeError = we[1];
+			var ws = React.useState(null);
+			var extraWorkspace = ws[0], setExtraWorkspace = ws[1];
 			var invalid = false;
 			function field(key, value) {
 				var next = Object.assign({}, form);
 				next[key] = value;
 				setForm(next);
 			}
+			function createWorktree() {
+				setWorktreeBusy(true);
+				setWorktreeError(null);
+				rpc("worktree", { workspaceCwd: form.workspace || null, title: form.title }).then(function (res) {
+					setWorktreeBusy(false);
+					if (!res || !res.ok) { setWorktreeError(res && res.error ? res.error.message : "The worktree could not be created."); return; }
+					var path = res.value.worktree.managedRoot;
+					setForm(Object.assign({}, form, { workspace: path, worktree: true, worktreeCreated: true, worktreePath: path }));
+					setExtraWorkspace({ path: path, title: "worktree" });
+					setWorktreeConfirm(false);
+				}, function () { setWorktreeBusy(false); setWorktreeError("Could not reach the Host."); });
+			}
+
 			function submit() {
 				if (invalid || form.title.trim() === "") return;
 				setBusy(true);
@@ -539,7 +560,7 @@ window.__ModuleLoader__.load({
 				}).then(function (res) {
 					setBusy(false);
 					if (res && res.ok) {
-						setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog" });
+						setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
 						props.onCreated(res.value.ticket);
 					} else {
 						setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -556,9 +577,9 @@ window.__ModuleLoader__.load({
 				h("div", { className: "kb-row" },
 					h("div", { style: { flex: 1, minWidth: 220 } },
 						h("div", { className: "kb-label", children: "Workspace" }),
-						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, onChange: function (ev) { field("workspace", ev.target.value); } },
+						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, disabled: form.worktreeCreated, onChange: function (ev) { field("workspace", ev.target.value); } },
 							h("option", { value: "", children: "Engine default" }),
-							(props.workspaces || []).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
+							((props.workspaces || []).concat(extraWorkspace ? [extraWorkspace] : [])).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
 						)
 					),
 					h("div", null,
@@ -585,11 +606,22 @@ window.__ModuleLoader__.load({
 					h("div", null, h("div", { className: "kb-label", children: "Budget USD" }),
 						h("input", { className: "kb-input", type: "number", value: form.budget, style: { width: 100 }, onChange: function (ev) { field("budget", ev.target.value); } }))
 				),
-								err ? h("div", { className: "kb-err", children: err }) : null,
+								props.worktreeAvailable ? h("div", { className: "kb-worktree-row" },
+					h("label", { className: "kb-row", style: { gap: 6, marginTop: 0 } },
+						h("input", { type: "checkbox", role: "switch", checked: form.worktree, disabled: worktreeBusy || form.worktreeCreated, onChange: function (ev) { if (ev.target.checked) { setWorktreeError(null); setWorktreeConfirm(true); } } }),
+						h("span", { className: "kb-label", children: "Worktree" })),
+					form.worktreeCreated ? h("span", { className: "kb-worktree-path", children: form.worktreePath }) : h("span", { className: "kb-hint", children: "Create an isolated working copy for this ticket." })) : null,
+				err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy || invalid || form.title.trim() === "", onClick: submit, children: busy ? "Creating…" : "Create ticket" }),
-					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })
-				)
+					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })),
+				h(Modal, { open: worktreeConfirm, title: "Start in a git worktree", onClose: function () { if (!worktreeBusy) setWorktreeConfirm(false); } },
+					h("div", { className: "kb-form" },
+						h("p", { className: "kb-hint", children: "A new branch and worktree are created for this repository. The ticket will use that working copy, and the original checkout is left untouched." }),
+						worktreeError ? h("div", { className: "kb-err", children: worktreeError }) : null,
+						h("div", { className: "kb-row" },
+							h("button", { className: "kb-btn", disabled: worktreeBusy, onClick: function () { setWorktreeConfirm(false); }, children: "Cancel" }),
+							h("button", { className: "kb-btn primary", disabled: worktreeBusy, onClick: createWorktree, children: worktreeBusy ? "Creating…" : "Create worktree and use it" }))))
 			);
 		}
 
@@ -1164,6 +1196,8 @@ window.__ModuleLoader__.load({
 			var analyticsData = analytics[0], setAnalyticsData = analytics[1];
 			var ws = React.useState([]);
 			var workspaces = ws[0], setWorkspaces = ws[1];
+			var cap = React.useState({ worktree: false });
+			var capabilities = cap[0], setCapabilities = cap[1];
 			var rc = React.useState(null);
 			var routing = rc[0], setRouting = rc[1];
 			var ro = React.useState(false);
@@ -1198,6 +1232,7 @@ window.__ModuleLoader__.load({
 			}
 			React.useEffect(function () {
 				rpc("workspaces", {}).then(function (res) { if (res && res.ok && res.value) setWorkspaces(res.value.items || []); });
+				rpc("capabilities", {}).then(function (res) { if (res && res.ok && res.value) setCapabilities(res.value); });
 				function loadRouting() { rpc("config", {}).then(function (res) { if (res && res.ok && res.value) setRouting(res.value); }); }
 				loadRouting();
 				var routingTimer = setInterval(loadRouting, 15000);
@@ -1276,7 +1311,7 @@ window.__ModuleLoader__.load({
 				) : null,
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
-					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { workspaces: workspaces, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
+					creating ? h("div", { className: "kb-panel" }, h("h3", { children: "New ticket" }), h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })) : null,
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						onBack: function () { setSelectedId(null); setDetail(null); },

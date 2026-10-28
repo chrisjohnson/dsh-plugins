@@ -186,6 +186,12 @@ export default function betterGitWorktree(ctx, config = {}) {
     createSession: (source, record) => createWorktreeSessionFor(ctx, source, record),
   })
 
+  // Other plugins (Kanban) create a working copy from a repository path and
+  // adopt it once their workflow session starts in the managed root.
+  ctx.provide('betterGitWorktree', {
+    createForPath: (options) => service.createForPath(options.path, options),
+  })
+
   // -- RPC surface (client -> host) ---------------------------------------------
   //
   // A plugin-owned route rather than `connection.rpc.handle`: a channel registered
@@ -313,6 +319,7 @@ export default function betterGitWorktree(ctx, config = {}) {
   const warned = new WeakSet()
   const composeAgent = (agent) => {
     if (agent === undefined || agent === null) return
+    service.adoptForCwd(agent.session?.header?.cwd, agent.id)
     const done = progress.get(agent) ?? { prompt: false, tool: false }
     progress.set(agent, done)
     if (!done.tool) {
