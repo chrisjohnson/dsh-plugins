@@ -3,6 +3,21 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.7
+
+### Fixed
+
+- Select the next model route through `sessionController.agents` when the
+  controller facade itself does not expose `selectForNextRequest`; if neither
+  selector is available, preserve the session's current route instead of
+  failing the turn.
+- Restart recovery now parks any ticket with an open workflow session in
+  Needs Attention instead of auto-launching a duplicate build/review session.
+  Opening the existing session reactivates it through the realtime activity
+  path.
+- A failing secondary session no longer marks a ticket Needs Attention while
+  another session for that ticket is still actively working.
+
 ## 0.3.6
 
 ### Fixed
