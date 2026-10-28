@@ -1,0 +1,48 @@
+{
+  "name": "dsh-browser",
+  "version": "0.1.0",
+  "description": "Per-session browser contexts on one shared remote Browserless connection for dsh-playwright-browser's tools, with reconnect after the connection is lost and a clearly announced local fallback.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "browser",
+    "browserless",
+    "playwright",
+    "session-isolation"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "peerDependencies": {
+    "dsh-playwright-browser": "0.1.3",
+    "playwright-core": ">=1.49.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/browser"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/browser#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
