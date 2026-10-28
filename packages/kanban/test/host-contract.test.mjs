@@ -35,7 +35,8 @@ test('the only model-facing tools are scoped phase actions', async () => {
   assert.match(files['actions.mjs'], /kanban_submit_plan/)
   assert.match(files['actions.mjs'], /kanban_submit_implementation/)
   assert.match(files['actions.mjs'], /kanban_submit_review/)
-  assert.match(files['actions.mjs'], /kanban_submit_verification/)
+  assert.match(files['actions.mjs'], /kanban_approve/)
+  assert.match(files['actions.mjs'], /kanban_discard/)
   assert.equal(/kanban_(create|move|update|delete)/.test(files['actions.mjs']), false)
 })
 

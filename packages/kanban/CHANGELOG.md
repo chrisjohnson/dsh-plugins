@@ -3,6 +3,22 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.0
+
+### Changed
+
+- Removed the separate verification session. A passing review is validated in
+  code against the plan's done_when ids and the acceptance criteria; incomplete
+  reviews return to implementation. No verifier role or verification tool is
+  registered.
+- Added a human **Approval** stage. After review passes, the ticket becomes
+  Needs Attention with approve, discard, and interactive-session actions.
+- Approval sessions run in the standard preset, workspace-write, in the
+  ticket's workspace. They expose `kanban_approve`, `kanban_discard`, and
+  `kanban_submit_plan`; submitting a plan starts another build/review round.
+- Review now emits per-condition done_when rows using the plan ids and
+  acceptance_coverage for every acceptance statement.
+
 ## 0.2.5
 
 ### Fixed

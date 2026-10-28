@@ -6,11 +6,10 @@ import { DEFAULT_CONFIG, DEFAULT_TOOLS, ROLES, resolveConfig, routeForAttempt } 
 test('defaults resolve with the four workflow roles', () => {
   const { config, warnings } = resolveConfig({})
   assert.deepEqual(warnings, [])
-  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer', 'verifier'])
+  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer'])
   assert.deepEqual(Object.keys(config.roles).sort(), [...ROLES].sort())
   assert.equal(config.defaultPlanTiming, 'at_pickup')
   assert.equal(config.defaultPlanQuestions, 'interactive')
-  assert.deepEqual(DEFAULT_CONFIG.roles.verifier.allowTools, DEFAULT_TOOLS.verifier)
 })
 
 test('planner is read-only by declaration and can ask', () => {

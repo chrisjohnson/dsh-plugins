@@ -278,8 +278,64 @@ export function validateReview(value) {
   ) {
     errors.push('acceptance_coverage must be an array of {condition, acceptance}');
   }
+  if (value.done_when !== undefined) {
+    if (!Array.isArray(value.done_when)) errors.push('done_when must be an array');
+    else value.done_when.forEach((item, index) => {
+      if (!isObject(item)) return errors.push(`done_when[${index}] is not an object`);
+      if (!isNonEmptyString(item.id)) errors.push(`done_when[${index}].id is required`);
+      if (typeof item.met !== 'boolean') errors.push(`done_when[${index}].met must be a boolean`);
+      if (typeof item.confidence !== 'number') errors.push(`done_when[${index}].confidence must be a number`);
+      if (typeof item.evidence !== 'string') errors.push(`done_when[${index}].evidence must be a string`);
+    });
+  }
   if (value.scope_drift !== undefined && typeof value.scope_drift !== 'string') errors.push('scope_drift must be a string');
   return errors;
+}
+
+/**
+ * Check that a passing review actually covers the plan and acceptance with
+ * the same condition ids the plan produced. Returns human-readable gaps.
+ */
+export function verifyReview(value, conditions, acceptance, threshold = 0.7) {
+  const gaps = [];
+  if (!isObject(value)) return ['review is not an object'];
+  const rows = Array.isArray(value.done_when) ? value.done_when : [];
+  const byId = new Map();
+  for (const row of rows) {
+    if (!isObject(row) || !isNonEmptyString(row.id)) {
+      gaps.push('done_when contains a row without an id');
+      continue;
+    }
+    if (byId.has(row.id)) gaps.push(`done_when.${row.id} is duplicated`);
+    byId.set(row.id, row);
+  }
+  const ids = new Set(conditions.map((condition) => condition.id));
+  for (const condition of conditions) {
+    const row = byId.get(condition.id);
+    if (row === undefined) {
+      gaps.push(`done_when.${condition.id} is missing from the review`);
+      continue;
+    }
+    if (row.met !== true) gaps.push(`done_when.${condition.id} is not met`);
+    if (typeof row.confidence !== 'number' || row.confidence < threshold) gaps.push(`done_when.${condition.id} confidence is below ${threshold}`);
+    if (typeof row.evidence !== 'string' || row.evidence.trim() === '') gaps.push(`done_when.${condition.id} has no evidence`);
+  }
+  for (const id of byId.keys()) if (!ids.has(id)) gaps.push(`done_when.${id} is not a planned condition`);
+
+  const coverage = Array.isArray(value.acceptance_coverage) ? value.acceptance_coverage : [];
+  const covered = new Set();
+  for (const row of coverage) {
+    if (!isObject(row) || !isNonEmptyString(row.acceptance) || !isNonEmptyString(row.condition)) {
+      gaps.push('acceptance_coverage contains a malformed row');
+      continue;
+    }
+    covered.add(row.acceptance);
+    if (!ids.has(row.condition)) gaps.push(`acceptance_coverage.${row.condition} is not a planned condition`);
+  }
+  for (const item of acceptance) {
+    if (!covered.has(item.statement)) gaps.push(`acceptance is not covered: ${item.statement}`);
+  }
+  return gaps;
 }
 
 /** Validate the griller's JSON. */

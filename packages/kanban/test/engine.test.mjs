@@ -29,6 +29,7 @@ const REVIEW_PASS = {
   verdict: 'pass',
   reasons: ['matches plan'],
   scope_drift: 'none',
+  done_when: [{ id: 'notes', met: true, confidence: 0.95, evidence: 'notes.txt:1 hello' }],
   acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
 }
 const REVIEW_FAIL = {
@@ -38,11 +39,7 @@ const REVIEW_FAIL = {
   scope_drift: 'none',
   acceptance_coverage: [],
 }
-const VERIFY_PASS = {
-  summary: 'checked',
-  done_when: [{ id: 'notes', met: true, confidence: 0.95, evidence: 'test -f notes.txt: exit 0' }],
-  residual_risks: [],
-}
+
 const PROMPTS = {
   bodies: {
     'plan-human': 'plan {{ticket_state}}',
@@ -50,7 +47,6 @@ const PROMPTS = {
     implement: 'implement {{plan}} {{done_when}}',
     rework: 'rework {{review}}',
     review: 'review {{diff}}',
-    verify: 'verify {{done_when}}',
   },
   hashes: { plan: 'h' },
 }
@@ -62,7 +58,6 @@ function setup(queues = {}) {
       planner: { provider: 'local', model: 'm', allowTools: ['read'] },
       implementer: { provider: 'local', model: 'm', allowTools: ['read', 'write', 'edit'] },
       reviewer: { provider: 'local', model: 'm', allowTools: ['read'] },
-      verifier: { provider: 'local', model: 'm', allowTools: ['read'] },
     },
     providers: [{ name: 'local' }],
     confidenceThreshold: 0.7,
@@ -78,7 +73,6 @@ function setup(queues = {}) {
       planner: [...(queues.plan ?? [{ type: 'plan', value: PLAN }])],
       implementer: [...(queues.implement ?? [{ type: 'implementation', value: IMPLEMENTATION }])],
       reviewer: [...(queues.review ?? [{ type: 'review', value: REVIEW_PASS }])],
-      verifier: [...(queues.verify ?? [{ type: 'verification', value: VERIFY_PASS }])],
     },
     async ensureTicketSession({ ticket, role, purpose }) {
       const key = `${ticket.id}:${purpose}`
@@ -117,17 +111,21 @@ function pickedUp(store, extra = {}) {
   return store.getTicket(ticket.id)
 }
 
-test('flat plan -> implement -> review -> verify -> done', async () => {
+test('flat plan -> implement -> review -> approval -> approve', async () => {
   const { store, engine } = setup()
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
-  const done = store.getTicket(ticket.id)
-  assert.equal(done.column, 'done')
-  assert.equal(done.phase, 'closed')
+  const pending = store.getTicket(ticket.id)
+  assert.equal(pending.column, 'needs_attention')
+  assert.equal(pending.phase, 'verify')
+  assert.equal(pending.needsAttentionReason, 'Awaiting human approval')
   assert.equal(store.listConditions(ticket.id).length, 1)
   assert.ok(store.listSessions(ticket.id).some((s) => s.purpose === 'plan'))
   assert.ok(store.listSessions(ticket.id).some((s) => s.purpose === 'build'))
-  assert.ok(store.listSessions(ticket.id).some((s) => s.purpose === 'verify'))
+  assert.equal(store.listSessions(ticket.id).some((s) => s.purpose === 'verify'), false)
+  const done = await engine.approve(ticket.id)
+  assert.equal(done.column, 'done')
+  assert.equal(done.phase, 'closed')
 })
 
 test('review failure returns to implement in the same build session', async () => {
@@ -143,30 +141,42 @@ test('review failure returns to implement in the same build session', async () =
   })
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
-  assert.equal(store.getTicket(ticket.id).column, 'done')
+  assert.equal(store.getTicket(ticket.id).column, 'needs_attention')
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
   assert.equal(store.getTicket(ticket.id).attemptCount, 2)
   assert.equal([...driver.ticketSessions.keys()].filter((key) => key.includes(':build')).length, 1)
 })
 
-test('verify failure returns to a fresh build session', async () => {
-  const { store, engine, driver } = setup({
+test('a passing review missing planned evidence returns to implement', async () => {
+  const { store, engine } = setup({
     implement: [
       { type: 'implementation', value: IMPLEMENTATION },
       { type: 'implementation', value: IMPLEMENTATION },
     ],
     review: [
+      { type: 'review', value: { ...REVIEW_PASS, done_when: [] } },
       { type: 'review', value: REVIEW_PASS },
-      { type: 'review', value: REVIEW_PASS },
-    ],
-    verify: [
-      { type: 'verification', value: { ...VERIFY_PASS, done_when: [{ id: 'notes', met: false, confidence: 0.2, evidence: 'missing' }] } },
-      { type: 'verification', value: VERIFY_PASS },
     ],
   })
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
-  assert.equal(store.getTicket(ticket.id).column, 'done')
-  assert.ok([...driver.ticketSessions.keys()].filter((key) => key.includes(':build')).length >= 1)
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 2)
+})
+
+test('approval can submit a follow-up plan for another round', async () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  const next = await engine.submitApprovalPlan(ticket.id, {
+    ...PLAN,
+    summary: 'second round',
+    done_when: [{ id: 'round-two', statement: 'second', how_verified: 'true' }],
+  })
+  assert.equal(next.column, 'now')
+  assert.equal(next.phase, 'implement')
+  assert.equal(store.listConditions(ticket.id)[0].id, 'round-two')
 })
 
 test('plan without the tool call needs attention', async () => {
