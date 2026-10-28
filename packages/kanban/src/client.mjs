@@ -1027,7 +1027,7 @@ var CSS =
 						h("button", { className: "kb-btn sm", onClick: function () { rpc("export", { id: t.id, kind: "spans", format: "jsonl" }).then(function (res) { if (res && res.ok) download(t.key + "-spans.jsonl", res.value.mime, res.value.body); }); }, children: "Spans JSONL" }),
 						h("button", { className: "kb-btn sm", onClick: function () { rpc("export", { id: t.id, kind: "usage", format: "csv" }).then(function (res) { if (res && res.ok) download(t.key + "-usage.csv", res.value.mime, res.value.body); }); }, children: "Usage CSV" })),
 					h(Timeline, { items: d.timeline || [] })) : null,
-				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction }) : null,
+				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction, onRecover: props.onRecover }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
 				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null,
 				h(Modal, { open: modal === "modes", title: "Modes and budget", onClose: function () { setModal(null); } },
@@ -1167,7 +1167,8 @@ var CSS =
 							return h("tr", { key: session.id },
 								h("td", { children: session.purpose || session.role }),
 								h("td", null, h("code", { style: { fontSize: 10 }, children: session.sessionId }),
-									h("button", { className: "kb-btn sm", style: { marginLeft: 8 }, onClick: function () { if (openSessionById) openSessionById(session.sessionId); }, children: "Open" })),
+									h("button", { className: "kb-btn sm", style: { marginLeft: 8 }, onClick: function () { if (openSessionById) openSessionById(session.sessionId); }, children: "Open" }),
+										props.onRecover ? h("button", { className: "kb-btn sm", style: { marginLeft: 4 }, onClick: function () { props.onRecover(session.sessionId); }, children: "Recover tools" }) : null),
 								h("td", { children: (session.provider || "?") + "/" + (session.model || "?") }),
 								h("td", { children: fmtTime(session.createdAt) }),
 								h("td", null, h("button", { className: "kb-btn sm", onClick: function () { props.onAction(d.ticket.id, "detachSession", { sessionId: session.sessionId }); }, children: "Detach" })));
@@ -1432,7 +1433,8 @@ var CSS =
 						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
-						onApprovalSession: function (id) { return act("action", { id: id, action: "approvalSession" }).then(function (res) { if (res && res.ok && res.value && res.value.sessionId && openSessionById) openSessionById(res.value.sessionId); }); }
+						onApprovalSession: function (id) { return act("action", { id: id, action: "approvalSession" }).then(function (res) { if (res && res.ok && res.value && res.value.sessionId && openSessionById) openSessionById(res.value.sessionId); }); },
+						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						board ? h("div", { className: "kb-flow" },
 							h("span", { className: "kb-flow-title", children: "In flight" }),

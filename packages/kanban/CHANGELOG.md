@@ -3,6 +3,20 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.4
+
+### Fixed
+
+- Workflow sessions are no longer disposed when a ticket enters needs-attention;
+  their Kanban action tools stay registered so a continued session can submit.
+- Session attachment is a set per ticket/purpose. Reopened or manually continued
+  sessions are reattached automatically via `agent/created`, restoring their
+  Kanban tools.
+- Action tools now support manually driven turns: when no engine turn waiter is
+  present, implementation/review/plan submissions flow directly into the engine.
+- Added a `recoverSession` action and a **Recover tools** button in the ticket's
+  Sessions panel for an already-live stranded session.
+
 ## 0.3.3
 
 ### Changed

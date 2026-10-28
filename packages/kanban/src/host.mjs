@@ -82,6 +82,7 @@ export default async function kanban(ctx, config = {}) {
     ctx,
     log,
     getConfig,
+    store,
   });
   const engine = new Engine({ ctx, store, driver, getConfig, getPrompts, log });
   engine.configHash = configHash;
@@ -294,6 +295,11 @@ export default async function kanban(ctx, config = {}) {
               const result = await engineRef.current.startApprovalSession(ticket.id);
               return { ok: true, value: { sessionId: result.sessionId } };
             }
+            if (action === 'recoverSession') {
+              if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
+              const attached = await driver.attachExistingSession(p.sessionId);
+              return { ok: true, value: { attached } };
+            }
             if (action === 'retry') {
               if (typeof p.instruction === 'string' && p.instruction.trim() !== '') {
                 store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${p.instruction}`);
@@ -337,6 +343,11 @@ export default async function kanban(ctx, config = {}) {
             if (action === 'approvalSession') {
               const result = await engineRef.current.startApprovalSession(ticket.id);
               return { ok: true, value: { sessionId: result.sessionId } };
+            }
+            if (action === 'recoverSession') {
+              if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
+              const attached = await driver.attachExistingSession(p.sessionId);
+              return { ok: true, value: { attached } };
             }
             if (action === 'addAcceptance') {
               if (typeof p.statement !== 'string' || p.statement.trim() === '') return fail('bad_request', 'statement is required');

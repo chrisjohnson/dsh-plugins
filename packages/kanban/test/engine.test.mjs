@@ -179,6 +179,20 @@ test('approval can submit a follow-up plan for another round', async () => {
   assert.equal(store.listConditions(ticket.id)[0].id, 'round-two')
 })
 
+test('manual implementation submission advances to review', async () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine' })
+  await engine.handleManualAction({
+    ticketId: ticket.id,
+    purpose: 'build',
+    sessionId: 'session-manual',
+    action: { type: 'implementation', value: IMPLEMENTATION },
+  })
+  assert.equal(store.getTicket(ticket.id).phase, 'review')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+})
+
 test('plan without the tool call needs attention', async () => {
   const { store, engine } = setup({ plan: [] })
   const ticket = pickedUp(store)

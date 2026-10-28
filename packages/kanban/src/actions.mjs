@@ -97,9 +97,7 @@ const DISCARD_PARAMETERS = {
 
 
 function accept(driver, sessionId, action, exec) {
-  driver.recordAction(sessionId, action);
-  exec.concludeTurn();
-  return { accepted: true, action: action.type };
+  return driver.submitAction(sessionId, action, exec);
 }
 
 function requirePhase(liveRef, expected, tool) {

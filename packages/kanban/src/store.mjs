@@ -483,6 +483,20 @@ export class KanbanStore {
       .map((row) => ({ ticketId: row.ticket_id, sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose }));
   }
 
+  findSession(dshSessionId) {
+    const row = this.db.prepare('SELECT * FROM sessions WHERE dsh_session_id = ?').get(dshSessionId);
+    if (row === undefined) return undefined;
+    return {
+      ticketId: row.ticket_id,
+      sessionId: row.dsh_session_id,
+      role: row.role,
+      purpose: row.purpose,
+      provider: row.provider,
+      model: row.model,
+      closedAt: row.closed_at,
+    };
+  }
+
   listSessions(ticketId) {
     return this.db
       .prepare('SELECT * FROM sessions WHERE ticket_id = ? ORDER BY id ASC')
