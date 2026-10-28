@@ -678,6 +678,7 @@ function timelineView(spans, artifacts = [], events = [], now = Date.now()) {
     'phase_changed', 'conditions_set', 'planned', 'implemented', 'review', 'verification_failed', 'done',
     'retry_scheduled', 'needs_attention_reason', 'stalled', 'recovered',
     'awaiting_human', 'attempt_started', 'attempt_history',
+    'session_reactivated', 'session_settled',
   ]);
   for (const group of groups.values()) {
     const phase = rolePhase[group.role];

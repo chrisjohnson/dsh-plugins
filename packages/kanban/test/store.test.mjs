@@ -52,3 +52,15 @@ test('sessions keep their purpose', () => {
   assert.equal(sessions[0].purpose, 'plan')
   assert.equal(sessions[0].role, 'plan')
 })
+
+test('the engine moves a needs-attention ticket back to now and the reason clears', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 't', acceptance: ['a'] })
+  store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human' })
+  store.setNeedsAttention(ticket.id, 'turn failed in plan: boom')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in plan: boom')
+  const back = store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'engine', reason: 'session reactivated' })
+  assert.equal(back.column, 'now')
+  assert.equal(back.phase, 'plan')
+  assert.equal(back.needsAttentionReason, null)
+})

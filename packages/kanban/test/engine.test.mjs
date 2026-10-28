@@ -69,6 +69,10 @@ function setup(queues = {}) {
     sessions: new Map(),
     ticketSessions: new Map(),
     counter: 0,
+    /** flipped by the tests that stand in for a human turn in flight */
+    busy: false,
+    /** every session the engine actually sent a role prompt to */
+    turns: [],
     queues: {
       planner: [...(queues.plan ?? [{ type: 'plan', value: PLAN }])],
       implementer: [...(queues.implement ?? [{ type: 'implementation', value: IMPLEMENTATION }])],
@@ -88,6 +92,7 @@ function setup(queues = {}) {
     setPhase(id, role) { this.sessions.get(id).role = role },
     setRoute() {},
     async sendTurn({ sessionId }) {
+      this.turns.push(sessionId)
       const session = this.sessions.get(sessionId)
       const next = this.queues[session.role]?.shift()
       return { status: 'ok', action: next ?? null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
@@ -96,6 +101,7 @@ function setup(queues = {}) {
     async closeTicketSessions() {},
     liveTicketSession(ticketId, purpose) { return this.ticketSessions.get(`${ticketId}:${purpose}`) },
     isLive(id) { return this.sessions.has(id) },
+    isTicketBusy() { return this.busy },
     start() {},
     stop() {},
     reconcileTurns() {},
@@ -218,4 +224,117 @@ test('retryPhase uses plan before conditions and the current phase afterward', (
   store.replaceConditions(ticket.id, 1, [{ id: 'n', statement: 's', howVerified: 'v', ordinal: 0 }], 'plan')
   store.transitionTicket(ticket.id, { phase: 'implement' })
   assert.equal(engine.retryPhase(store.getTicket(ticket.id)), 'implement')
+})
+
+// --------------------------------------------------- realtime session activity
+
+const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+/** Move a picked-up ticket into needs attention the way a failed turn would. */
+function waiting(store, ticket, reason) {
+  store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine' })
+  store.setNeedsAttention(ticket.id, reason)
+  return store.getTicket(ticket.id)
+}
+
+test('a reactivated ticket is in flight and the engine sends it no prompt while its session is busy', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  waiting(store, ticket, 'turn failed in implement: boom')
+  driver.busy = true
+  engine.reactivateFromSession(ticket.id, 'session-1')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+  engine.recovered = true
+  await engine.tick()
+  await flush()
+  assert.deepEqual(driver.turns, [])
+  // once the human turn is over the engine takes the ticket back
+  driver.busy = false
+  await engine.tick()
+  await flush()
+  assert.ok(driver.turns.length > 0)
+})
+
+test('the backlog planning loop skips a busy ticket', async () => {
+  const { store, engine, driver } = setup()
+  store.createTicket({ title: 'later', acceptance: ['a'], workspaceCwd: CWD, planTiming: 'now', planQuestions: 'autonomous' })
+  driver.busy = true
+  engine.recovered = true
+  await engine.tick()
+  await flush()
+  assert.deepEqual(driver.turns, [])
+})
+
+test('advance refuses to drive a ticket whose session has a turn in flight', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  driver.busy = true
+  const result = await engine.advance(store.getTicket(ticket.id))
+  assert.deepEqual(result, { kind: 'wait' })
+  assert.deepEqual(driver.turns, [])
+})
+
+test('a turn that ends without a submission returns the ticket to needs attention with its reason', () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  waiting(store, ticket, 'attempt budget exhausted (3)')
+  engine.reactivateFromSession(ticket.id, 'session-1')
+  const flight = store.getTicket(ticket.id)
+  assert.equal(flight.column, 'now')
+  assert.equal(flight.needsAttentionReason, null)
+  engine.settleSessionTurn(ticket.id, 'session-1')
+  const back = store.getTicket(ticket.id)
+  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.needsAttentionReason, 'attempt budget exhausted (3)')
+  assert.equal(back.phase, 'implement')
+  const kinds = store.listEvents(ticket.id).map((event) => event.kind)
+  assert.ok(kinds.includes('session_reactivated'))
+  assert.ok(kinds.includes('session_settled'))
+})
+
+test('a structured submission from a human-driven turn is not settled back', async () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  waiting(store, ticket, 'implementer ended without calling kanban_submit_implementation')
+  engine.reactivateFromSession(ticket.id, 'session-1')
+  await engine.handleManualAction({
+    ticketId: ticket.id,
+    purpose: 'build',
+    sessionId: 'session-1',
+    action: { type: 'implementation', value: IMPLEMENTATION },
+  })
+  assert.equal(store.getTicket(ticket.id).phase, 'review')
+  engine.settleSessionTurn(ticket.id, 'session-1')
+  const after = store.getTicket(ticket.id)
+  assert.equal(after.column, 'now')
+  assert.equal(after.phase, 'review')
+  const attention = store.listEvents(ticket.id).filter((event) => event.kind === 'needs_attention')
+  assert.equal(attention.length, 1)
+})
+
+test('an approval-waiting ticket flips with its approval session and returns to Awaiting human approval', async () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const waitingTicket = store.getTicket(ticket.id)
+  assert.equal(waitingTicket.phase, 'verify')
+  assert.equal(waitingTicket.column, 'needs_attention')
+  engine.reactivateFromSession(ticket.id, 'session-approval')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+  engine.settleSessionTurn(ticket.id, 'session-approval')
+  const back = store.getTicket(ticket.id)
+  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.phase, 'verify')
+  assert.equal(back.needsAttentionReason, 'Awaiting human approval')
+})
+
+test('a reactivation of a ticket that is not waiting for attention changes nothing', () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  engine.reactivateFromSession(ticket.id, 'session-1')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(engine.reactivations.has(ticket.id), false)
+  engine.settleSessionTurn(ticket.id, 'session-1')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(driver.turns.length, 0)
 })
