@@ -171,6 +171,35 @@ test('cooldown, per-kind switches and subagent scope are honoured', () => {
   assert.equal(decide({ ...base, events, isSubagent: true, settings: { ...settings, includeSubagents: true } }).action, 'kick')
 })
 
+// The `continueKicker` kick service asks for one recovery kick right after it
+// watched a turn fail, which is always inside the cooldown a previous kick
+// started. bypassCooldown opens only that gate.
+test('bypassCooldown skips the cooldown gate and nothing else', () => {
+  const events = maxTokensTurn()
+  const cooled = { ...settings, cooldownMs: 60000 }
+  const inCooldown = { ...base, events, settings: cooled, lastKickAt: base.now - 1000 }
+  assert.equal(decide(inCooldown).action, 'skip')
+  assert.match(decide(inCooldown).why, /cooldown/)
+  const forced = decide({ ...inCooldown, bypassCooldown: true })
+  assert.equal(forced.action, 'kick')
+  assert.equal(forced.flavor, 'max-tokens')
+  assert.equal(forced.consecutive, 1)
+  // Explicit false behaves exactly like omitting it.
+  assert.equal(decide({ ...inCooldown, bypassCooldown: false }).action, 'skip')
+
+  // Every other gate still holds while the cooldown is bypassed.
+  assert.equal(decide({ ...base, events, settings: { ...cooled, kickOnMaxTokens: false }, bypassCooldown: true }).action, 'skip')
+  assert.equal(decide({ ...base, events, isSubagent: true, bypassCooldown: true }).action, 'skip')
+  assert.equal(decide({ ...base, events, settings: { ...cooled, maxConsecutiveKicks: 0 }, bypassCooldown: true }).action, 'skip')
+  const exhausted = [userMessage('user'), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn()]
+  const stopped = decide({ ...base, events: exhausted, settings: cooled, lastKickAt: base.now - 1000, bypassCooldown: true })
+  assert.equal(stopped.action, 'stop')
+  assert.match(stopped.why, /runaway guard/)
+
+  // A tail that is not a kickable halt is still not a kick, cooldown or not.
+  assert.equal(decide({ ...base, events: completedTurn(), bypassCooldown: true }).action, 'skip')
+})
+
 test('maxConsecutiveKicks 0 skips quietly instead of raising the runaway error', () => {
   const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxConsecutiveKicks: 0 } })
   assert.equal(d.action, 'skip')

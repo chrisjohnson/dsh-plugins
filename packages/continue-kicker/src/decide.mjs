@@ -203,12 +203,17 @@ function kickSummary(flavor, count, max) {
  * @param {number} input.lastKickAt - timestamp of this process's last kick for the session (0 if none).
  * @param {number} input.now - current timestamp.
  * @param {boolean} input.isSubagent - the session is a delegated child.
+ * @param {boolean} [input.bypassCooldown] - ignore the cooldown gate. Used by the
+ *   `continueKicker` kick service: a caller that just watched a turn fail and is
+ *   asking for exactly one recovery kick is not a watcher re-analysing the same
+ *   halt a second later. Every other gate (scope, kickable halt, the
+ *   maxConsecutiveKicks runaway guard) still applies.
  * @returns {{ action:'kick'|'skip'|'stop', why:string, consecutive:number,
  *             flavor?:string, text?:string, summary?:string, scopeSkipped?:true }}
  *   `consecutive` is the count including the kick being sent; on 'kick' the
  *   caller records `now` as the session's lastKickAt.
  */
-export function decide({ events, settings, lastKickAt, now, isSubagent }) {
+export function decide({ events, settings, lastKickAt, now, isSubagent, bypassCooldown = false }) {
   const verdict = analyzeTail(events, settings)
   const count = countConsecutiveKicks(events, settings)
 
@@ -230,7 +235,7 @@ export function decide({ events, settings, lastKickAt, now, isSubagent }) {
   }
 
   const sinceLast = now - (lastKickAt ?? 0)
-  if (sinceLast < settings.cooldownMs) {
+  if (!bypassCooldown && sinceLast < settings.cooldownMs) {
     return { action: 'skip', why: `within cooldown (${settings.cooldownMs - sinceLast}ms remaining)`, consecutive: count }
   }
 
