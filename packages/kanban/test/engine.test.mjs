@@ -51,7 +51,7 @@ const PROMPTS = {
   hashes: { plan: 'h' },
 }
 
-function setup(queues = {}) {
+function setup(queues = {}, options = {}) {
   const { config } = resolveConfig({
     autoPromote: false,
     roles: {
@@ -73,6 +73,10 @@ function setup(queues = {}) {
     busy: false,
     /** every session the engine actually sent a role prompt to */
     turns: [],
+    /** every session the engine waited on after a recovery kick */
+    waited: [],
+    /** scripted waitTurn results, shifted one per wait */
+    waits: [...(options.waits ?? [])],
     queues: {
       planner: [...(queues.plan ?? [{ type: 'plan', value: PLAN }])],
       implementer: [...(queues.implement ?? [{ type: 'implementation', value: IMPLEMENTATION }])],
@@ -95,7 +99,19 @@ function setup(queues = {}) {
       this.turns.push(sessionId)
       const session = this.sessions.get(sessionId)
       const next = this.queues[session.role]?.shift()
+      // A queue entry `{ fail: 'max-tokens' }` stands in for a halted turn.
+      if (next !== undefined && next.fail !== undefined) {
+        return { status: 'failed', error: next.fail, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+      }
       return { status: 'ok', action: next ?? null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+    },
+    async waitTurn({ sessionId }) {
+      this.waited.push(sessionId)
+      const next = this.waits.shift() ?? { fail: 'nothing scripted for this wait' }
+      if (next.fail !== undefined) return { status: 'failed', error: next.fail, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+      if (next.status === 'stalled') return { status: 'stalled', error: 'stalled', finalText: '', usage: null, events: [] }
+      if (next.status === 'disposed') return { status: 'disposed', error: 'session closed', finalText: '', usage: null, events: [] }
+      return { status: 'ok', action: next.action ?? null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
     },
     async closeSession() {},
     async closeTicketSessions() {},
@@ -107,8 +123,19 @@ function setup(queues = {}) {
     reconcileTurns() {},
   }
   const log = { info() {}, warn() {}, error() {}, debug() {} }
-  const engine = new Engine({ ctx: { get: () => undefined }, store, driver, getConfig: () => config, getPrompts: () => PROMPTS, log })
-  return { store, driver, engine, config }
+  // `options.kicker` may be a service, null (not mounted), or a function called
+  // per lookup so a test can stand in for a plugin that mounts later.
+  const lookups = { count: 0 }
+  const ctx = {
+    get(name) {
+      if (name !== 'continueKicker') return undefined
+      lookups.count += 1
+      if (typeof options.kicker === 'function') return options.kicker(lookups.count)
+      return options.kicker ?? undefined
+    },
+  }
+  const engine = new Engine({ ctx, store, driver, getConfig: () => config, getPrompts: () => PROMPTS, log })
+  return { store, driver, engine, config, lookups }
 }
 
 function pickedUp(store, extra = {}) {
@@ -337,4 +364,145 @@ test('a reactivation of a ticket that is not waiting for attention changes nothi
   engine.settleSessionTurn(ticket.id, 'session-1')
   assert.equal(store.getTicket(ticket.id).column, 'now')
   assert.equal(driver.turns.length, 0)
+})
+
+// ------------------------------------------------------------------ auto-recovery
+//
+// A halted role turn asks dsh-continue-kicker's kick service for one recovery
+// kick and waits for the turn it starts. The policy (what is kickable, how many
+// kicks in a row) lives in that plugin; these tests stand in for both answers,
+// and for the service being absent.
+
+/** A kick service that always says yes, counting like the real runaway guard. */
+function alwaysKicks(max = 3) {
+  const calls = []
+  return {
+    version: 1,
+    calls,
+    kick(sessionId, opts) {
+      calls.push({ sessionId, ...opts })
+      if (calls.length > max) return { kicked: false, why: `${max} consecutive plugin kicks without progress`, stopped: true }
+      return { kicked: true, flavor: 'max-tokens', consecutive: calls.length }
+    },
+  }
+}
+
+test('a halted implement turn is recovered by a kick, in the same attempt', async () => {
+  const kicker = alwaysKicks()
+  const { store, engine, driver } = setup(
+    { implement: [{ fail: 'max-tokens' }] },
+    { kicker, waits: [{ action: { type: 'implementation', value: IMPLEMENTATION } }] },
+  )
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const done = store.getTicket(ticket.id)
+  // implement recovered, review passed on its own turn: the run went as far as it can.
+  assert.equal(done.phase, 'verify')
+  assert.equal(done.attemptCount, 1, 'a recovered turn does not burn an attempt')
+  assert.equal(driver.waited.length, 1)
+  assert.equal(kicker.calls.length, 1)
+  assert.equal(kicker.calls[0].bypassCooldown, true)
+  const events = store.listEvents(ticket.id, { limit: 500 }).filter((e) => e.kind === 'auto_recovered')
+  assert.equal(events.length, 1)
+  assert.equal(events[0].payload.flavor, 'max-tokens')
+  assert.equal(events[0].payload.phase, 'implement')
+  const spans = store.listSpans(ticket.id).map((s) => s.name)
+  assert.ok(spans.includes('implement-continuation'), `continuation span missing in ${JSON.stringify(spans)}`)
+})
+
+test('a second halt is recovered again, and the guard ends it', async () => {
+  const kicker = alwaysKicks(2)
+  const { store, engine, driver } = setup(
+    { implement: [{ fail: 'max-tokens' }] },
+    { kicker, waits: [{ fail: 'max-tokens' }, { action: { type: 'implementation', value: IMPLEMENTATION } }] },
+  )
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(driver.waited.length, 2)
+  assert.equal(store.listEvents(ticket.id, { limit: 500 }).filter((e) => e.kind === 'auto_recovered').length, 2)
+})
+
+test('when the guard declines the kick, the ticket parks with the original reason', async () => {
+  const kicker = { version: 1, kick: () => ({ kicked: false, why: '3 consecutive plugin kicks without progress', stopped: true }) }
+  const { store, engine, driver } = setup({ implement: [{ fail: 'max-tokens' }] }, { kicker, waits: [] })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.needsAttentionReason, 'turn failed in implement: max-tokens')
+  assert.equal(driver.waited.length, 0, 'nothing to wait for when no kick was sent')
+  assert.equal(store.listEvents(ticket.id, { limit: 500 }).some((e) => e.kind === 'auto_recovered'), false)
+})
+
+test('a halt that is not kickable parks the same way', async () => {
+  const kicker = { version: 1, kick: () => ({ kicked: false, why: 'last turn aborted by user' }) }
+  const { store, engine } = setup({ implement: [{ fail: 'aborted' }] }, { kicker })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in implement: aborted')
+})
+
+test('without the service mounted, a halted turn parks exactly as before (degraded path)', async () => {
+  const { store, engine, driver } = setup({ implement: [{ fail: 'max-tokens' }] }, { kicker: null })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.needsAttentionReason, 'turn failed in implement: max-tokens')
+  assert.equal(driver.waited.length, 0)
+  assert.equal(store.listEvents(ticket.id, { limit: 500 }).some((e) => e.kind === 'auto_recovered'), false)
+})
+
+test('the service is looked up lazily, so a plugin mounted after kanban is still found', async () => {
+  const kicker = alwaysKicks()
+  // Absent for the first lookups, present afterwards.
+  const { store, engine, driver } = setup({ implement: [{ fail: 'max-tokens' }] }, {
+    kicker: (n) => (n === 1 ? undefined : kicker),
+    waits: [{ action: { type: 'implementation', value: IMPLEMENTATION } }],
+  })
+  assert.equal(engine.kickerService(), null, 'not mounted yet')
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(driver.waited.length, 1)
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+})
+
+test('a turn that stalls after the kick parks with that reason', async () => {
+  const kicker = alwaysKicks()
+  const { store, engine } = setup({ implement: [{ fail: 'max-tokens' }] }, { kicker, waits: [{ status: 'stalled' }] })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in implement: turn stalled after auto-recovery')
+})
+
+test('a disposed session during recovery parks with the original reason', async () => {
+  const kicker = alwaysKicks()
+  const { store, engine } = setup({ implement: [{ fail: 'max-tokens' }] }, { kicker, waits: [{ status: 'disposed' }] })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in implement: max-tokens')
+})
+
+test('a service that never declines is bounded by the loop backstop, not an infinite wait', async () => {
+  const kicker = alwaysKicks(Number.MAX_SAFE_INTEGER)
+  const waits = Array.from({ length: 20 }, () => ({ fail: 'max-tokens' }))
+  const { store, engine, driver } = setup({ implement: [{ fail: 'max-tokens' }] }, { kicker, waits })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(driver.waited.length, 8, 'the backstop is 8 rounds')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in implement: max-tokens')
+})
+
+test('a halted plan turn is recovered too', async () => {
+  const kicker = alwaysKicks()
+  const { store, engine, driver } = setup(
+    { plan: [{ fail: 'max-tokens' }], implement: [] },
+    { kicker, waits: [{ action: { type: 'plan', value: PLAN } }] },
+  )
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(driver.waited.length, 1)
+  assert.equal(store.listConditions(ticket.id).length, 1, 'the recovered plan landed')
+  assert.equal(store.getTicket(ticket.id).phase, 'implement')
 })

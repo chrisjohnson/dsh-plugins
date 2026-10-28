@@ -378,6 +378,45 @@ export class SessionDriver {
     });
   }
 
+  /**
+   * Arm the waiter machinery for one turn on a live session: the waiters map
+   * entry, the stall interval, reconcileTurns coverage and #settleTurn on
+   * turn/end. Shared by sendTurn (which then injects the role prompt) and
+   * waitTurn (which waits for a turn someone else starts).
+   *
+   * A turn that has already started is fine: the waiter attaches to it and
+   * settles on its turn/end like any other.
+   */
+  #armWaiter(sessionId, stallTimeoutMs) {
+    const startedMono = process.hrtime.bigint()
+    let settle
+    const promise = new Promise((resolve, reject) => {
+      settle = { resolve, reject }
+    })
+    const waiter = { resolve: settle.resolve, reject: settle.reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId, awaitingUser: false }
+    const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)))
+    const timer = setInterval(() => {
+      if (this.waiters.get(sessionId) !== waiter) return;
+      if (waiter.awaitingUser) return;
+      if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
+      this.waiters.delete(sessionId);
+      clearInterval(timer);
+      waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'no turn event within stallTimeoutMs', startedMono, action: null });
+    }, interval);
+    if (typeof timer.unref === 'function') timer.unref();
+    waiter.timer = timer;
+    this.waiters.set(sessionId, waiter);
+    return {
+      promise,
+      /** Disarm without settling: used when admitting the prompt fails. */
+      abort: (error) => {
+        this.waiters.delete(sessionId);
+        clearInterval(timer);
+        settle.reject(error);
+      },
+    };
+  }
+
   sendTurn({ sessionId, prompt, stallTimeoutMs }) {
     const live = this.live.get(sessionId);
     if (live === undefined) return Promise.reject(new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' }));
@@ -385,29 +424,31 @@ export class SessionDriver {
       return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     }
     this.actions.delete(sessionId);
-    const startedMono = process.hrtime.bigint();
-    return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId, awaitingUser: false };
-      const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
-      const timer = setInterval(() => {
-        if (this.waiters.get(sessionId) !== waiter) return;
-        if (waiter.awaitingUser) return;
-        if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
-        this.waiters.delete(sessionId);
-        clearInterval(timer);
-        waiter.resolve({ status: 'stalled', finalText: null, usage: null, reason: null, error: 'no turn event within stallTimeoutMs', startedMono, action: null });
-      }, interval);
-      if (typeof timer.unref === 'function') timer.unref();
-      waiter.timer = timer;
-      this.waiters.set(sessionId, waiter);
-      try {
-        live.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }));
-      } catch (error) {
-        this.waiters.delete(sessionId);
-        clearInterval(timer);
-        reject(new DispatchError(`could not admit prompt: ${error?.message ?? error}`, { code: 'PROMPT_REJECTED' }));
-      }
-    });
+    const { promise, abort } = this.#armWaiter(sessionId, stallTimeoutMs);
+    try {
+      live.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }));
+    } catch (error) {
+      abort(new DispatchError(`could not admit prompt: ${error?.message ?? error}`, { code: 'PROMPT_REJECTED' }));
+    }
+    return promise;
+  }
+
+  /**
+   * Wait for the next turn on a live session without starting one. The engine
+   * uses this after asking dsh-continue-kicker for a recovery kick: the kick
+   * starts the turn, kanban watches it end and takes the structured action from
+   * it exactly as it would from a turn it prompted itself.
+   *
+   * Same waiter machinery as sendTurn, same stall timeout, same reconcileTurns
+   * coverage; the only difference is that no prompt is injected.
+   */
+  waitTurn({ sessionId, stallTimeoutMs }) {
+    const live = this.live.get(sessionId);
+    if (live === undefined) return Promise.reject(new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' }));
+    if (this.waiters.has(sessionId)) {
+      return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
+    }
+    return this.#armWaiter(sessionId, stallTimeoutMs).promise;
   }
 
   reconcileTurns() {

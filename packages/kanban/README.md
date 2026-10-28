@@ -137,8 +137,46 @@ usage records tokens and cost. Timeline blocks are plugin/phase steps, with
 expandable prompt/result/plan/review artifacts and lifecycle
 events. JSONL/CSV exports and analytics remain available.
 
+## Auto-recovery of a halted turn
+
+A role turn can halt for reasons that have nothing to do with the work: the
+output-token limit mid-answer, a backend that dropped, a restart that orphaned
+the turn. Before 0.4.0 that parked the ticket, and the session sat asleep until
+somebody opened it — at which point [dsh-continue-kicker]'s reopen door kicked it
+awake *outside* the workflow, so the board said "needs attention" while the
+session was actually still working.
+
+Now the engine recovers it inside the workflow. When a plan, implement or review
+turn fails, kanban asks the `continueKicker` service that plugin provides for
+one explicit kick (`kick(sessionId, { bypassCooldown: true })`), waits for the
+turn it starts, and takes the structured submission from that turn exactly as it
+would from one it prompted itself. The ticket stays In flight throughout;
+nothing parks until recovery stops.
+
+**The policy is not duplicated here.** What counts as a kickable halt, which
+message is sent, and how many kicks in a row still count as recovery rather than
+a loop (`maxConsecutiveKicks`) all live in continue-kicker; kanban pulls the
+trigger and stops the moment it is declined. A kick that the runaway guard
+refuses, a halt it will not kick (an explicit abort), or a turn that stalls after
+the kick all park the ticket with the reason it would have had before —
+`turn failed in implement: max-tokens` and friends. Each recovered turn is
+recorded as a `<phase>-continuation` span with its own usage, so a recovery round
+is visible and costed, and it does not consume an attempt.
+
+**The integration is optional and detected, never required.** The service is
+resolved lazily and duck-typed (`typeof ctx.get('continueKicker')?.kick ===
+'function'`), the same way the worktree integration treats
+`betterGitWorktree`. Without the plugin installed kanban logs one line at boot —
+`dsh-continue-kicker not mounted; halted turns park to needs-attention without
+auto-recovery` — and behaves exactly as in 0.3.x. `GET /api/kanban/capabilities`
+reports `continueKicker: true|false` alongside `worktree`. A recovery kick shows
+up on the ticket timeline as an `auto_recovered` event carrying the phase, the
+halt flavor and the kick number.
+
 ## Restart safety
 
 Running spans are abandoned on restart; affected tickets return to implement or
 needs attention, and their workflow sessions are closed so continue-kicker does
 not resume a dead Kanban session.
+
+[dsh-continue-kicker]: https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/continue-kicker#provided-service-continuekicker
