@@ -3,6 +3,37 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+## 0.4.0
+
+### Added
+
+- Engine-owned auto-recovery of a halted role turn. When a plan, implement or
+  review turn fails, the engine now asks the `continueKicker` service provided by
+  dsh-continue-kicker 0.3.0 for one explicit kick
+  (`kick(sessionId, { bypassCooldown: true })`) and waits for the turn it starts,
+  taking the structured submission from it like any other role turn. The ticket
+  stays In flight while recovery runs; each recovered turn is recorded as a
+  `<phase>-continuation` span with its own usage and does not consume an attempt,
+  and the timeline carries an `auto_recovered` event per kick.
+  The halt policy — what is kickable, how many kicks in a row — stays in
+  continue-kicker, so nothing is duplicated.
+- `SessionDriver.waitTurn({ sessionId, stallTimeoutMs })`: the sendTurn waiter
+  machinery (waiters entry, stall interval, `reconcileTurns` coverage, settle on
+  `turn/end`) without injecting a prompt, so the engine can watch a turn that
+  someone else started.
+- `GET /api/kanban/capabilities` now reports `continueKicker` next to `worktree`.
+
+### Changed
+
+- The integration is optional and detected, exactly like the worktree one: the
+  service is resolved lazily and duck-typed, and with dsh-continue-kicker absent
+  or older than 0.3.0 kanban logs one line at boot
+  (`dsh-continue-kicker not mounted; halted turns park to needs-attention without
+  auto-recovery`) and a failed turn parks with the same reason it did in 0.3.x.
+  A declined kick, a non-kickable halt, a stall after the kick or a disposed
+  session all park the ticket with the original failure.
 ## 0.3.7
 
 ### Fixed

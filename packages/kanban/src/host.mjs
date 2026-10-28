@@ -425,6 +425,7 @@ export default async function kanban(ctx, config = {}) {
               ok: true,
               value: {
                 worktree: typeof ctx.get('betterGitWorktree')?.createForPath === 'function',
+                continueKicker: typeof ctx.get('continueKicker')?.kick === 'function',
               },
             };
           case 'worktree': {

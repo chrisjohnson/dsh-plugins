@@ -18,6 +18,13 @@ import { estimateTurnCost, priceUsage } from './usage.mjs';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
+/**
+ * Backstop for the auto-recovery loop. The real cap is continue-kicker's own
+ * runaway guard (`maxConsecutiveKicks`), which declines a kick once a session
+ * has had too many; this only bounds the loop against a service that keeps
+ * saying yes.
+ */
+const AUTO_RECOVERY_MAX_ROUNDS = 8;
 
 function ticketStateBlock(ticket, acceptance) {
   return [
@@ -57,6 +64,9 @@ export class Engine {
     this.disposed = false;
     this.recovered = false;
     this.lastPrune = 0;
+    /** the dsh-continue-kicker service once resolved; undefined = not looked up yet */
+    this.kicker = undefined;
+    this.kickerAnnounced = false;
     if (this.driver !== null && typeof this.driver === 'object') {
       this.driver.approval = {
         approve: (ticketId, message) => this.approve(ticketId, message),
@@ -70,6 +80,9 @@ export class Engine {
   }
 
   start() {
+    if (this.kickerService() === null) {
+      this.log.info('dsh-continue-kicker not mounted; halted turns park to needs-attention without auto-recovery');
+    }
     this.driver.start();
     const tick = () => {
       if (!this.disposed) void this.tick();
@@ -257,7 +270,8 @@ export class Engine {
       title: ticket.title,
     });
     const runId = this.ensureRun(ticket);
-    const turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan', attempt: 1, runId });
+    let turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan', attempt: 1, runId });
+    if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'plan')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'plan');
     const action = turn.action;
     if (action === null || action.type !== 'plan') {
@@ -310,7 +324,8 @@ export class Engine {
       review: rework === null ? '' : JSON.stringify(rework, null, 2),
     });
     const runId = this.ensureRun(ticket);
-    const turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
+    let turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
+    if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'implement')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'implement');
     if (turn.action === null || turn.action.type !== 'implementation') {
       return this.needsAttention(ticket, 'implementer ended without calling kanban_submit_implementation');
@@ -347,7 +362,8 @@ export class Engine {
       diff,
     });
     const runId = this.ensureRun(ticket);
-    const turn = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt, spanName: 'review', attempt: ticket.attemptCount, runId });
+    let turn = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt, spanName: 'review', attempt: ticket.attemptCount, runId });
+    if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'review')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'review');
     if (turn.action === null || turn.action.type !== 'review') {
       return this.needsAttention(ticket, 'reviewer ended without calling kanban_submit_review');
@@ -563,13 +579,116 @@ export class Engine {
     this.log.info('ticket %s returned to needs attention after session %s', ticket.key, sessionId);
   }
 
+  // -------------------------------------------------------------- auto-recovery
+  //
+  // A role turn that halts — output budget hit mid-answer, a backend that
+  // dropped, a restart that orphaned the turn — used to park the ticket and
+  // leave the session asleep until someone opened it, at which point
+  // dsh-continue-kicker's reopen door kicked it awake outside the workflow.
+  // Instead the engine now asks for that kick itself, through the service the
+  // plugin provides, and waits for the turn it starts. The policy stays in
+  // continue-kicker: what counts as a kickable halt, which message to send,
+  // how many kicks in a row are still recovery and not a loop. Kanban only
+  // pulls the trigger and stops the moment it is declined.
+  //
+  // With the plugin absent, or older than the release that provides the
+  // service, none of this runs and a failed turn parks exactly as before.
+
+  /**
+   * The `continueKicker` service, or null when it is not there. Resolved lazily
+   * (the plugin may mount after kanban) and duck-typed, so a missing or foreign
+   * service is simply "no recovery", never a boot failure.
+   */
+  kickerService() {
+    if (this.kicker !== undefined && this.kicker !== null) return this.kicker;
+    let candidate = null;
+    try {
+      candidate = this.ctx.get('continueKicker');
+    } catch {
+      candidate = null;
+    }
+    if (candidate === undefined || candidate === null || typeof candidate.kick !== 'function') return null;
+    this.kicker = candidate;
+    if (!this.kickerAnnounced) {
+      this.kickerAnnounced = true;
+      this.log.info('auto-recovery available: dsh-continue-kicker kick service v%s', candidate.version ?? '?');
+    }
+    return candidate;
+  }
+
+  /**
+   * Recover a failed role turn with one kick from the service, then wait for the
+   * turn it starts. Returns a normalized turn result when a kicked turn came
+   * back, or null when recovery is unavailable or declined — the caller then
+   * parks the ticket with the original failure, which is the pre-0.4.0
+   * behaviour.
+   */
+  async autoRecover(ticket, turn, phaseName) {
+    const kicker = this.kickerService();
+    if (kicker === null) return null;
+    const sessionId = turn.sessionId;
+    if (typeof sessionId !== 'string' || sessionId === '') return null;
+    if (typeof this.driver.waitTurn !== 'function') return null;
+    const config = this.getConfig();
+    const runId = turn.runId ?? this.ensureRun(ticket);
+
+    for (let round = 1; round <= AUTO_RECOVERY_MAX_ROUNDS; round++) {
+      const kick = await kicker.kick(sessionId, { bypassCooldown: true });
+      if (kick?.kicked !== true) {
+        this.log.info('ticket %s: no auto-recovery in %s - %s', ticket.key, phaseName, kick?.why ?? 'the kick service declined');
+        return null;
+      }
+      this.appendEvent(ticket.id, 'auto_recovered', {
+        phaseFrom: ticket.phase,
+        phaseTo: ticket.phase,
+        payload: { phase: phaseName, flavor: kick.flavor, kick: kick.consecutive, round, sessionId },
+      });
+      this.log.info('ticket %s: auto-recovery kick %d (%s) in %s, waiting for the turn', ticket.key, kick.consecutive, kick.flavor, phaseName);
+
+      let waited;
+      const startedMono = process.hrtime.bigint();
+      try {
+        waited = await this.driver.waitTurn({ sessionId, stallTimeoutMs: config.stallTimeoutMs });
+      } catch (error) {
+        this.log.warn('ticket %s: could not wait for the recovered turn: %s', ticket.key, String(error?.message ?? error));
+        return null;
+      }
+      const result = this.continuationTurn(ticket, turn, runId, waited, phaseName, startedMono);
+      if (result.kind === 'ok') return result;
+      if (waited.status === 'stalled') {
+        this.log.warn('ticket %s: turn stalled after auto-recovery in %s', ticket.key, phaseName);
+        return { kind: 'failed', error: 'turn stalled after auto-recovery', sessionId, spanId: turn.spanId };
+      }
+      if (waited.status === 'disposed') return null;
+      // The kicked turn halted again. Loop: the runaway guard inside kick() is
+      // the cap, and it will decline before this backstop does.
+      this.log.info('ticket %s: recovered turn in %s failed again (%s)', ticket.key, phaseName, result.error ?? waited.status);
+    }
+    this.log.warn('ticket %s: auto-recovery gave up after %d rounds in %s', ticket.key, AUTO_RECOVERY_MAX_ROUNDS, phaseName);
+    return null;
+  }
+
+  /** Record one waited recovery turn as a `<phase>-continuation` span. */
+  continuationTurn(ticket, turn, runId, waited, phaseName, startedMono) {
+    const route = turn.route ?? { provider: null, model: null };
+    const span = this.startRoleSpan({
+      ticket,
+      role: turn.role ?? phaseName,
+      route,
+      spanName: `${phaseName}-continuation`,
+      attempt: turn.attempt ?? ticket.attemptCount,
+      runId,
+      promptHash: null,
+    });
+    return this.settleWaitedTurn(ticket, span, route, waited, startedMono, turn.sessionId);
+  }
+
   // -------------------------------------------------------------- role turn
 
-  async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId }) {
-    const promptHash = shortHash(hashText(prompt));
-    const spanId = randomUUID();
-    const span = this.store.startSpan({
-      id: spanId,
+  /** Open the span one agent turn is recorded under. */
+  startRoleSpan({ ticket, role, route, spanName, attempt, runId, promptHash }) {
+    return this.store.startSpan({
+      id: randomUUID(),
       ticketId: ticket.id,
       runId,
       parentSpanId: null,
@@ -581,6 +700,35 @@ export class Engine {
       attempt,
       promptHash,
     });
+  }
+
+  /**
+   * Settle one waited turn into the engine's turn result: tool spans and usage
+   * recorded, the span closed, and `{ kind: 'ok' | 'failed' }` out. Shared by a
+   * turn the engine prompted and by a turn it only waited for (auto-recovery).
+   */
+  settleWaitedTurn(ticket, span, route, turn, startedMono, sessionId) {
+    const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
+    this.recordToolSpans(ticket, span, turn.events ?? []);
+    this.recordTurnUsage(ticket, span, route, turn.usage);
+    if (turn.status === 'ok') {
+      this.store.endSpan(span.id, { status: 'ok', durationMs });
+      return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId, spanId: span.id };
+    }
+    if (turn.status === 'stalled') {
+      this.store.endSpan(span.id, { status: 'abandoned', error: 'stalled', durationMs });
+      return { kind: 'failed', error: 'turn stalled', sessionId, spanId: span.id };
+    }
+    this.store.endSpan(span.id, { status: 'failed', error: turn.error ?? turn.status, durationMs });
+    return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id };
+  }
+
+  async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId }) {
+    const promptHash = shortHash(hashText(prompt));
+    const span = this.startRoleSpan({ ticket, role, route, spanName, attempt, runId, promptHash });
+    // Everything a later auto-recovery needs to record its continuation turns
+    // the same way, carried on the result instead of re-derived by the caller.
+    const context = { role, route, attempt, runId, spanName };
     const startedMono = process.hrtime.bigint();
     try {
       const session = await this.driver.ensureTicketSession({ ticket, role, route, purpose });
@@ -595,26 +743,14 @@ export class Engine {
         provider: route.provider,
         model: route.model,
       });
-      this.store.addArtifact(ticket.id, `${role}_prompt_${spanName}`, prompt, { spanId });
+      this.store.addArtifact(ticket.id, `${role}_prompt_${spanName}`, prompt, { spanId: span.id });
       const turn = await this.driver.sendTurn({ sessionId: session.sessionId, prompt, stallTimeoutMs: this.getConfig().stallTimeoutMs });
-      const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
-      this.recordToolSpans(ticket, span, turn.events ?? []);
-      this.recordTurnUsage(ticket, span, route, turn.usage);
-      if (turn.status === 'ok') {
-        this.store.endSpan(span.id, { status: 'ok', durationMs });
-        return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId: session.sessionId, spanId: span.id };
-      }
-      if (turn.status === 'stalled') {
-        this.store.endSpan(span.id, { status: 'abandoned', error: 'stalled', durationMs });
-        return { kind: 'failed', error: 'turn stalled', sessionId: session.sessionId, spanId: span.id };
-      }
-      this.store.endSpan(span.id, { status: 'failed', error: turn.error ?? turn.status, durationMs });
-      return { kind: 'failed', error: turn.error ?? turn.status, sessionId: session.sessionId, spanId: span.id };
+      return { ...this.settleWaitedTurn(ticket, span, route, turn, startedMono, session.sessionId), ...context };
     } catch (error) {
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.log.error('role turn %s/%s failed: %s', role, spanName, error?.stack ?? String(error));
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });
-      return { kind: 'failed', error: String(error?.stack ?? error), spanId: span.id };
+      return { kind: 'failed', error: String(error?.stack ?? error), spanId: span.id, ...context };
     }
   }
 
