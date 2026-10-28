@@ -76,24 +76,30 @@ export class SessionDriver {
       setTimeout(() => { void this.attachExistingSession(agent.id, agent).catch((error) => this.log.warn('kanban: reattach %s failed: %s', agent.id, String(error?.message ?? error))); }, 100);
     });
     this.offEvent = this.ctx.on('session/event', (session, event) => {
-      this.#trackTicketTurn(session, event);
       const waiter = this.waiters.get(session.id);
-      if (waiter === undefined) return;
-      if (event.type === 'tool/call') {
-        const name = event.data?.name ?? event.data?.call?.name;
-        if (name === 'ask_user_question') waiter.awaitingUser = true;
-      } else if (event.type === 'tool/result') {
-        const name = event.data?.name ?? event.data?.message?.name;
-        if (name === 'ask_user_question') waiter.awaitingUser = false;
-      }
-      waiter.lastEventAt = Date.now();
-      if (event.type === 'turn/end') {
-        try {
-          this.#settleTurn(session, event, waiter);
-        } catch (error) {
-          this.log.warn('kanban driver: settle failed: %s', String(error?.stack ?? error));
+      if (waiter !== undefined) {
+        if (event.type === 'tool/call') {
+          const name = event.data?.name ?? event.data?.call?.name;
+          if (name === 'ask_user_question') waiter.awaitingUser = true;
+        } else if (event.type === 'tool/result') {
+          const name = event.data?.name ?? event.data?.message?.name;
+          if (name === 'ask_user_question') waiter.awaitingUser = false;
+        }
+        waiter.lastEventAt = Date.now();
+        if (event.type === 'turn/end') {
+          try {
+            this.#settleTurn(session, event, waiter);
+          } catch (error) {
+            this.log.warn('kanban driver: settle failed: %s', String(error?.stack ?? error));
+          }
         }
       }
+      // Last, and only after this turn's own waiter is gone: the settle path asks
+      // the driver whether the ticket is busy, and the turn that just ended must
+      // not be the answer. Running this first made an engine-driven turn on a
+      // reactivated ticket look busy to its own settle, so the ticket was never
+      // parked again (the approval intro was the case that hit it).
+      this.#trackTicketTurn(session, event);
     });
   }
 

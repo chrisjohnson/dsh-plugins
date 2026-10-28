@@ -566,11 +566,21 @@ export class Engine {
   settleSessionTurn(ticketId, sessionId) {
     const mark = this.reactivations.get(ticketId);
     if (mark === undefined) return;
-    this.reactivations.delete(ticketId);
     const ticket = this.store.getTicket(ticketId);
-    if (ticket === undefined || ticket.column !== 'now') return;
+    if (ticket === undefined || ticket.column !== 'now') {
+      this.reactivations.delete(ticketId);
+      return;
+    }
     const reason = mark.reason ?? 'session ended without submitting';
-    this.needsAttention(ticket, reason, { sessionId, settled: true });
+    const result = this.needsAttention(ticket, reason, { sessionId, settled: true });
+    if (result.kind !== 'needs_attention') {
+      // A different session of this ticket is genuinely mid-turn, so In flight is
+      // the honest column right now. Keep the mark for that turn's end instead of
+      // recording a settle that never moved the ticket.
+      this.log.info('ticket %s settle deferred: another session is still active', ticket.key);
+      return;
+    }
+    this.reactivations.delete(ticketId);
     this.appendEvent(ticketId, 'session_settled', {
       phaseFrom: ticket.phase,
       phaseTo: ticket.phase,

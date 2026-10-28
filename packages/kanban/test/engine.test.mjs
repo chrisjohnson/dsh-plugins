@@ -319,6 +319,32 @@ test('a turn that ends without a submission returns the ticket to needs attentio
   assert.ok(kinds.includes('session_settled'))
 })
 
+test('a settle is deferred, not claimed, while another session of the ticket is mid-turn', () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  waiting(store, ticket, 'turn failed in implement: boom')
+  engine.reactivateFromSession(ticket.id, 'session-1')
+  assert.equal(store.getTicket(ticket.id).column, 'now')
+  const parked = () => store.listEvents(ticket.id).filter((event) => event.kind === 'needs_attention').length
+  const before = parked()
+  driver.busy = true
+  engine.settleSessionTurn(ticket.id, 'session-1')
+  const held = store.getTicket(ticket.id)
+  assert.equal(held.column, 'now')
+  assert.equal(held.needsAttentionReason, null)
+  const deferred = store.listEvents(ticket.id).map((event) => event.kind)
+  assert.equal(deferred.includes('session_settled'), false)
+  assert.equal(parked(), before)
+  assert.equal(engine.reactivations.has(ticket.id), true)
+  // once the other session is done the same settle parks the ticket with its reason
+  driver.busy = false
+  engine.settleSessionTurn(ticket.id, 'session-1')
+  const back = store.getTicket(ticket.id)
+  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.needsAttentionReason, 'turn failed in implement: boom')
+  assert.ok(store.listEvents(ticket.id).map((event) => event.kind).includes('session_settled'))
+})
+
 test('a structured submission from a human-driven turn is not settled back', async () => {
   const { store, engine } = setup()
   const ticket = pickedUp(store)
