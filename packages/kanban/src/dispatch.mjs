@@ -359,6 +359,13 @@ export class SessionDriver {
   #settleTurn(session, event, waiter) {
     this.waiters.delete(session.id);
     clearInterval(waiter.timer);
+    // Settling a turn means it is over, whichever path noticed: the live
+    // `turn/end` handler, or `reconcileTurns` recovering a turn whose end was
+    // never delivered. The activity bookkeeping has to agree, or the ticket
+    // stays "busy" on the very turn that just ended and the engine's park is
+    // skipped by the busy guard, leaving the phase to be relaunched as a fresh
+    // attempt on the next tick.
+    this.activity.turnEnd(session.id);
     const turn = event.data.turn;
     const events = session.snapshotEvents ? session.snapshotEvents() : [];
     const turnEvents = events.filter((e) => e.data !== null && typeof e.data === 'object' && e.data.turn === turn);

@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.4.2
+
+### Fixed
+
+- A settled turn now clears the ticket's realtime busy flag. `#settleTurn` can be
+  reached from `reconcileTurns` (a `turn/end` the driver never saw), and that path
+  left the session in `TurnActivity.active`. The 0.3.7 busy guard in
+  `needsAttention()` then read the ticket as still working and skipped the park,
+  so a halted turn whose auto-recovery was declined stayed In flight and was
+  relaunched as a fresh attempt on every tick: with `maxConsecutiveKicks: 3` and
+  `maxAttempts: 3` that meant 9 recovery kicks and a park reason of
+  `attempt budget exhausted (3)` instead of the halt. Found by the lab's
+  `kanban-recovery` smoke against the 0.4.0 + 0.3.7 combination.
+
 ## 0.4.1
 
 ### Fixed
