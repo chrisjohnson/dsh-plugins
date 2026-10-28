@@ -1,7 +1,7 @@
 // dsh-kanban: the workflow engine.
 //
 // Code decides. This file owns every transition: flat plan session, the
-// implement <-> review session, the final mechanical verify session, retries,
+// implement <-> review session, code-gated approval, retries,
 // human attention, and session teardown. Agents return structured data through
 // tools; no phase result is parsed out of assistant prose.
 
@@ -13,7 +13,7 @@ import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
 import { compareQueue } from './lifecycle.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
-import { normalizePlan, validatePlan, validateVerification } from './result.mjs';
+import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -55,6 +55,13 @@ export class Engine {
     this.disposed = false;
     this.recovered = false;
     this.lastPrune = 0;
+    if (this.driver !== null && typeof this.driver === 'object') {
+      this.driver.approval = {
+        approve: (ticketId, message) => this.approve(ticketId, message),
+        discard: (ticketId, reason) => this.discard(ticketId, reason),
+        plan: (ticketId, value) => this.submitApprovalPlan(ticketId, value),
+      };
+    }
   }
 
   start() {
@@ -132,8 +139,10 @@ export class Engine {
           restartRecovery: true,
           sessionId: session.sessionId,
         });
-      } else if (ticket.phase === 'review' || ticket.phase === 'verify') {
+      } else if (ticket.phase === 'review') {
         this.store.transitionTicket(ticketId, { phase: 'implement' }, { actor: 'engine', reason: 'restart recovery' });
+      } else if (ticket.phase === 'verify') {
+        this.store.setNeedsAttention(ticketId, 'approval session was interrupted by a restart; approve, discard, or open approval again');
       }
     }
     for (const span of this.store.runningSpans()) {
@@ -217,12 +226,6 @@ export class Engine {
       }
       if (ticket.phase === 'review') {
         const result = await this.review(ticket);
-        if (result.kind !== 'continue') return;
-        ticket = this.store.getTicket(ticket.id);
-        continue;
-      }
-      if (ticket.phase === 'verify') {
-        const result = await this.verify(ticket);
         if (result.kind !== 'continue') return;
         ticket = this.store.getTicket(ticket.id);
         continue;
@@ -347,9 +350,17 @@ export class Engine {
     const value = turn.action.value;
     this.store.addArtifact(ticket.id, 'review', JSON.stringify(value, null, 2), { spanId: turn.spanId });
     if (value.verdict === 'pass') {
+      const gaps = verifyReview(value, this.store.listConditions(ticket.id), acceptance, config.confidenceThreshold);
+      if (gaps.length > 0) {
+        const feedback = `Review cannot be code-verified: ${gaps.join('; ')}`;
+        this.store.addArtifact(ticket.id, 'review_feedback', feedback, { spanId: turn.spanId });
+        this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'implement', payload: { gaps } });
+        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: feedback });
+        return { kind: 'continue' };
+      }
       await this.closeSession(turn.sessionId);
-      this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed' });
-      return { kind: 'continue' };
+      await this.enterApproval(ticket);
+      return { kind: 'wait' };
     }
     const instruction = typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; ');
     this.store.addArtifact(ticket.id, 'review_feedback', instruction, { spanId: turn.spanId });
@@ -357,68 +368,104 @@ export class Engine {
     return { kind: 'continue' };
   }
 
-  // ----------------------------------------------------------------- verify
+  // --------------------------------------------------------------- approval
 
-  async verify(ticket) {
-    if (this.stopped(ticket.id)) return { kind: 'stopped' };
-    const config = this.getConfig();
-    const conditions = this.store.listConditions(ticket.id);
-    if (conditions.length === 0) return this.needsAttention(ticket, 'no done_when conditions to verify');
-    const route = this.resolveRoute('verifier', ticket.attemptCount);
-    const admission = this.admit(ticket, route, 'verifier', { attempt: ticket.attemptCount });
-    if (!admission.ok) return this.hold(ticket, admission);
-    const prompts = this.getPrompts();
-    const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
-    const reviewArtifact = this.store.latestArtifact(ticket.id, 'review');
-    const implementArtifact = this.store.latestArtifact(ticket.id, 'implement_result');
-    const diff = await this.diff(ticket);
-    const prompt = render(prompts.bodies.verify, {
-      key: ticket.key,
-      title: ticket.title,
-      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
-      plan: planArtifact === undefined ? '(no plan)' : planArtifact.content,
-      done_when: doneWhenBlock(conditions),
-      review: reviewArtifact === undefined ? '(none)' : reviewArtifact.content,
-      implementation: implementArtifact === undefined ? '(none)' : implementArtifact.content,
-      diff,
+  async enterApproval(ticket) {
+    this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed; awaiting approval' });
+    this.store.setNeedsAttention(ticket.id, 'Awaiting human approval');
+    this.appendEvent(ticket.id, 'approval_requested', {
+      phaseFrom: 'review',
+      phaseTo: 'verify',
+      payload: { attempt: ticket.attemptCount },
     });
-    const runId = this.ensureRun(ticket);
-    const turn = await this.roleTurn({ ticket, role: 'verifier', purpose: 'verify', route, prompt, spanName: 'verify', attempt: ticket.attemptCount, runId });
-    if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'verify');
-    if (turn.action === null || turn.action.type !== 'verification') {
-      return this.needsAttention(ticket, 'verifier ended without calling kanban_submit_verification');
+  }
+
+  async approve(ticketId, message = '') {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
+    await this.closeTicketSessions(ticket.id);
+    const done = this.store.transitionTicket(ticket.id, { column: 'done', phase: 'closed' }, { actor: 'human', reason: 'approved' });
+    this.endRun(ticket.id);
+    this.appendEvent(ticket.id, 'done', { phaseFrom: 'verify', phaseTo: 'closed', actor: 'human', payload: { attempt: ticket.attemptCount, message } });
+    return done;
+  }
+
+  async discard(ticketId, reason = '') {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    await this.closeTicketSessions(ticket.id);
+    const discarded = this.store.transitionTicket(ticket.id, { column: 'discarded', phase: 'closed' }, { actor: 'human', reason: reason || 'discarded' });
+    this.endRun(ticket.id);
+    this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo: 'closed', actor: 'human', payload: { reason } });
+    return discarded;
+  }
+
+  async startApprovalSession(ticketId) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
+    const route = this.resolveRoute('implementer', ticket.attemptCount);
+    const result = await this.driver.ensureTicketSession({ ticket, role: 'implementer', route, purpose: 'approval' });
+    this.driver.setPhase(result.sessionId, 'implementer');
+    this.driver.setRoute(result.sessionId, route);
+    this.store.attachSession({
+      ticketId: ticket.id,
+      dshSessionId: result.sessionId,
+      role: 'implementer',
+      purpose: 'approval',
+      provider: route.provider,
+      model: route.model,
+    });
+    void this.approvalIntro(ticket, result.sessionId, route);
+    return result;
+  }
+
+  async approvalIntro(ticket, sessionId, route) {
+    const plan = this.store.latestArtifact(ticket.id, 'plan');
+    const review = this.store.latestArtifact(ticket.id, 'review');
+    const acceptance = this.store.listAcceptance(ticket.id);
+    const prompt = [
+      `Approval session for ${ticket.key}: ${ticket.title}`,
+      '',
+      'The implementation passed code-checkable review and is waiting for the human.',
+      'You have workspace-write, shell, browser and repository tools. Inspect, merge, deploy, or iterate only when the human asks.',
+      'Do not call kanban_approve, kanban_discard, or kanban_submit_plan until the human explicitly asks.',
+      '',
+      'Ticket body:',
+      ticket.body || '(empty)',
+      '',
+      'Acceptance:',
+      acceptanceBlock(acceptance),
+      '',
+      'Plan:',
+      plan?.content ?? '(none)',
+      '',
+      'Review:',
+      review?.content ?? '(none)',
+    ].join('\n');
+    try {
+      const runId = this.ensureRun(ticket);
+      await this.roleTurn({ ticket, role: 'implementer', purpose: 'approval', route, prompt, spanName: 'approval', attempt: ticket.attemptCount, runId });
+    } catch (error) {
+      this.log.warn('approval session intro failed: %s', String(error?.message ?? error));
     }
-    const value = turn.action.value;
-    const errors = validateVerification(value);
-    if (errors.length > 0) return this.needsAttention(ticket, `verification rejected: ${errors.join('; ')}`);
-    this.store.addArtifact(ticket.id, 'verification', JSON.stringify(value, null, 2), { spanId: turn.spanId });
-    const threshold = config.confidenceThreshold;
-    const byId = new Map((value.done_when ?? []).map((row) => [row.id, row]));
-    const gaps = [];
-    for (const condition of conditions) {
-      const row = byId.get(condition.id);
-      if (row === undefined) gaps.push(`${condition.id}: no verdict`);
-      else if (row.met !== true || Number(row.confidence) < threshold || String(row.evidence ?? '').trim() === '') gaps.push(`${condition.id}: unmet`);
-      this.store.recordVerification(ticket.id, {
-        spanId: turn.spanId,
-        conditionId: condition.id,
-        met: row?.met === true,
-        confidence: Number(row?.confidence ?? 0),
-        evidence: String(row?.evidence ?? ''),
-        cycle: ticket.attemptCount,
-      });
-    }
-    if (gaps.length === 0) {
-      await this.closeTicketSessions(ticket.id);
-      const done = this.store.transitionTicket(ticket.id, { column: 'done', phase: 'closed' }, { actor: 'engine', reason: 'verification passed' });
-      this.endRun(ticket.id);
-      this.appendEvent(ticket.id, 'done', { phaseFrom: 'verify', phaseTo: 'closed', payload: { attempt: ticket.attemptCount } });
-      return { kind: 'done', ticket: done };
-    }
-    await this.closeSession(turn.sessionId);
-    this.appendEvent(ticket.id, 'verification_failed', { phaseFrom: 'verify', phaseTo: 'implement', payload: { gaps } });
-    this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: `verification failed: ${gaps.join('; ')}` });
-    return { kind: 'continue' };
+  }
+
+  async submitApprovalPlan(ticketId, value) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
+    const errors = validatePlan(value);
+    if (errors.length > 0) throw new StoreError('bad_request', `plan rejected: ${errors.join('; ')}`);
+    const plan = normalizePlan(value);
+    const version = this.store.currentPlanVersion(ticket.id) + 1;
+    this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
+    this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
+    this.appendEvent(ticket.id, 'planned', { phaseFrom: 'verify', phaseTo: 'implement', payload: { planVersion: version, fromApproval: true } });
+    const sessionId = this.driver.liveTicketSession(ticket.id, 'approval');
+    if (sessionId !== undefined) await this.closeSession(sessionId);
+    return this.store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
   }
 
   // -------------------------------------------------------------- role turn
@@ -582,7 +629,7 @@ export class Engine {
   retryPhase(ticket) {
     if (this.store.listConditions(ticket.id).length === 0) return 'plan';
     if (ticket.phase === 'review') return 'review';
-    if (ticket.phase === 'verify') return 'verify';
+    if (ticket.phase === 'verify') return 'plan';
     if (ticket.phase === 'plan') return 'plan';
     return 'implement';
   }

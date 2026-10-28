@@ -35,7 +35,7 @@ const COLUMN_EDGES = {
   backlog: ['now', 'blocked', 'discarded', 'needs_attention'],
   now: ['backlog', 'blocked', 'needs_attention', 'done', 'discarded'],
   blocked: ['now', 'needs_attention', 'discarded'],
-  needs_attention: ['now', 'discarded', 'backlog'],
+  needs_attention: ['now', 'discarded', 'backlog', 'done'],
   done: [],
   discarded: [],
 };

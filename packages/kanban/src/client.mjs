@@ -387,7 +387,7 @@ window.__ModuleLoader__.load({
 			return i < 0 ? 0 : i;
 		}
 		function phaseLabel(phase) {
-			return phase === "implement" ? "Build" : phase === "verify" ? "Verify" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
+			return phase === "implement" ? "Build" : phase === "verify" ? "Approval" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
 		}
 		function phaseProgress(ticket) {
 			return h("div", { className: "kb-steps", title: "Lifecycle: " + PHASES.map(phaseLabel).join(" → ") },
@@ -402,6 +402,7 @@ window.__ModuleLoader__.load({
 			return column === "blocked" ? "warn" : column === "needs_attention" ? "err" : column === "now" ? "run" : column === "done" || column === "discarded" ? "ok" : "idle";
 		}
 		function nextAction(t) {
+			if (t.phase === "verify") return "Awaiting approval";
 			if (t.column === "needs_attention") return "Needs your decision";
 			if (t.phase === "plan" && t.planQuestions === "interactive") return "Grilling / planning";
 			if (t.column === "blocked") return "Blocked";
@@ -703,7 +704,7 @@ window.__ModuleLoader__.load({
 					h("span", { className: "kb-tl-key kb-tl-planner", children: "Plan" }),
 					h("span", { className: "kb-tl-key kb-tl-implementer", children: "Build" }),
 					h("span", { className: "kb-tl-key kb-tl-reviewer", children: "Review" }),
-					h("span", { className: "kb-tl-key kb-tl-verifier", children: "Verify" }),
+					h("span", { className: "kb-tl-key kb-tl-verifier", children: "Approval" }),
 					h("span", { className: "kb-tl-key kb-tl-plugin", children: "Plugin step" })
 				),
 				items.map(function (item, index) {
@@ -795,7 +796,7 @@ window.__ModuleLoader__.load({
 			var u = d.usage || {};
 			var models = Object.keys(u.byModel || {}).map(function (key) { return Object.assign({ key: key }, u.byModel[key]); });
 			var phases = (d.timeline || []).filter(function (item) { return item.kind === "phase"; });
-			var verified = (d.verification && Array.isArray(d.verification.done_when)) ? d.verification.done_when : [];
+			var verified = (d.review && Array.isArray(d.review.done_when)) ? d.review.done_when : [];
 			var met = verified.filter(function (x) { return x.met === true; }).length;
 			var statuses = {};
 			(d.spans || []).forEach(function (span) { statuses[span.status] = (statuses[span.status] || 0) + 1; });
@@ -825,7 +826,7 @@ window.__ModuleLoader__.load({
 					card("Time by phase", table(["phase", "attempt", "duration"], phases.map(function (item) {
 						return [item.name, item.attempt, fmtDur(item.durationMs) + (item.includesWait ? " · incl. wait" : "")];
 					})), "kb-tone-run"),
-					card("Verification", table(["condition", "met", "confidence"], verified.map(function (x) {
+					card("Review claims", table(["condition", "met", "confidence"], verified.map(function (x) {
 						return [x.id, x.met === true ? "met" : "not met", x.confidence === undefined ? "—" : x.confidence];
 					})), "kb-tone-ok"),
 					card("Span outcomes", table(["status", "spans"], Object.keys(statuses).sort().map(function (key) { return [key, statuses[key]]; })), "kb-tone-warn")
@@ -870,7 +871,7 @@ window.__ModuleLoader__.load({
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				t.column === "needs_attention" && !d.awaitingQuestion ? h(NeedsAttention, { ticket: t, onResolve: props.onResolve }) : null,
+				t.column === "needs_attention" && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); }, onStartSession: function () { props.onApprovalSession(t.id); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
@@ -892,6 +893,27 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+
+		function ApprovalPanel(props) {
+			var d = props.detail;
+			var sessionId = d.approvalSessionId;
+			var b = React.useState(false);
+			var busy = b[0], setBusy = b[1];
+			function start() {
+				setBusy(true);
+				props.onStartSession().finally(function () { setBusy(false); });
+			}
+			return h("div", { className: "kb-panel", style: { borderColor: "#f3b3ac", background: "#fffafa" } },
+				h("h3", { children: "Approval" }),
+				h("div", { className: "kb-hint", style: { marginBottom: 8 }, children: "The review is complete and every planned condition is accounted for. Approve to close, discard the work, or open an interactive approval session to merge, deploy, or iterate." }),
+				h("div", { className: "kb-row" },
+					h("button", { className: "kb-btn primary", disabled: busy, onClick: function () { setBusy(true); props.onApprove(props.ticket.id).finally(function () { setBusy(false); }); }, children: "Approve and close" }),
+					h("button", { className: "kb-btn danger", disabled: busy, onClick: props.onDiscard, children: "Discard" }),
+					sessionId
+						? h("button", { className: "kb-btn", onClick: function () { props.onOpenSession(sessionId); }, children: "Open approval session" })
+						: h("button", { className: "kb-btn", disabled: busy, onClick: start, children: busy ? "Starting…" : "Launch approval session" }))
+			);
+		}
 
 		function NeedsAttention(props) {
 			var s = React.useState("");
@@ -945,7 +967,7 @@ window.__ModuleLoader__.load({
 						}))
 				),
 				h("div", { className: "kb-panel" },
-					h("h3", { children: "done_when — what verification judges" }),
+					h("h3", { children: "done_when — what the review proves" }),
 					d.conditions.length === 0 ? h("div", { className: "kb-hint", children: "No conditions yet; the plan session produces them." }) :
 						h("table", { className: "kb-table" },
 							h("thead", null, h("tr", null, h("th", { children: "id" }), h("th", { children: "statement" }), h("th", { children: "how verified" }), h("th", { children: "source" }))),
@@ -1083,8 +1105,8 @@ window.__ModuleLoader__.load({
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
-			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", verifier: "Verify" };
-			var order = ["planner", "implementer", "reviewer", "verifier"];
+			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review" };
+			var order = ["planner", "implementer", "reviewer"];
 			return h("div", { className: "kb-routing" },
 				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model for each role. Models are grouped by provider; saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
@@ -1235,7 +1257,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
 						h("h1", { className: "kb-title", children: "Work" }),
-						h("div", { className: "kb-sub", children: board ? "Ticket flow from plan to verification · sequential workflow sessions" : "Loading the board…" })
+						h("div", { className: "kb-sub", children: board ? "Ticket flow from plan to approval · sequential workflow sessions" : "Loading the board…" })
 					),
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
@@ -1261,7 +1283,9 @@ window.__ModuleLoader__.load({
 						onSave: function (id, patch) { act("update", { id: id, patch: patch }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
 						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
-						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); }
+						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
+						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
+						onApprovalSession: function (id) { return act("action", { id: id, action: "approvalSession" }).then(function (res) { if (res && res.ok && res.value && res.value.sessionId && openSessionById) openSessionById(res.value.sessionId); }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						board ? h("div", { className: "kb-flow" },
 							h("span", { className: "kb-flow-title", children: "In flight" }),
@@ -1297,7 +1321,7 @@ window.__ModuleLoader__.load({
 			function startRoutingEdit() {
 				if (!routing || routing.writable === false) return;
 				var draft = {};
-				["planner", "implementer", "reviewer", "verifier"].forEach(function (role) {
+				["planner", "implementer", "reviewer"].forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
 					draft[role] = { provider: route.provider || "", model: route.model || "" };
 				});
@@ -1316,7 +1340,7 @@ window.__ModuleLoader__.load({
 			}
 			function saveRouting() {
 				if (!routing) return;
-				var roles = ["planner", "implementer", "reviewer", "verifier"];
+				var roles = ["planner", "implementer", "reviewer"];
 				var routes = roles.map(function (role) { return { role: role, provider: routingDraft[role].provider, model: routingDraft[role].model }; });
 				setRoutingSaving(true);
 				setRoutingError(null);

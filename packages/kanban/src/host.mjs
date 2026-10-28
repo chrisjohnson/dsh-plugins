@@ -202,6 +202,7 @@ export default async function kanban(ctx, config = {}) {
           ? { ...ticket, column: 'needs_attention', needsAttentionReason: 'Waiting on your answer' }
           : ticket,
         awaitingQuestion: ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id),
+        approvalSessionId: ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'approval') ?? null) : null,
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
         sessions: store.listSessions(ticket.id),
@@ -263,7 +264,7 @@ export default async function kanban(ctx, config = {}) {
             if (column === 'discarded' || column === 'done') {
               const t = store.getTicket(String(p.id));
               if (t === undefined) return fail('not_found', 'no such ticket');
-              if (column === 'done') return fail('bad_request', 'done is set by a passing verification, not by dragging');
+              if (column === 'done') return fail('bad_request', 'done is set by human approval, not by dragging');
               await engineRef.current.abortTicket(t.id);
             }
             const updated = store.transitionTicket(String(p.id), { column }, { actor: 'human', reason: p.reason ?? 'human move' });
@@ -275,9 +276,21 @@ export default async function kanban(ctx, config = {}) {
             if (ticket.column !== 'needs_attention') return fail('bad_request', 'ticket is not in needs_attention');
             const action = String(p.action ?? 'retry');
             if (action === 'discard') {
+              if (ticket.phase === 'verify') {
+                const updated = await engineRef.current.discard(ticket.id, typeof p.reason === 'string' ? p.reason : '');
+                return { ok: true, value: { ticket: updated } };
+              }
               await engineRef.current.abortTicket(ticket.id);
               const updated = store.transitionTicket(ticket.id, { column: 'discarded' }, { actor: 'human', reason: p.reason ?? 'discarded' });
               return { ok: true, value: { ticket: updated } };
+            }
+            if (action === 'approve') {
+              const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
+              return { ok: true, value: { ticket: updated } };
+            }
+            if (action === 'approvalSession') {
+              const result = await engineRef.current.startApprovalSession(ticket.id);
+              return { ok: true, value: { sessionId: result.sessionId } };
             }
             if (action === 'retry') {
               if (typeof p.instruction === 'string' && p.instruction.trim() !== '') {
@@ -307,9 +320,21 @@ export default async function kanban(ctx, config = {}) {
               return { ok: true, value: { ticket: updated } };
             }
             if (action === 'discard') {
+              if (ticket.phase === 'verify') {
+                const updated = await engineRef.current.discard(ticket.id, typeof p.reason === 'string' ? p.reason : '');
+                return { ok: true, value: { ticket: updated } };
+              }
               await engineRef.current.abortTicket(ticket.id);
               const updated = store.transitionTicket(ticket.id, { column: 'discarded' }, { actor: 'human', reason: p.reason ?? 'discarded' });
               return { ok: true, value: { ticket: updated } };
+            }
+            if (action === 'approve') {
+              const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
+              return { ok: true, value: { ticket: updated } };
+            }
+            if (action === 'approvalSession') {
+              const result = await engineRef.current.startApprovalSession(ticket.id);
+              return { ok: true, value: { sessionId: result.sessionId } };
             }
             if (action === 'addAcceptance') {
               if (typeof p.statement !== 'string' || p.statement.trim() === '') return fail('bad_request', 'statement is required');
@@ -542,7 +567,6 @@ const TIMELINE_LABELS = {
   planner: 'Plan',
   implementer: 'Build',
   reviewer: 'Review',
-  verifier: 'Verify',
 };
 
 /**
@@ -610,7 +634,7 @@ function timelineView(spans, artifacts = [], events = [], now = Date.now()) {
       });
     }
   }
-  const rolePhase = { planner: 'plan', implementer: 'implement', reviewer: 'review', verifier: 'verify' };
+  const rolePhase = { planner: 'plan', implementer: 'implement', reviewer: 'review' };
   const EVENT_KINDS = new Set([
     'phase_changed', 'conditions_set', 'planned', 'implemented', 'review', 'verification_failed', 'done',
     'retry_scheduled', 'needs_attention_reason', 'stalled', 'recovered',

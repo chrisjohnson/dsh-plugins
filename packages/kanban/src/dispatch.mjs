@@ -30,7 +30,6 @@ export class DispatchError extends Error {
 export function purposeForRole(role) {
   if (role === 'planner') return 'plan';
   if (role === 'implementer' || role === 'reviewer') return 'build';
-  if (role === 'verifier') return 'verify';
   throw new DispatchError(`no workflow session purpose for role ${role}`, { code: 'NO_PURPOSE' });
 }
 

@@ -8,7 +8,7 @@
 // on a bare clone. The host half resolves `null` routes against the host's
 // model catalog; this half only decides whether a value is *shaped* correctly.
 
-export const ROLES = ['planner', 'implementer', 'reviewer', 'verifier'];
+export const ROLES = ['planner', 'implementer', 'reviewer'];
 
 export const DEFAULT_TOOLS = {
   // Planning is read-only by intent; the guard also blocks write/edit.
@@ -16,7 +16,6 @@ export const DEFAULT_TOOLS = {
   implementer: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
   // Review inspects; the engine's edit guard blocks write/edit in review.
   reviewer: ['read', 'read_image', 'glob', 'grep', 'bash'],
-  verifier: ['read', 'read_image', 'glob', 'grep', 'bash'],
 };
 
 /** Prompt files, relative to promptsDir. */
@@ -26,7 +25,6 @@ export const DEFAULT_PROMPTS = {
   implement: 'implement.md',
   rework: 'rework.md',
   review: 'review.md',
-  verify: 'verify.md',
 };
 
 export const DEFAULT_CONFIG = {
@@ -58,12 +56,6 @@ export const DEFAULT_CONFIG = {
       reasoningEffort: null,
       allowTools: DEFAULT_TOOLS.reviewer,
     },
-    verifier: {
-      provider: null,
-      model: null,
-      reasoningEffort: null,
-      allowTools: DEFAULT_TOOLS.verifier,
-    },
   },
 
   /** Every met condition must carry at least this confidence for a mechanical pass. */
@@ -71,7 +63,7 @@ export const DEFAULT_CONFIG = {
   /** Whether a ticket may carry its own threshold (still bounded by [0,1]). */
   allowTicketThresholdOverride: true,
 
-  /** Implement -> verify -> review cycles allowed before a ticket needs a human. */
+  /** Implement -> review cycles allowed before a ticket needs a human. */
   maxAttempts: 3,
   /**
    * Attempt -> rung mapping. The first entry is the role's configured route.

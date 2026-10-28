@@ -6,7 +6,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
-import { validateImplementResult, validatePlan, validateReview, validateVerification } from './result.mjs';
+import { validateImplementResult, validatePlan, validateReview } from './result.mjs';
 
 const TOOL_OUTPUT = {
   schema: { type: 'object', additionalProperties: true },
@@ -70,14 +70,9 @@ const REVIEW_PARAMETERS = {
       },
     },
   },
-  instruction: { type: 'string', description: 'Concrete changes needed when verdict is fail.' },
-};
-
-const VERIFY_PARAMETERS = {
-  summary: { type: 'string', required: true, description: 'Mechanical verification summary.' },
   done_when: {
     type: 'array',
-    required: true,
+    description: 'One row for every plan done_when id, using the same ids, with met/confidence/evidence.',
     items: {
       type: 'object',
       additionalProperties: true,
@@ -89,8 +84,17 @@ const VERIFY_PARAMETERS = {
       },
     },
   },
-  residual_risks: { type: 'array', items: { type: 'string' } },
+  instruction: { type: 'string', description: 'Concrete changes needed when verdict is fail.' },
 };
+
+const APPROVE_PARAMETERS = {
+  message: { type: 'string', description: 'Optional note recorded with the approval.' },
+};
+
+const DISCARD_PARAMETERS = {
+  reason: { type: 'string', description: 'Optional reason recorded with the discard.' },
+};
+
 
 function accept(driver, sessionId, action, exec) {
   driver.recordAction(sessionId, action);
@@ -144,7 +148,7 @@ export function registerActionTools({ ctx, sessionId, purpose, liveRef, driver }
     }));
     disposers.push(registerTool(ctx, {
       name: 'kanban_submit_review',
-      description: 'Submit the review verdict. Pass advances to verification; fail returns concrete changes to implementation.',
+      description: 'Submit the review verdict. Include one done_when row per plan id and one acceptance_coverage row per acceptance statement; a pass advances to human approval.',
       parameters: REVIEW_PARAMETERS,
       output: TOOL_OUTPUT,
       async execute(args, exec) {
@@ -158,17 +162,43 @@ export function registerActionTools({ ctx, sessionId, purpose, liveRef, driver }
       },
     }));
   }
-  if (purpose === 'verify') {
+  if (purpose === 'approval') {
+    const runAfterTurn = (exec, fn) => {
+      exec.concludeTurn();
+      setTimeout(() => { Promise.resolve().then(fn).catch((error) => driver.log?.warn?.('approval action failed: %s', String(error?.stack ?? error))); }, 0);
+      return { accepted: true };
+    };
     disposers.push(registerTool(ctx, {
-      name: 'kanban_submit_verification',
-      description: 'Submit the mechanical per-condition verification result.',
-      parameters: VERIFY_PARAMETERS,
+      name: 'kanban_approve',
+      description: 'Approve the completed work and close the ticket as done. Use only after the work is actually complete.',
+      parameters: APPROVE_PARAMETERS,
       output: TOOL_OUTPUT,
       async execute(args, exec) {
-        requirePhase(liveRef, 'verifier', 'kanban_submit_verification');
-        const errors = validateVerification(args);
-        if (errors.length > 0) throw new Error(`verification rejected: ${errors.join('; ')}`);
-        return accept(driver, sessionId, { type: 'verification', value: args }, exec);
+        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+        return runAfterTurn(exec, () => driver.approval.approve(liveRef.ticketId, args.message ?? ''));
+      },
+    }));
+    disposers.push(registerTool(ctx, {
+      name: 'kanban_discard',
+      description: 'Discard the ticket and its work, closing it without approval.',
+      parameters: DISCARD_PARAMETERS,
+      output: TOOL_OUTPUT,
+      async execute(args, exec) {
+        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+        return runAfterTurn(exec, () => driver.approval.discard(liveRef.ticketId, args.reason ?? ''));
+      },
+    }));
+    disposers.push(registerTool(ctx, {
+      name: 'kanban_submit_plan',
+      description: 'Submit a new plan for another build/review round instead of approving or discarding.',
+      parameters: PLAN_PARAMETERS,
+      output: TOOL_OUTPUT,
+      async execute(args, exec) {
+        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+        const errors = validatePlan(args);
+        if (errors.length > 0) throw new Error(`plan rejected: ${errors.join('; ')}`);
+        if (!Array.isArray(args.done_when) || args.done_when.length === 0) throw new Error('plan needs at least one done_when condition');
+        return runAfterTurn(exec, () => driver.approval.plan(liveRef.ticketId, args));
       },
     }));
   }
