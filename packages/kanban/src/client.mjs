@@ -729,13 +729,30 @@ var CSS =
 			);
 		}
 
+		var modalSeq = 0;
+		var modalStack = [];
+
 		function Modal(props) {
+			// Only the topmost open dialog answers Escape, so a nested
+			// confirm (worktree) closes alone and leaves the form open.
+			// The close callback is read through a ref and the stack entry
+			// is registered only on open, because onClose is re-created on
+			// every render and a dep on it would reshuffle the stack order.
+			var closeRef = React.useRef(props.onClose);
+			React.useEffect(function () { closeRef.current = props.onClose; });
 			React.useEffect(function () {
 				if (!props.open) return undefined;
-				function onKey(event) { if (event.key === "Escape") props.onClose(); }
+				var id = ++modalSeq;
+				modalStack.push(id);
+				function onKey(event) {
+					if (event.key === "Escape" && modalStack[modalStack.length - 1] === id) closeRef.current();
+				}
 				window.addEventListener("keydown", onKey);
-				return function () { window.removeEventListener("keydown", onKey); };
-			}, [props.open, props.onClose]);
+				return function () {
+					modalStack.splice(modalStack.indexOf(id), 1);
+					window.removeEventListener("keydown", onKey);
+				};
+			}, [props.open]);
 			if (!props.open) return null;
 			return h("div", { className: "kb-modal-backdrop", onClick: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
 				h("div", { className: "kb-modal", role: "dialog", "aria-modal": "true", "aria-label": props.title },
