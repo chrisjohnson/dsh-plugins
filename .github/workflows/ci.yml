@@ -37,7 +37,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: node --test packages/*/test/*.test.mjs scripts/test/*.test.mjs
+      # dsh-kanban needs node:sqlite (node >=22.5, its engines range), so the
+      # 20.9 floor leg covers every other package.
+      - run: |
+          files=$(ls packages/*/test/*.test.mjs)
+          if [ "${{ matrix.node }}" = "20.9.0" ]; then files=$(echo "$files" | grep -v '^packages/kanban/'); fi
+          node --test $files scripts/test/*.test.mjs
 
   compose:
     # The expensive, interesting one: installs each package into a throwaway
