@@ -1,0 +1,23 @@
+# Bundle layer for dsh-browser.
+#
+# `dsh plugin --profile web add <git spec>` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin
+# row (host half via the package's `main`).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, so every key restated here is a key
+# the user would then have to restate to change any other. Defaults live in
+# src/config.mjs and are documented in README.md. To tune it, add a
+# profile-level row that lists every key you want:
+#
+#   - id: browser
+#     name: dsh-browser
+#     config:
+#       connectUrl: ws://127.0.0.1:3100/chromium/playwright
+#       fallbackExecutablePath: /usr/bin/chromium
+#
+# It needs dsh-playwright-browser enabled in the same profile: this plugin
+# re-homes that plugin's tools, it does not register any of its own.
+- insert:
+    - id: browser
+      name: dsh-browser

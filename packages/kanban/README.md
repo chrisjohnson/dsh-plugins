@@ -40,6 +40,14 @@ met/confidence/evidence, and every acceptance statement must be covered. A
 missing or incomplete review goes back to implementation. Only when that code
 gate passes does the ticket enter human approval.
 
+Needs attention is a state, not a parking brake. The moment any session attached
+to a needs-attention ticket starts a turn — you answering the engine's question,
+driving the build by hand, or talking an approval through — the card moves back
+to **In flight**, and the engine will not inject a role prompt into a session
+that already has a turn running. When that turn ends without a structured
+submission the card returns to Needs attention with the reason it had before; a
+`kanban_submit_*` call from the same turn advances the ticket as usual.
+
 Every session starts once in the **standard preset** and uses its natural system
 prompt. The plugin does not rebind presets or install a custom system prompt.
 Plan and review run in the native read-only sandbox mode; implementation and

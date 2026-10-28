@@ -34,6 +34,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | **[dsh-better-git-worktree](./packages/better-git-worktree/)** | Run a session in its own self-contained git working copy: a composer Worktree switch, a `worktree_convert` tool, session-list status badges, a header menu, and an archive prompt that decides the working copy's fate. | 0.1.1 | `packages/better-git-worktree` |
 | **[dsh-session-cost](./packages/session-cost/)** | A compact estimated-cost badge in the composer stats bar: reads the session billed-token buckets and prices them with public models.dev rates, hidden at $0. | 0.1.0 | `packages/session-cost` |
 | **[dsh-math-literal](./packages/math-literal/)** | Keeps single-`$` dollars literal in web chat: unpaired `$` in settled markdown renders as a literal dollar sign (matching the streaming arm) instead of opening an inline-math pair, while real math and code regions are untouched. | 0.1.0 | `packages/math-literal` |
+| **[dsh-browser](./packages/browser/)** | One browser context per DSH session on a single shared remote Browserless connection for `dsh-playwright-browser`'s tools, with reconnect after a dropped connection, context cleanup when a session ends, and an announced local fallback. | 0.1.0 | `packages/browser` |
 
 Install lines for the latest release of each package:
 
@@ -48,6 +49,7 @@ dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.gi
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-better-git-worktree-v0.1.1&path:/packages/better-git-worktree"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-session-cost-v0.1.0&path:/packages/session-cost"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-math-literal-v0.1.0&path:/packages/math-literal"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-browser-v0.1.0&path:/packages/browser"
 ```
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.

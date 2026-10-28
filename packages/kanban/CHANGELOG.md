@@ -11,6 +11,26 @@
   route. If the service is not published yet, keep the session's current route
   instead of failing the turn with `NO_SESSION_CONTROLLER`.
 
+
+## 0.3.5
+
+### Added
+
+- Realtime board status. While any session attached to a needs-attention ticket
+  has a turn running — a human answering the engine's question, driving the
+  build by hand, or talking an approval through — the ticket moves back to
+  In flight; when that turn ends without a structured submission it returns to
+  Needs attention with the original `needsAttentionReason` preserved. Approval
+  (`Awaiting human approval`) follows the same rule.
+- The engine now skips dispatch for a ticket whose session has a turn in flight
+  (`driver.isTicketBusy`), in both the In flight and backlog planning loops and
+  again at the top of `advance()`. A human-driven turn is never interrupted by a
+  role prompt and never consumes an attempt.
+- A structured submission made from a human-driven turn flows through
+  `handleManualAction` without the flip-back, so no extra needs-attention event
+  lands after the submission.
+- New timeline events `session_reactivated` and `session_settled`.
+
 ## 0.3.4
 
 ### Fixed

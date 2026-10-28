@@ -49,6 +49,8 @@ export class Engine {
     this.log = log;
     this.active = new Map();
     this.runIds = new Map();
+    /** ticketId -> { sessionId, reason } while a human-driven turn holds a ticket in flight */
+    this.reactivations = new Map();
     this.configHash = null;
     this.timer = null;
     this.ticking = false;
@@ -62,6 +64,8 @@ export class Engine {
         plan: (ticketId, value) => this.submitApprovalPlan(ticketId, value),
       };
       this.driver.onManualAction = (input) => this.handleManualAction(input);
+      this.driver.onReactivate = (ticketId, sessionId) => this.reactivateFromSession(ticketId, sessionId);
+      this.driver.onSettleTurn = (ticketId, sessionId) => this.settleSessionTurn(ticketId, sessionId);
     }
   }
 
@@ -96,12 +100,14 @@ export class Engine {
       for (const ticket of now) {
         if (this.disposed) break;
         if (this.active.has(ticket.id)) continue;
+        if (this.busy(ticket)) continue;
         this.launch(ticket);
       }
       for (const ticket of this.store.listTickets({ columns: ['backlog'] })) {
         if (this.disposed) break;
         if (this.active.has(ticket.id)) continue;
         if (ticket.phase !== 'plan' || ticket.planTiming !== 'now') continue;
+        if (this.busy(ticket)) continue;
         this.launch(ticket);
       }
       this.maybePrune();
@@ -201,6 +207,7 @@ export class Engine {
 
   /** Drive one ticket as far as the current session phase allows. */
   async advance(start) {
+    if (this.busy(start)) return { kind: 'wait' };
     let ticket = this.store.getTicket(start.id);
     let guard = 0;
     while (ticket !== undefined && !this.disposed) {
@@ -470,6 +477,7 @@ export class Engine {
   }
 
   async handleManualAction({ ticketId, purpose, sessionId, action }) {
+    this.reactivations.delete(ticketId);
     const ticket = this.store.getTicket(ticketId);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
     if (action === null || action === undefined) throw new StoreError('bad_request', 'no action supplied');
@@ -518,6 +526,44 @@ export class Engine {
       return;
     }
     throw new StoreError('invalid_phase', `${action.type} cannot be submitted from ${ticket.phase}/${purpose}`);
+  }
+
+  // ------------------------------------------------ realtime session activity
+  //
+  // The board mirrors what is actually happening. A needs-attention ticket
+  // whose session has a turn running — a human answering the engine's question,
+  // driving the build by hand, or talking an approval through — is being worked
+  // on, so it moves back to In flight. The engine keeps out of that conversation
+  // (`busy`), and when the turn ends without a structured submission the ticket
+  // returns to needs attention with the reason it had before.
+
+  reactivateFromSession(ticketId, sessionId) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined || ticket.column !== 'needs_attention') return;
+    this.reactivations.set(ticketId, { sessionId, reason: ticket.needsAttentionReason ?? null });
+    this.store.transitionTicket(ticketId, { column: 'now' }, { actor: 'engine', reason: 'session reactivated' });
+    this.appendEvent(ticketId, 'session_reactivated', {
+      phaseFrom: ticket.phase,
+      phaseTo: ticket.phase,
+      payload: { sessionId, priorReason: ticket.needsAttentionReason ?? null },
+    });
+    this.log.info('ticket %s reactivated by session %s', ticket.key, sessionId);
+  }
+
+  settleSessionTurn(ticketId, sessionId) {
+    const mark = this.reactivations.get(ticketId);
+    if (mark === undefined) return;
+    this.reactivations.delete(ticketId);
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined || ticket.column !== 'now') return;
+    const reason = mark.reason ?? 'session ended without submitting';
+    this.needsAttention(ticket, reason, { sessionId, settled: true });
+    this.appendEvent(ticketId, 'session_settled', {
+      phaseFrom: ticket.phase,
+      phaseTo: ticket.phase,
+      payload: { sessionId, reason },
+    });
+    this.log.info('ticket %s returned to needs attention after session %s', ticket.key, sessionId);
   }
 
   // -------------------------------------------------------------- role turn
@@ -665,6 +711,11 @@ export class Engine {
     return ticket === undefined || ['done', 'discarded', 'blocked'].includes(ticket.column);
   }
 
+  /** True while any session of this ticket has a turn in flight, engine-driven or human-driven. */
+  busy(ticket) {
+    return this.driver?.isTicketBusy?.(ticket.id) === true;
+  }
+
   resolveRoute(role, attempt) {
     const config = this.getConfig();
     const route = routeForAttempt(config, role, attempt);
@@ -712,6 +763,7 @@ export class Engine {
   }
 
   needsAttention(ticket, reason, payload = {}) {
+    this.reactivations.delete(ticket.id);
     this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, failedPhase: ticket.phase, ...payload } });
     this.store.setNeedsAttention(ticket.id, reason, payload);
     this.endRun(ticket.id);

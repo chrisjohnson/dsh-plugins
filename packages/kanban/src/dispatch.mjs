@@ -16,6 +16,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
 
 import { registerActionTools } from './actions.mjs';
+import { TurnActivity } from './activity.mjs';
 import { phaseToolGuard } from './tools.mjs';
 
 export class DispatchError extends Error {
@@ -43,6 +44,10 @@ export class SessionDriver {
     this.getConfig = getConfig;
     this.store = store;
     this.onManualAction = null;
+    /** engine hook: a human turn pulled a needs-attention ticket back into play */
+    this.onReactivate = null;
+    /** engine hook: that turn ended without a structured action */
+    this.onSettleTurn = null;
     this.waiters = new Map();
     /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
@@ -50,6 +55,15 @@ export class SessionDriver {
     this.ticketSessions = new Map();
     /** sessionId -> action recorded by the current turn */
     this.actions = new Map();
+    /** which ticket sessions have a turn in flight, and which reactivated a ticket */
+    this.activity = new TurnActivity({
+      store,
+      isLive: (sessionId) => this.live.get(sessionId)?.ticketId,
+      hasAction: (sessionId) => this.actions.has(sessionId),
+      onReactivate: (ticketId, sessionId) => (typeof this.onReactivate === 'function' ? this.onReactivate(ticketId, sessionId) : false),
+      onSettle: (ticketId, sessionId) => (typeof this.onSettleTurn === 'function' ? this.onSettleTurn(ticketId, sessionId) : false),
+      log,
+    });
     this.disposed = false;
     this.offEvent = null;
     this.offAgent = null;
@@ -62,6 +76,7 @@ export class SessionDriver {
       setTimeout(() => { void this.attachExistingSession(agent.id, agent).catch((error) => this.log.warn('kanban: reattach %s failed: %s', agent.id, String(error?.message ?? error))); }, 100);
     });
     this.offEvent = this.ctx.on('session/event', (session, event) => {
+      this.#trackTicketTurn(session, event);
       const waiter = this.waiters.get(session.id);
       if (waiter === undefined) return;
       if (event.type === 'tool/call') {
@@ -98,6 +113,27 @@ export class SessionDriver {
     }
     this.waiters.clear();
     this.actions.clear();
+    this.activity.clear();
+  }
+
+  // ------------------------------------------------- realtime turn activity --
+  //
+  // `turn/start` and `turn/end` arrive on the global session event stream, so a
+  // turn a human starts in a ticket's session is visible here exactly like one
+  // the engine started. The bookkeeping itself lives in src/activity.mjs.
+
+  #trackTicketTurn(session, event) {
+    if (event.type === 'turn/start') {
+      this.actions.delete(session.id);
+      this.activity.turnStart(session.id);
+    } else if (event.type === 'turn/end') {
+      this.activity.turnEnd(session.id);
+    }
+  }
+
+  /** True while any session of this ticket has work in flight, engine-driven or human-driven. */
+  isTicketBusy(ticketId) {
+    return this.activity.busy(ticketId, this.waiters.keys());
   }
 
   recordAction(sessionId, action) {
@@ -286,6 +322,7 @@ export class SessionDriver {
       owned: false,
     };
     this.live.set(sessionId, liveRef);
+    this.activity.negatives.delete(sessionId);
     this.#addTicketSession(ticket.id, purpose, sessionId);
     await this.#registerExistingTools(agent.ctx, liveRef, ticket, sessionId, purpose);
     this.#applySandboxMode(liveRef);
@@ -344,7 +381,9 @@ export class SessionDriver {
   sendTurn({ sessionId, prompt, stallTimeoutMs }) {
     const live = this.live.get(sessionId);
     if (live === undefined) return Promise.reject(new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' }));
-    if (this.waiters.has(sessionId)) return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
+    if (this.waiters.has(sessionId) || this.activity.active.has(sessionId)) {
+      return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
+    }
     this.actions.delete(sessionId);
     const startedMono = process.hrtime.bigint();
     return new Promise((resolve, reject) => {
@@ -373,6 +412,17 @@ export class SessionDriver {
 
   reconcileTurns() {
     const now = Date.now();
+    // A turn/end that never arrived (host restart mid-turn, listener attached
+    // after the fact) must not park a ticket as busy forever.
+    this.activity.prune((sessionId) => {
+      if (this.waiters.has(sessionId)) return true;
+      try {
+        const agent = this.agents?.get?.(sessionId);
+        return agent === undefined || agent === null ? true : agent.status === 'running';
+      } catch {
+        return true;
+      }
+    });
     for (const [sessionId, waiter] of [...this.waiters]) {
       const live = this.live.get(sessionId);
       if (live === undefined) continue;
@@ -407,6 +457,10 @@ export class SessionDriver {
       exec.concludeTurn();
       return { accepted: true, action: action.type };
     }
+    // Record it for the turn before concluding it: the turn/end handler must see
+    // that this session spoke through a structured action and must not settle
+    // the ticket back to needs attention.
+    if (!this.actions.has(sessionId)) this.actions.set(sessionId, action);
     exec.concludeTurn();
     setTimeout(() => {
       if (typeof this.onManualAction !== 'function') return;
@@ -422,6 +476,8 @@ export class SessionDriver {
     if (live === undefined) return;
     this.live.delete(sessionId);
     for (const [key, ids] of this.ticketSessions) { ids.delete(sessionId); if (ids.size === 0) this.ticketSessions.delete(key); }
+    this.activity.forget(sessionId);
+    this.actions.delete(sessionId);
     if (typeof live.actionDispose === 'function') live.actionDispose();
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
