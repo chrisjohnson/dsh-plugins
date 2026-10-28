@@ -3,6 +3,16 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.3
+
+### Changed
+
+- New-ticket form redesigned as a centered modal; the whole client is
+  restyled to the native DSH design language (design tokens, 14px/22px
+  body, native buttons, 32px inputs, segmented controls and switches for
+  the form's choices, dark mode via tokens). Field set, defaults and the
+  create RPC payload are unchanged.
+
 ## 0.3.2
 
 ### Added
