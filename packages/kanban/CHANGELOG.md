@@ -3,6 +3,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.3.1
+
+### Added
+
+- Approval sessions have their own model route (`roles.approver`), editable in
+  the Model routing tab. Both the production deployment and lab are configured
+  to `local-ai-machine (apu)` / `big-moe`.
+
 ## 0.3.0
 
 ### Changed

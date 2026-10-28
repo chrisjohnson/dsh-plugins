@@ -67,7 +67,7 @@ Everything below lives on the `kanban` row.
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
-| `roles{}` | `planner`, `implementer`, `reviewer`; each has `provider`, `model`, `reasoningEffort`, `allowTools[]`. A null route falls back to the host default model. |
+| `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`, `allowTools[]`. A null route falls back to the host default model. |
 | `confidenceThreshold` | default `0.70`. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
 | `maxAttempts` | implement/review rounds before `needs_attention`. |
@@ -94,6 +94,7 @@ previous config.
 | `planner` | read-only inspection + `ask_user_question`; plan action tool |
 | `implementer` | read/write/edit/shell/jobs; implementation action tool |
 | `reviewer` | read-only inspection; review action tool |
+| `approver` | workspace-write approval session; approve/discard/plan tools |
 
 The phase guard denies tools outside `allowTools`; Kanban action tools are
 allowed through and enforce their own phase. Plan and review have write/edit

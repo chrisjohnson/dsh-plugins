@@ -1105,8 +1105,8 @@ window.__ModuleLoader__.load({
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
-			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review" };
-			var order = ["planner", "implementer", "reviewer"];
+			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", approver: "Approval" };
+			var order = ["planner", "implementer", "reviewer", "approver"];
 			return h("div", { className: "kb-routing" },
 				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model for each role. Models are grouped by provider; saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
@@ -1321,7 +1321,7 @@ window.__ModuleLoader__.load({
 			function startRoutingEdit() {
 				if (!routing || routing.writable === false) return;
 				var draft = {};
-				["planner", "implementer", "reviewer"].forEach(function (role) {
+				["planner", "implementer", "reviewer", "approver"].forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
 					draft[role] = { provider: route.provider || "", model: route.model || "" };
 				});
@@ -1340,7 +1340,7 @@ window.__ModuleLoader__.load({
 			}
 			function saveRouting() {
 				if (!routing) return;
-				var roles = ["planner", "implementer", "reviewer"];
+				var roles = ["planner", "implementer", "reviewer", "approver"];
 				var routes = roles.map(function (role) { return { role: role, provider: routingDraft[role].provider, model: routingDraft[role].model }; });
 				setRoutingSaving(true);
 				setRoutingError(null);

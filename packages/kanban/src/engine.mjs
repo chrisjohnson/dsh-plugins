@@ -405,14 +405,14 @@ export class Engine {
     const ticket = this.store.getTicket(ticketId);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
     if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
-    const route = this.resolveRoute('implementer', ticket.attemptCount);
-    const result = await this.driver.ensureTicketSession({ ticket, role: 'implementer', route, purpose: 'approval' });
-    this.driver.setPhase(result.sessionId, 'implementer');
+    const route = this.resolveRoute('approver', ticket.attemptCount);
+    const result = await this.driver.ensureTicketSession({ ticket, role: 'approver', route, purpose: 'approval' });
+    this.driver.setPhase(result.sessionId, 'approver');
     this.driver.setRoute(result.sessionId, route);
     this.store.attachSession({
       ticketId: ticket.id,
       dshSessionId: result.sessionId,
-      role: 'implementer',
+      role: 'approver',
       purpose: 'approval',
       provider: route.provider,
       model: route.model,
@@ -446,7 +446,7 @@ export class Engine {
     ].join('\n');
     try {
       const runId = this.ensureRun(ticket);
-      await this.roleTurn({ ticket, role: 'implementer', purpose: 'approval', route, prompt, spanName: 'approval', attempt: ticket.attemptCount, runId });
+      await this.roleTurn({ ticket, role: 'approver', purpose: 'approval', route, prompt, spanName: 'approval', attempt: ticket.attemptCount, runId });
     } catch (error) {
       this.log.warn('approval session intro failed: %s', String(error?.message ?? error));
     }
