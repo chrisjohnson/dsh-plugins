@@ -8,7 +8,7 @@
 // on a bare clone. The host half resolves `null` routes against the host's
 // model catalog; this half only decides whether a value is *shaped* correctly.
 
-export const ROLES = ['planner', 'implementer', 'reviewer'];
+export const ROLES = ['planner', 'implementer', 'reviewer', 'approver'];
 
 export const DEFAULT_TOOLS = {
   // Planning is read-only by intent; the guard also blocks write/edit.
@@ -16,6 +16,7 @@ export const DEFAULT_TOOLS = {
   implementer: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
   // Review inspects; the engine's edit guard blocks write/edit in review.
   reviewer: ['read', 'read_image', 'glob', 'grep', 'bash'],
+  approver: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
 };
 
 /** Prompt files, relative to promptsDir. */
@@ -55,6 +56,12 @@ export const DEFAULT_CONFIG = {
       model: null,
       reasoningEffort: null,
       allowTools: DEFAULT_TOOLS.reviewer,
+    },
+    approver: {
+      provider: null,
+      model: null,
+      reasoningEffort: null,
+      allowTools: DEFAULT_TOOLS.approver,
     },
   },
 

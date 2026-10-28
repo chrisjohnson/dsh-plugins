@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG, DEFAULT_TOOLS, ROLES, resolveConfig, routeForAttempt } 
 test('defaults resolve with the four workflow roles', () => {
   const { config, warnings } = resolveConfig({})
   assert.deepEqual(warnings, [])
-  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer'])
+  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer', 'approver'])
   assert.deepEqual(Object.keys(config.roles).sort(), [...ROLES].sort())
   assert.equal(config.defaultPlanTiming, 'at_pickup')
   assert.equal(config.defaultPlanQuestions, 'interactive')
