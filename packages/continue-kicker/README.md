@@ -15,7 +15,7 @@ A host-plane plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 
 It never kicks over `aborted` (an explicit Stop, a parent or hook cancel, a disposal), `error` unless `kickOnError` is on, `blocked`, `forked`, a completed turn with real content, or a tail already followed by a user or assistant message.
 
-Two doors feed one decision: `agent/created` (reopening a session, crash recovery) and a live watcher that re-analyses the tail `liveKickDelayMs` after every turn end, so an unattended halt is caught without anyone reopening the session.
+Two doors feed one decision: `agent/created` (reopening a session, crash recovery) and a live watcher that re-analyses the tail `liveKickDelayMs` after every turn end, so an unattended halt is caught without anyone reopening the session. A third door is explicit: another plugin can ask for one kick of one session through the [`continueKicker` service](#provided-service-continuekicker), which runs the same decision and applies the same guards.
 
 ## Install
 
@@ -103,6 +103,35 @@ Every flavor counts together: max-tokens, empty-completion, error and interrupte
 Changed from 0.1.0: the old reset fired only when a genuine user message was the *last* event, but a halted turn always ends in `turn/end`, so a new prompt after the cap never reset it; the count lived in memory and was lost on restart; and interrupted kicks were not counted at all.
 
 The kick is written with source kind `plugin:continue-kicker`. Session format V4 refuses the bare kind `plugin`, so a session carrying such a message could not be reopened after a restart.
+
+## Provided service: `continueKicker`
+
+Besides watching sessions on its own, the plugin provides a service named `continueKicker` so another plugin that owns a session's lifecycle can ask for one explicit recovery kick instead of waiting for the automatic doors. `dsh-kanban` uses it: when a role turn halts, the engine asks for a kick and waits for the result, so the recovery is part of the workflow rather than something that happens to a parked session.
+
+```js
+const kicker = ctx.get('continueKicker')   // undefined when this plugin is not installed
+```
+
+| Member | Shape | Meaning |
+| --- | --- | --- |
+| `version` | `1` | the contract version. It goes up only on a breaking change; a consumer that sees an unknown version should treat the details as unreliable. |
+| `kick(sessionId, options?)` | `(string, { bypassCooldown?: boolean }) => result` | runs one decision for one live session and sends the kick if it is due. Synchronous; never throws. |
+
+`kick` returns one of:
+
+| Result | When |
+| --- | --- |
+| `{ kicked: true, flavor, consecutive }` | a kick was sent. `flavor` is `max-tokens`, `interrupted`, `empty-completion` or `error`; `consecutive` is this kick's number in the runaway count. |
+| `{ kicked: false, why }` | nothing was sent: the session is not live, its tail is not a kickable halt, the halt's `kickOn*` switch is off, the session is an excluded subagent, or the cooldown is running. |
+| `{ kicked: false, why, stopped: true }` | the runaway guard declined: this session has already had `maxConsecutiveKicks` kicks with no progress and needs a human. |
+
+The service is the **same decision, not a second one**: `kick()` runs `decide()` over the session's own event log with this plugin's resolved settings, sends the same message with the same `plugin:continue-kicker` source kind, records the same cooldown, and is bounded by the same runaway counter. A caller therefore gets the plugin's policy instead of a private copy of it, and the automatic doors keep working alongside it — a kick sent through the service lands in the log like any other, so the watcher's delayed re-analysis of the same halt sees a kick already awaiting its result and does nothing.
+
+`bypassCooldown: true` opens only the cooldown gate. It exists because a caller that just watched a turn fail is asking for recovery, not re-analysing a halt it kicked a second ago; every other gate (the per-kind switches, the subagent scope, `maxConsecutiveKicks`) still applies.
+
+One consequence of removing that spacing is worth knowing about: a kick message only lands in the session's event log when the turn it starts claims it, so a caller that asks for kicks back to back can be reading a log one kick behind its own sending. The guard takes the higher of the log count and the kicks this process has actually sent, so the lag cannot buy an extra kick; a genuine user message or a normally completed turn resets both together.
+
+**The service is optional for the consumer.** A caller must resolve it lazily (`ctx.get` at use time, not at boot), duck-type `typeof kicker?.kick === 'function'`, and degrade to its own behaviour when it is absent — the same rule `dsh-kanban` follows for the `betterGitWorktree` service. Nothing here requires a caller: with no consumer installed the plugin behaves exactly as before.
 
 ## Logging
 

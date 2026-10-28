@@ -203,14 +203,26 @@ function kickSummary(flavor, count, max) {
  * @param {number} input.lastKickAt - timestamp of this process's last kick for the session (0 if none).
  * @param {number} input.now - current timestamp.
  * @param {boolean} input.isSubagent - the session is a delegated child.
+ * @param {boolean} [input.bypassCooldown] - ignore the cooldown gate. Used by the
+ *   `continueKicker` kick service: a caller that just watched a turn fail and is
+ *   asking for exactly one recovery kick is not a watcher re-analysing the same
+ *   halt a second later. Every other gate (scope, kickable halt, the
+ *   maxConsecutiveKicks runaway guard) still applies.
+ * @param {number} [input.knownKicks] - consecutive kicks the caller has already
+ *   sent for this session since its last reset. The event log stays the source of
+ *   truth, but a follow-up message only reaches it when the turn it starts claims
+ *   it, so a caller that asks for kicks back to back can be reading a log one
+ *   kick behind itself. The higher of the two counts wins, which is what keeps the
+ *   runaway guard un-out-runnable. A reset (a genuine user message or a normally
+ *   completed turn) drops the log count to 0 and the caller resets this with it.
  * @returns {{ action:'kick'|'skip'|'stop', why:string, consecutive:number,
  *             flavor?:string, text?:string, summary?:string, scopeSkipped?:true }}
  *   `consecutive` is the count including the kick being sent; on 'kick' the
  *   caller records `now` as the session's lastKickAt.
  */
-export function decide({ events, settings, lastKickAt, now, isSubagent }) {
+export function decide({ events, settings, lastKickAt, now, isSubagent, bypassCooldown = false, knownKicks = 0 }) {
   const verdict = analyzeTail(events, settings)
-  const count = countConsecutiveKicks(events, settings)
+  const count = Math.max(countConsecutiveKicks(events, settings), knownKicks)
 
   if (isSubagent && !settings.includeSubagents) {
     return { action: 'skip', why: 'subagent session excluded (includeSubagents=false)', consecutive: count, scopeSkipped: true }
@@ -230,7 +242,7 @@ export function decide({ events, settings, lastKickAt, now, isSubagent }) {
   }
 
   const sinceLast = now - (lastKickAt ?? 0)
-  if (sinceLast < settings.cooldownMs) {
+  if (!bypassCooldown && sinceLast < settings.cooldownMs) {
     return { action: 'skip', why: `within cooldown (${settings.cooldownMs - sinceLast}ms remaining)`, consecutive: count }
   }
 
