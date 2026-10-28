@@ -35,24 +35,32 @@ export function purposeForRole(role) {
 
 /** Existing sessions can be reused within a purpose, never across purposes. */
 export class SessionDriver {
-  constructor({ ctx, log, getConfig }) {
+  constructor({ ctx, log, getConfig, store }) {
     this.ctx = ctx;
     this.agents = ctx.get('agents');
     this.sessionController = ctx.get('sessionController');
     this.log = log;
     this.getConfig = getConfig;
+    this.store = store;
+    this.onManualAction = null;
     this.waiters = new Map();
     /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
-    /** `${ticketId}:${purpose}` -> sessionId */
+    /** `${ticketId}:${purpose}` -> Set<sessionId> (newest last) */
     this.ticketSessions = new Map();
     /** sessionId -> action recorded by the current turn */
     this.actions = new Map();
     this.disposed = false;
     this.offEvent = null;
+    this.offAgent = null;
   }
 
   start() {
+    this.offAgent = this.ctx.on('agent/created', (payload) => {
+      const agent = payload?.agent;
+      if (agent === undefined || agent === null) return;
+      setTimeout(() => { void this.attachExistingSession(agent.id, agent).catch((error) => this.log.warn('kanban: reattach %s failed: %s', agent.id, String(error?.message ?? error))); }, 100);
+    });
     this.offEvent = this.ctx.on('session/event', (session, event) => {
       const waiter = this.waiters.get(session.id);
       if (waiter === undefined) return;
@@ -107,11 +115,12 @@ export class SessionDriver {
   async ensureTicketSession({ ticket, role, route, purpose }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
     const key = `${ticket.id}:${purpose}`;
-    const existingId = this.ticketSessions.get(key);
-    if (existingId !== undefined) {
-      const existing = this.live.get(existingId);
-      if (existing !== undefined) return { sessionId: existingId, handle: existing.handle };
-      this.ticketSessions.delete(key);
+    const existingIds = this.ticketSessions.get(key);
+    if (existingIds !== undefined) {
+      for (const existingId of [...existingIds].reverse()) {
+        const existing = this.live.get(existingId);
+        if (existing !== undefined) return { sessionId: existingId, handle: existing.handle };
+      }
     }
     if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
     const config = this.getConfig();
@@ -128,6 +137,7 @@ export class SessionDriver {
       routeKey: null,
       actionDispose: null,
       sandboxMode: null,
+      owned: true,
     };
     const handle = await this.agents.create({
       sessionId,
@@ -162,7 +172,7 @@ export class SessionDriver {
       this.log.warn('workflow session: title pin failed: %s', String(error?.message ?? error));
     }
     this.live.set(sessionId, liveRef);
-    this.ticketSessions.set(key, sessionId);
+    this.#addTicketSession(ticket.id, purpose, sessionId);
     return { sessionId, handle };
   }
 
@@ -227,9 +237,63 @@ export class SessionDriver {
     live.routeKey = key;
   }
 
+  liveTicketSessions(ticketId, purpose) {
+    const ids = this.ticketSessions.get(`${ticketId}:${purpose}`);
+    if (ids === undefined) return [];
+    return [...ids].filter((id) => this.live.has(id));
+  }
+
   liveTicketSession(ticketId, purpose) {
-    const id = this.ticketSessions.get(`${ticketId}:${purpose}`);
-    return id !== undefined && this.live.has(id) ? id : undefined;
+    const ids = this.liveTicketSessions(ticketId, purpose);
+    return ids.length > 0 ? ids[ids.length - 1] : undefined;
+  }
+
+  #addTicketSession(ticketId, purpose, sessionId) {
+    const key = `${ticketId}:${purpose}`;
+    let ids = this.ticketSessions.get(key);
+    if (ids === undefined) { ids = new Set(); this.ticketSessions.set(key, ids); }
+    ids.delete(sessionId);
+    ids.add(sessionId);
+  }
+
+  async attachExistingSession(sessionId, agentOverride) {
+    if (this.disposed || this.live.has(sessionId)) return false;
+    const record = this.store?.findSession?.(sessionId);
+    if (record === undefined || record.ticketId === null || record.ticketId === undefined) return false;
+    const ticket = this.store.getTicket(record.ticketId);
+    if (ticket === undefined) return false;
+    const agent = agentOverride ?? this.agents?.get?.(sessionId);
+    if (agent === undefined || agent === null) return false;
+    const purpose = record.purpose ?? 'build';
+    const role = purpose === 'plan' ? 'planner' : purpose === 'approval' ? 'approver' : purpose === 'build' && ticket.phase === 'review' ? 'reviewer' : 'implementer';
+    const liveRef = {
+      handle: { agent },
+      role,
+      purpose,
+      phase: { role },
+      ticketId: ticket.id,
+      preset: 'standard',
+      routeKey: null,
+      actionDispose: null,
+      sandboxMode: null,
+      owned: false,
+    };
+    this.live.set(sessionId, liveRef);
+    this.#addTicketSession(ticket.id, purpose, sessionId);
+    await this.#registerExistingTools(agent.ctx, liveRef, ticket, sessionId, purpose);
+    this.#applySandboxMode(liveRef);
+    void this.#attachWorkspace(sessionId, ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd(), 0);
+    this.log.info('kanban: reattached session %s to %s/%s', sessionId, ticket.key, purpose);
+    return true;
+  }
+
+  async #registerExistingTools(agentCtx, liveRef, ticket, sessionId, purpose) {
+    liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, purpose, liveRef, driver: this });
+    agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
+    agentCtx.tools.guard((execution) => {
+      if (purpose === 'plan' && execution.name === 'ask_user_question' && ticket.planQuestions === 'autonomous') return 'this ticket uses autonomous judgement; ask the user no questions';
+      return undefined;
+    });
   }
 
   isAwaitingUser(ticketId) {
@@ -328,12 +392,29 @@ export class SessionDriver {
     }
   }
 
+  submitAction(sessionId, action, exec) {
+    const live = this.live.get(sessionId);
+    if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
+    if (this.waiters.has(sessionId)) {
+      this.recordAction(sessionId, action);
+      exec.concludeTurn();
+      return { accepted: true, action: action.type };
+    }
+    exec.concludeTurn();
+    setTimeout(() => {
+      if (typeof this.onManualAction !== 'function') return;
+      Promise.resolve(this.onManualAction({ ticketId: live.ticketId, purpose: live.purpose, sessionId, action }))
+        .catch((error) => this.log.warn('kanban: manual action failed: %s', String(error?.stack ?? error)));
+    }, 0);
+    return { accepted: true, action: action.type, manual: true };
+  }
+
   /** Abort and dispose a workflow session so continue-kicker sees an aborted end, not an idle error. */
   async closeSession(sessionId) {
     const live = this.live.get(sessionId);
     if (live === undefined) return;
     this.live.delete(sessionId);
-    for (const [key, id] of this.ticketSessions) if (id === sessionId) this.ticketSessions.delete(key);
+    for (const [key, ids] of this.ticketSessions) { ids.delete(sessionId); if (ids.size === 0) this.ticketSessions.delete(key); }
     if (typeof live.actionDispose === 'function') live.actionDispose();
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
@@ -346,7 +427,7 @@ export class SessionDriver {
     } catch {
       // Cancellation is best-effort; disposal below still tears the scope down.
     }
-    try {
+    if (live.owned !== false) try {
       await live.handle.dispose();
     } catch (error) {
       this.log.warn('session %s dispose failed: %s', sessionId, String(error?.message ?? error));
@@ -355,8 +436,8 @@ export class SessionDriver {
 
   async closeTicketSessions(ticketId) {
     const ids = [];
-    for (const [key, id] of this.ticketSessions) {
-      if (key.startsWith(`${ticketId}:`)) ids.push(id);
+    for (const [key, set] of this.ticketSessions) {
+      if (key.startsWith(`${ticketId}:`)) ids.push(...set);
     }
     for (const id of ids) await this.closeSession(id);
   }

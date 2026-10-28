@@ -61,6 +61,7 @@ export class Engine {
         discard: (ticketId, reason) => this.discard(ticketId, reason),
         plan: (ticketId, value) => this.submitApprovalPlan(ticketId, value),
       };
+      this.driver.onManualAction = (input) => this.handleManualAction(input);
     }
   }
 
@@ -468,6 +469,57 @@ export class Engine {
     return this.store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
   }
 
+  async handleManualAction({ ticketId, purpose, sessionId, action }) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    if (action === null || action === undefined) throw new StoreError('bad_request', 'no action supplied');
+    if (purpose === 'plan' && action.type === 'plan') {
+      if (ticket.phase !== 'plan') throw new StoreError('invalid_phase', `plan submitted from ${ticket.phase}`);
+      const errors = validatePlan(action.value);
+      if (errors.length > 0) throw new StoreError('bad_request', `plan rejected: ${errors.join('; ')}`);
+      const plan = normalizePlan(action.value);
+      const version = this.store.currentPlanVersion(ticket.id) + 1;
+      this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
+      this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
+      this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version, manual: true } });
+      await this.closeSession(sessionId);
+      this.store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'manual plan submission' });
+      return;
+    }
+    if (purpose === 'build' && action.type === 'implementation') {
+      if (ticket.phase !== 'implement') throw new StoreError('invalid_phase', `implementation submitted from ${ticket.phase}`);
+      const value = action.value;
+      this.store.addArtifact(ticket.id, 'implement_result', JSON.stringify(value, null, 2));
+      if (value.status === 'blocked') return this.needsAttention(ticket, 'implementer reported blocked', { gaps: value.reasons ?? value.residual_risks ?? [], manual: true });
+      this.appendEvent(ticket.id, 'implemented', { phaseFrom: 'implement', phaseTo: 'review', payload: { attempt: ticket.attemptCount, manual: true } });
+      this.store.transitionTicket(ticket.id, { column: 'now', phase: 'review' }, { actor: 'human', reason: 'manual implementation submission' });
+      return;
+    }
+    if (purpose === 'build' && action.type === 'review') {
+      if (ticket.phase !== 'review') throw new StoreError('invalid_phase', `review submitted from ${ticket.phase}`);
+      const value = action.value;
+      this.store.addArtifact(ticket.id, 'review', JSON.stringify(value, null, 2));
+      if (value.verdict !== 'pass') {
+        const instruction = typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; ');
+        this.store.addArtifact(ticket.id, 'review_feedback', instruction);
+        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: `manual review requested changes: ${instruction}` });
+        return;
+      }
+      const gaps = verifyReview(value, this.store.listConditions(ticket.id), this.store.listAcceptance(ticket.id), this.getConfig().confidenceThreshold);
+      if (gaps.length > 0) {
+        const feedback = `Review cannot be code-verified: ${gaps.join('; ')}`;
+        this.store.addArtifact(ticket.id, 'review_feedback', feedback);
+        this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'implement', payload: { gaps, manual: true } });
+        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: feedback });
+        return;
+      }
+      await this.closeSession(sessionId);
+      await this.enterApproval(ticket);
+      return;
+    }
+    throw new StoreError('invalid_phase', `${action.type} cannot be submitted from ${ticket.phase}/${purpose}`);
+  }
+
   // -------------------------------------------------------------- role turn
 
   async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId }) {
@@ -662,7 +714,6 @@ export class Engine {
   needsAttention(ticket, reason, payload = {}) {
     this.appendEvent(ticket.id, 'needs_attention_reason', { payload: { reason, failedPhase: ticket.phase, ...payload } });
     this.store.setNeedsAttention(ticket.id, reason, payload);
-    void this.closeTicketSessions(ticket.id);
     this.endRun(ticket.id);
     this.appendEvent(ticket.id, 'attempt_history', { payload: this.attemptHistory(ticket.id) });
     return { kind: 'needs_attention' };
