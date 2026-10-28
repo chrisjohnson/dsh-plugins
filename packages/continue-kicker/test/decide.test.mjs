@@ -171,6 +171,60 @@ test('cooldown, per-kind switches and subagent scope are honoured', () => {
   assert.equal(decide({ ...base, events, isSubagent: true, settings: { ...settings, includeSubagents: true } }).action, 'kick')
 })
 
+// The `continueKicker` kick service asks for one recovery kick right after it
+// watched a turn fail, which is always inside the cooldown a previous kick
+// started. bypassCooldown opens only that gate.
+test('bypassCooldown skips the cooldown gate and nothing else', () => {
+  const events = maxTokensTurn()
+  const cooled = { ...settings, cooldownMs: 60000 }
+  const inCooldown = { ...base, events, settings: cooled, lastKickAt: base.now - 1000 }
+  assert.equal(decide(inCooldown).action, 'skip')
+  assert.match(decide(inCooldown).why, /cooldown/)
+  const forced = decide({ ...inCooldown, bypassCooldown: true })
+  assert.equal(forced.action, 'kick')
+  assert.equal(forced.flavor, 'max-tokens')
+  assert.equal(forced.consecutive, 1)
+  // Explicit false behaves exactly like omitting it.
+  assert.equal(decide({ ...inCooldown, bypassCooldown: false }).action, 'skip')
+
+  // Every other gate still holds while the cooldown is bypassed.
+  assert.equal(decide({ ...base, events, settings: { ...cooled, kickOnMaxTokens: false }, bypassCooldown: true }).action, 'skip')
+  assert.equal(decide({ ...base, events, isSubagent: true, bypassCooldown: true }).action, 'skip')
+  assert.equal(decide({ ...base, events, settings: { ...cooled, maxConsecutiveKicks: 0 }, bypassCooldown: true }).action, 'skip')
+  const exhausted = [userMessage('user'), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn()]
+  const stopped = decide({ ...base, events: exhausted, settings: cooled, lastKickAt: base.now - 1000, bypassCooldown: true })
+  assert.equal(stopped.action, 'stop')
+  assert.match(stopped.why, /runaway guard/)
+
+  // A tail that is not a kickable halt is still not a kick, cooldown or not.
+  assert.equal(decide({ ...base, events: completedTurn(), bypassCooldown: true }).action, 'skip')
+})
+
+// A follow-up message reaches the session log when the turn it starts claims it,
+// so a caller that asks for kicks back to back can read a log that is one kick
+// behind. knownKicks is what it has actually sent; the guard uses the higher
+// count so the lag cannot buy an extra kick.
+test('knownKicks closes the gap when the event log lags a kick behind', () => {
+  const maxed = { ...settings, maxConsecutiveKicks: 3 }
+  // The log shows two kicks; the caller says it already sent three.
+  const twoInLog = [userMessage('user'), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn(), kickMessage(), ...maxTokensTurn()]
+  assert.equal(countConsecutiveKicks(twoInLog, maxed), 2)
+  const third = decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 3 })
+  assert.equal(third.action, 'stop')
+  assert.match(third.why, /runaway guard/)
+  // With the log up to date the same call is the third kick, not a refusal.
+  const fromLog = decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 0 })
+  assert.equal(fromLog.action, 'kick')
+  assert.equal(fromLog.consecutive, 3)
+  // knownKicks below the log count never lowers it.
+  assert.equal(decide({ ...base, events: twoInLog, settings: maxed, knownKicks: 1 }).consecutive, 3)
+  // A reset in the log (here: a genuine user message) is what clears the caller's
+  // own count; decide itself just takes the max.
+  const afterUser = [kickMessage(), kickMessage(), kickMessage(), userMessage('user'), ...maxTokensTurn()]
+  assert.equal(countConsecutiveKicks(afterUser, maxed), 0)
+  assert.equal(decide({ ...base, events: afterUser, settings: maxed, knownKicks: 0 }).action, 'kick')
+})
+
 test('maxConsecutiveKicks 0 skips quietly instead of raising the runaway error', () => {
   const d = decide({ ...base, events: maxTokensTurn(), settings: { ...settings, maxConsecutiveKicks: 0 } })
   assert.equal(d.action, 'skip')

@@ -23,15 +23,25 @@
 // The consecutive-kick count is derived from the session's events on every
 // analysis (decide.mjs), so the reopen and live paths agree and a restart does
 // not lose it. Only the cooldown timestamp lives in memory.
+//
+// A third door is the `continueKicker` service this plugin provides: another
+// plugin (dsh-kanban) that owns a session's lifecycle can ask for one explicit
+// recovery kick instead of waiting for these automatic doors. It runs the same
+// decide() over the same session, sends the same message, and shares the same
+// cooldown map, so one plugin owns the policy and the other just pulls the
+// trigger. See README, "Provided service".
 
 import { format } from 'node:util'
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 import { resolveSettings } from './config.mjs'
-import { decide, PLUGIN_SOURCE_KIND } from './decide.mjs'
+import { countConsecutiveKicks, decide, PLUGIN_SOURCE_KIND } from './decide.mjs'
 
 const PLUGIN_NAME = 'continue-kicker'
+
+/** The version of the provided service contract (see README, "Provided service"). */
+const SERVICE_VERSION = 1
 
 export default function continueKicker(ctx, config = {}) {
   const log = ctx.logger(PLUGIN_NAME)
@@ -53,6 +63,7 @@ export default function continueKicker(ctx, config = {}) {
 
   const liveAgents = new Set() // session ids with a live watcher
   const lastKick = new Map() // sessionId -> timestamp of last kick
+  const kickCounts = new Map() // sessionId -> consecutive kicks sent since the last reset
   const pendingTimers = new Map() // sessionId -> scheduled re-analysis timer
   const scopeSkipped = new Set() // sessionIds already logged as scope-excluded
 
@@ -61,16 +72,65 @@ export default function continueKicker(ctx, config = {}) {
     return hdr.origin === 'subagent' || (hdr.delegationDepth ?? 0) > 0
   }
 
+  /**
+   * The live agent for a session id, or undefined. Resolved on every call: a
+   * service grabbed at boot may not be published yet, and a session that has
+   * since been disposed must not be kicked.
+   */
+  function liveAgent(sessionId) {
+    try {
+      return ctx.get('agents')?.get?.(sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * The consecutive-kick count to guard with. The event log is the source of
+   * truth, but a follow-up message only reaches it when the turn it starts
+   * claims it, so a caller that asks for kicks back to back (dsh-kanban's
+   * recovery loop, with the cooldown bypassed) can read a log one kick behind.
+   * The higher of the log count and what this process has actually sent wins.
+   * A reset in the log (genuine user message, normally completed turn) takes the
+   * in-memory count down with it, so a session a human picked back up is not
+   * still capped by kicks from before.
+   */
+  function trackedKicks(sessionId, events) {
+    const logCount = countConsecutiveKicks(events, settings)
+    const tracked = logCount === 0 ? 0 : Math.max(logCount, kickCounts.get(sessionId) ?? 0)
+    kickCounts.set(sessionId, tracked)
+    return tracked
+  }
+
+  /** One analysis of one session, from either door. */
+  function analyse(agent, { bypassCooldown = false } = {}) {
+    const events = agent.session?.snapshotEvents()
+    return decide({
+      events,
+      settings,
+      lastKickAt: lastKick.get(agent.id) ?? 0,
+      now: Date.now(),
+      isSubagent: isSubagent(agent),
+      bypassCooldown,
+      knownKicks: trackedKicks(agent.id, events),
+    })
+  }
+
+  /** Send the follow-up the decision asked for and record the cooldown. */
+  function sendKick(agent, decision) {
+    lastKick.set(agent.id, Date.now())
+    kickCounts.set(agent.id, decision.consecutive)
+    const message = createUserMessage({
+      content: [{ type: 'text', text: decision.text }],
+      source: { kind: PLUGIN_SOURCE_KIND, form: 'notice', summary: decision.summary },
+    })
+    agent.followup(message)
+  }
+
   function maybeKick(agent, trigger) {
     try {
       const sessionId = agent.id
-      const decision = decide({
-        events: agent.session?.snapshotEvents(),
-        settings,
-        lastKickAt: lastKick.get(sessionId) ?? 0,
-        now: Date.now(),
-        isSubagent: isSubagent(agent),
-      })
+      const decision = analyse(agent)
 
       if (decision.action === 'skip') {
         if (decision.scopeSkipped) {
@@ -85,17 +145,47 @@ export default function continueKicker(ctx, config = {}) {
         return
       }
 
-      lastKick.set(sessionId, Date.now())
-      const message = createUserMessage({
-        content: [{ type: 'text', text: decision.text }],
-        source: { kind: PLUGIN_SOURCE_KIND, form: 'notice', summary: decision.summary },
-      })
-      agent.followup(message)
+      sendKick(agent, decision)
       log.info('%s: kicked session %s (flavor=%s, consecutive=%d)', trigger, sessionId, decision.flavor, decision.consecutive)
     } catch (err) {
       log.error('%s: failed to kick session %s: %s', trigger, agent?.id, err?.stack ?? err)
     }
   }
+
+  /**
+   * The explicit door, for another plugin that owns this session's lifecycle.
+   * Same policy as the automatic doors, reported back instead of only logged:
+   *
+   *   kick(sessionId, { bypassCooldown }) ->
+   *     { kicked: true,  flavor, consecutive }
+   *     { kicked: false, why, stopped? }   `stopped: true` when the runaway
+   *                                       guard declined (needs human attention)
+   *
+   * Synchronous by contract: it never queues work of its own.
+   */
+  function kick(sessionId, { bypassCooldown = false } = {}) {
+    try {
+      const agent = liveAgent(sessionId)
+      if (agent === undefined || agent === null) return { kicked: false, why: 'session not live' }
+      const decision = analyse(agent, { bypassCooldown })
+      if (decision.action === 'skip') {
+        log.info('service: no kick on %s - %s', sessionId, decision.why)
+        return { kicked: false, why: decision.why }
+      }
+      if (decision.action === 'stop') {
+        log.error('service: NOT kicking %s - %s. This session needs human attention.', sessionId, decision.why)
+        return { kicked: false, why: decision.why, stopped: true }
+      }
+      sendKick(agent, decision)
+      log.info('service: kicked session %s (flavor=%s, consecutive=%d)', sessionId, decision.flavor, decision.consecutive)
+      return { kicked: true, flavor: decision.flavor, consecutive: decision.consecutive }
+    } catch (err) {
+      log.error('service: failed to kick session %s: %s', sessionId, err?.stack ?? err)
+      return { kicked: false, why: `kick failed: ${err?.message ?? err}` }
+    }
+  }
+
+  ctx.provide('continueKicker', { version: SERVICE_VERSION, kick })
 
   ctx.on('agent/created', ({ agent }) => {
     try {
@@ -134,12 +224,14 @@ export default function continueKicker(ctx, config = {}) {
     pendingTimers.delete(sessionId)
     liveAgents.delete(sessionId)
     lastKick.delete(sessionId)
+    kickCounts.delete(sessionId)
     scopeSkipped.delete(sessionId)
   })
 
   log.info(
-    'continue-kicker active (logToStderr=%s, cooldownMs=%d, liveKickDelayMs=%d, maxConsecutiveKicks=%d, kickOnInterrupted=%s, kickOnMaxTokens=%s, kickOnEmptyCompletion=%s, kickOnError=%s, includeSubagents=%s)',
+    'continue-kicker active (logToStderr=%s, cooldownMs=%d, liveKickDelayMs=%d, maxConsecutiveKicks=%d, kickOnInterrupted=%s, kickOnMaxTokens=%s, kickOnEmptyCompletion=%s, kickOnError=%s, includeSubagents=%s); kick service v%d provided',
     settings.logToStderr, settings.cooldownMs, settings.liveKickDelayMs, settings.maxConsecutiveKicks,
     settings.kickOnInterrupted, settings.kickOnMaxTokens, settings.kickOnEmptyCompletion, settings.kickOnError, settings.includeSubagents,
+    SERVICE_VERSION,
   )
 }

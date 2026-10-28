@@ -5,6 +5,18 @@
 
 ## Unreleased
 
+## 0.3.0
+
+### Added
+
+- A provided service, `continueKicker`, so another plugin that owns a session's lifecycle can ask for one explicit recovery kick instead of waiting for the automatic doors: `kick(sessionId, { bypassCooldown })` runs the same `decide()` over the session's own event log, sends the same message with the same source kind, and is bounded by the same cooldown and runaway guard. It answers `{ kicked, flavor, consecutive }` or `{ kicked, why, stopped? }` and never throws; a caller that finds no service (this plugin not installed) is expected to degrade, exactly as it does for `betterGitWorktree`. `dsh-kanban` 0.4.0 is the first consumer.
+- `decide()` accepts `bypassCooldown`, which opens only the cooldown gate. Every other gate — the per-kind switches, the subagent scope, `maxConsecutiveKicks` — still applies, so an explicit request cannot out-run the runaway guard.
+- `decide()` accepts `knownKicks`, the number of consecutive kicks the caller has already sent for the session. A kick message only reaches the session's event log when the turn it starts claims it, so a caller that asks for kicks back to back (which `bypassCooldown` makes possible) can read a log one kick behind; the guard now takes the higher of the log count and that number, so the lag cannot buy an extra kick. Found by the lab's kanban-recovery smoke, which saw 4 kicks where the cap was 3.
+
+### Changed
+
+- None for existing users. The watcher and the `agent/created` door are untouched, so an interactive session behaves exactly as in 0.2.0; the service is additive and idle until something calls it.
+
 ## 0.2.0
 
 ### Added
