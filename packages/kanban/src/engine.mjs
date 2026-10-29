@@ -25,6 +25,17 @@ const MAX_DIFF_BYTES = 60_000;
  * saying yes.
  */
 const AUTO_RECOVERY_MAX_ROUNDS = 8;
+/**
+ * How long to let a halted turn finish tearing down before asking for a kick.
+ *
+ * A `turn/end` is published while the agent's driver is still inside its own
+ * turn: the phase does not go back to idle until a moment later. A follow-up
+ * admitted in that window is queued but its wake is dropped, so the message
+ * sits in the inbox and no turn ever starts. This is the same reason
+ * dsh-continue-kicker waits `liveKickDelayMs` before its own re-analysis; the
+ * engine is reacting to the same event, so it needs the same beat.
+ */
+const AUTO_RECOVERY_KICK_DELAY_MS = 1500;
 
 function ticketStateBlock(ticket, acceptance) {
   return [
@@ -647,6 +658,7 @@ export class Engine {
     let lastTurn = Number.isFinite(turn.turn) ? turn.turn : null;
 
     for (let round = 1; round <= AUTO_RECOVERY_MAX_ROUNDS; round++) {
+      await new Promise((resolve) => setTimeout(resolve, AUTO_RECOVERY_KICK_DELAY_MS));
       const kick = await kicker.kick(sessionId, { bypassCooldown: true });
       if (kick?.kicked !== true) {
         this.log.info('ticket %s: no auto-recovery in %s - %s', ticket.key, phaseName, kick?.why ?? 'the kick service declined');
