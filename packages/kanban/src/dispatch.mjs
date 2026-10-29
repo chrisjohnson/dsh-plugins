@@ -86,7 +86,7 @@ export class SessionDriver {
           if (name === 'ask_user_question') waiter.awaitingUser = false;
         }
         waiter.lastEventAt = Date.now();
-        if (event.type === 'turn/end') {
+        if (event.type === 'turn/end' && this.#isWaitedTurn(waiter, event.data?.turn)) {
           try {
             this.#settleTurn(session, event, waiter);
           } catch (error) {
@@ -395,6 +395,39 @@ export class SessionDriver {
   }
 
   /**
+   * The highest turn number this session has already finished. A waiter armed
+   * now is waiting for a turn after it, never for it.
+   */
+  #lastTurn(session) {
+    try {
+      const events = session?.snapshotEvents?.() ?? [];
+      let last = 0;
+      for (const event of events) {
+        if (event?.type === 'turn/end' && Number.isFinite(event.data?.turn)) last = Math.max(last, event.data.turn)
+      }
+      return last;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * True when a `turn/end` belongs to the turn this waiter is waiting for.
+   *
+   * `reconcileTurns` settles from the last `turn/end` in the log, and a waiter
+   * armed just after a halt can be reconciled before the turn it is waiting for
+   * has begun: the agent is idle, more than 1500 ms have passed, and the previous
+   * turn's end is sitting right there. Settling on it hands the caller a failure
+   * for a turn that never ran, so it recovers again and the real turn is then
+   * genuinely in flight when the caller tries to park. A waiter only accepts an
+   * end newer than the turn it was armed on.
+   */
+  #isWaitedTurn(waiter, turn) {
+    if (!Number.isFinite(waiter.baselineTurn) || !Number.isFinite(turn)) return true;
+    return turn > waiter.baselineTurn;
+  }
+
+  /**
    * Arm the waiter machinery for one turn on a live session: the waiters map
    * entry, the stall interval, reconcileTurns coverage and #settleTurn on
    * turn/end. Shared by sendTurn (which then injects the role prompt) and
@@ -403,13 +436,13 @@ export class SessionDriver {
    * A turn that has already started is fine: the waiter attaches to it and
    * settles on its turn/end like any other.
    */
-  #armWaiter(sessionId, stallTimeoutMs) {
+  #armWaiter(sessionId, stallTimeoutMs, baselineTurn = 0) {
     const startedMono = process.hrtime.bigint()
     let settle
     const promise = new Promise((resolve, reject) => {
       settle = { resolve, reject }
     })
-    const waiter = { resolve: settle.resolve, reject: settle.reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId, awaitingUser: false }
+    const waiter = { resolve: settle.resolve, reject: settle.reject, timer: null, lastEventAt: Date.now(), startedMono, sessionId, awaitingUser: false, baselineTurn }
     const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)))
     const timer = setInterval(() => {
       if (this.waiters.get(sessionId) !== waiter) return;
@@ -440,7 +473,7 @@ export class SessionDriver {
       return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     }
     this.actions.delete(sessionId);
-    const { promise, abort } = this.#armWaiter(sessionId, stallTimeoutMs);
+    const { promise, abort } = this.#armWaiter(sessionId, stallTimeoutMs, this.#lastTurn(live.handle.agent.session));
     try {
       live.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }));
     } catch (error) {
@@ -464,7 +497,7 @@ export class SessionDriver {
     if (this.waiters.has(sessionId)) {
       return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     }
-    return this.#armWaiter(sessionId, stallTimeoutMs).promise;
+    return this.#armWaiter(sessionId, stallTimeoutMs, this.#lastTurn(live.handle.agent.session)).promise;
   }
 
   reconcileTurns() {
@@ -495,7 +528,7 @@ export class SessionDriver {
         const events = session.snapshotEvents ? session.snapshotEvents() : [];
         const ends = events.filter((event) => event.type === 'turn/end');
         const lastEnd = ends[ends.length - 1];
-        if (lastEnd !== undefined) {
+        if (lastEnd !== undefined && this.#isWaitedTurn(waiter, lastEnd.data?.turn)) {
           try {
             this.#settleTurn(session, lastEnd, waiter);
           } catch (error) {
