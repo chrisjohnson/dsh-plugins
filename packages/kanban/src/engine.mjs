@@ -25,6 +25,17 @@ const MAX_DIFF_BYTES = 60_000;
  * saying yes.
  */
 const AUTO_RECOVERY_MAX_ROUNDS = 8;
+/**
+ * How long to let a halted turn finish tearing down before asking for a kick.
+ *
+ * A `turn/end` is published while the agent's driver is still inside its own
+ * turn: the phase does not go back to idle until a moment later. A follow-up
+ * admitted in that window is queued but its wake is dropped, so the message
+ * sits in the inbox and no turn ever starts. This is the same reason
+ * dsh-continue-kicker waits `liveKickDelayMs` before its own re-analysis; the
+ * engine is reacting to the same event, so it needs the same beat.
+ */
+const AUTO_RECOVERY_KICK_DELAY_MS = 1500;
 
 function ticketStateBlock(ticket, acceptance) {
   return [
@@ -641,8 +652,13 @@ export class Engine {
     if (typeof this.driver.waitTurn !== 'function') return null;
     const config = this.getConfig();
     const runId = turn.runId ?? this.ensureRun(ticket);
+    // The turn number the engine last saw end on this session. Each recovery
+    // wait only accepts a `turn/end` after it, so a waiter can never be settled
+    // by the very halt the kick was sent to recover from.
+    let lastTurn = Number.isFinite(turn.turn) ? turn.turn : null;
 
     for (let round = 1; round <= AUTO_RECOVERY_MAX_ROUNDS; round++) {
+      await new Promise((resolve) => setTimeout(resolve, AUTO_RECOVERY_KICK_DELAY_MS));
       const kick = await kicker.kick(sessionId, { bypassCooldown: true });
       if (kick?.kicked !== true) {
         this.log.info('ticket %s: no auto-recovery in %s - %s', ticket.key, phaseName, kick?.why ?? 'the kick service declined');
@@ -658,11 +674,12 @@ export class Engine {
       let waited;
       const startedMono = process.hrtime.bigint();
       try {
-        waited = await this.driver.waitTurn({ sessionId, stallTimeoutMs: config.stallTimeoutMs });
+        waited = await this.driver.waitTurn({ sessionId, stallTimeoutMs: config.stallTimeoutMs, afterTurn: lastTurn });
       } catch (error) {
         this.log.warn('ticket %s: could not wait for the recovered turn: %s', ticket.key, String(error?.message ?? error));
         return null;
       }
+      if (Number.isFinite(waited.turn)) lastTurn = waited.turn;
       const result = this.continuationTurn(ticket, turn, runId, waited, phaseName, startedMono);
       if (result.kind === 'ok') return result;
       if (waited.status === 'stalled') {
@@ -723,14 +740,14 @@ export class Engine {
     this.recordTurnUsage(ticket, span, route, turn.usage);
     if (turn.status === 'ok') {
       this.store.endSpan(span.id, { status: 'ok', durationMs });
-      return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId, spanId: span.id };
+      return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId, spanId: span.id, turn: turn.turn ?? null };
     }
     if (turn.status === 'stalled') {
       this.store.endSpan(span.id, { status: 'abandoned', error: 'stalled', durationMs });
-      return { kind: 'failed', error: 'turn stalled', sessionId, spanId: span.id };
+      return { kind: 'failed', error: 'turn stalled', sessionId, spanId: span.id, turn: turn.turn ?? null };
     }
     this.store.endSpan(span.id, { status: 'failed', error: turn.error ?? turn.status, durationMs });
-    return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id };
+    return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id, turn: turn.turn ?? null };
   }
 
   async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId }) {

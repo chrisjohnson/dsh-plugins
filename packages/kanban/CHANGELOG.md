@@ -5,6 +5,34 @@
 
 ## Unreleased
 
+## 0.4.3
+
+### Fixed
+
+- A waiter is only ever settled by the turn it is waiting for. `reconcileTurns`
+  recovers a turn whose `turn/end` the driver never saw by settling from the last
+  end in the session log — but a waiter armed immediately after a halt (the
+  auto-recovery loop, right after it asked for a kick) can be reconciled before
+  the turn it waits for has begun: the agent is idle, 1500 ms have passed, and the
+  *previous* turn's end is sitting right there. That handed the engine a failure
+  for a turn that never ran, so it kicked again, and by the time the guard
+  declined a real turn was genuinely in flight — the busy guard then correctly
+  refused to park, the ticket stayed In flight, and every tick relaunched the
+  phase as a fresh attempt: 9 kicks where `maxConsecutiveKicks` is 3, and a park
+  of `attempt budget exhausted (3)` instead of the halt. Waiters now record the
+  turn number they were armed on and ignore an older `turn/end`, from both the
+  live handler and `reconcileTurns`.
+- The recovery kick is now asked for one beat (1500 ms) after the halt, not in
+  the same instant. A `turn/end` is published while the agent's driver is still
+  inside its own turn and the phase does not return to idle until a moment later;
+  a follow-up admitted in that window is queued but its wake is dropped, so the
+  kick message sat in the inbox and no turn ever started — the engine then waited
+  on a turn that would never come. This is the same ordering that
+  dsh-continue-kicker's `liveKickDelayMs` exists for on its own door.
+- 0.4.2 diagnosed the same symptom as stale activity bookkeeping. Its
+  `activity.turnEnd` on settle is kept (a settled turn is an ended turn), but it
+  was not the cause: the busy answer at the park was true.
+
 ## 0.4.2
 
 ### Fixed
