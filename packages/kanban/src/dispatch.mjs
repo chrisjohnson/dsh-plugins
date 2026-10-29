@@ -147,16 +147,51 @@ export class SessionDriver {
     return action;
   }
 
+  /**
+   * The registry's archive set as a live snapshot. Read on every use: DSH
+   * publishes no archive/unarchive event, and there is no reason to — the set is
+   * a plain getter over committed state.
+   */
+  #archivedSessionIds() {
+    try {
+      const ids = this.ctx.get('workspaceRegistry')?.archivedSessionIds;
+      return new Set(Array.isArray(ids) ? ids.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /** Live sessions registered for one ticket purpose, newest first, each tagged archived or not. */
+  #purposeCandidates(ticketId, purpose) {
+    const ids = this.ticketSessions.get(`${ticketId}:${purpose}`);
+    if (ids === undefined) return [];
+    const archived = this.#archivedSessionIds();
+    const out = [];
+    for (const sessionId of [...ids].reverse()) {
+      const live = this.live.get(sessionId);
+      if (live === undefined) continue;
+      out.push({ sessionId, live, archived: archived.has(String(sessionId)) });
+    }
+    return out;
+  }
+
   /** Return the live session for one ticket purpose, creating it on first use. */
   async ensureTicketSession({ ticket, role, route, purpose }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
-    const key = `${ticket.id}:${purpose}`;
-    const existingIds = this.ticketSessions.get(key);
-    if (existingIds !== undefined) {
-      for (const existingId of [...existingIds].reverse()) {
-        const existing = this.live.get(existingId);
-        if (existing !== undefined) return { sessionId: existingId, handle: existing.handle };
-      }
+    // An archived session is unusable: core's `agent/pre-step` gate rejects every
+    // turn in it, so dispatching into one burns a phase turn that ends instantly
+    // and reads as "the role ended without submitting". Skip archived candidates
+    // rather than evicting them — unarchiving must make them live again without a
+    // restart — and if the archive is all that is left, say so out loud instead of
+    // silently creating a second session for the purpose.
+    const candidates = this.#purposeCandidates(ticket.id, purpose);
+    for (const candidate of candidates) {
+      if (candidate.archived) continue;
+      return { sessionId: candidate.sessionId, handle: candidate.live.handle };
+    }
+    const blocked = candidates.find((candidate) => candidate.archived);
+    if (blocked !== undefined) {
+      throw new DispatchError(`workflow session ${blocked.sessionId} is archived; unarchive it and retry`, { code: 'SESSION_ARCHIVED' });
     }
     if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
     const config = this.getConfig();
@@ -304,6 +339,9 @@ export class SessionDriver {
 
   async attachExistingSession(sessionId, agentOverride) {
     if (this.disposed || this.live.has(sessionId)) return false;
+    // Reopening an archived session in the UI must not hand it back to the
+    // engine: it is still archived, so every turn in it is rejected at once.
+    if (this.#archivedSessionIds().has(String(sessionId))) return false;
     const record = this.store?.findSession?.(sessionId);
     if (record === undefined || record.ticketId === null || record.ticketId === undefined) return false;
     const ticket = this.store.getTicket(record.ticketId);
@@ -367,13 +405,16 @@ export class SessionDriver {
             .join('');
     const usage = aggregateUsage(assistants.map((e) => e.data.usage));
     const reason = event.data.reason ?? null;
-    const failed = reason !== null && ['error', 'aborted', 'interrupted', 'max-tokens'].includes(reason.kind);
+    // `blocked` is how core ends a turn rejected before its first step — the
+    // archived-session gate among them. It is a failure, not a no-op turn: left
+    // as success it reads as "the role ended without submitting".
+    const failed = reason !== null && TURN_FAILURE_KINDS.includes(reason.kind);
     waiter.resolve({
       status: failed ? 'failed' : 'ok',
       finalText,
       usage,
       reason,
-      error: failed ? (reason.kind === 'error' ? (reason.error?.message ?? 'model error') : reason.kind) : null,
+      error: failed ? turnFailureError(reason) : null,
       turn,
       events: turnEvents,
       session,
@@ -515,6 +556,16 @@ export class SessionDriver {
 
 function routeKey(route) {
   return [route.provider, route.model, route.reasoningEffort ?? ''].join('|');
+}
+
+/** Turn-end reasons that mean the role never got to work. */
+const TURN_FAILURE_KINDS = ['error', 'aborted', 'interrupted', 'max-tokens', 'blocked'];
+
+/** One-line, user-facing explanation of a failed turn end, for needs-attention reasons. */
+function turnFailureError(reason) {
+  if (reason.kind === 'error') return reason.error?.message ?? 'model error';
+  if (reason.kind === 'blocked') return 'turn blocked (session may be archived)';
+  return reason.kind;
 }
 
 export function aggregateUsage(usages) {

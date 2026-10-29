@@ -338,3 +338,79 @@ test('a reactivation of a ticket that is not waiting for attention changes nothi
   assert.equal(store.getTicket(ticket.id).column, 'now')
   assert.equal(driver.turns.length, 0)
 })
+
+// ------------------------------------------------- archived session failures
+//
+// The KAN-4 shape: the human archives a ticket's build session, the driver still
+// has it registered, and the engine dispatches the review into it. The reason on
+// the board has to say what to do about it, not blame a reviewer who never ran.
+
+const ARCHIVED_MESSAGE = 'workflow session session-27cea356 is archived; unarchive it and retry'
+
+/** Stand in for the driver refusing to dispatch into an archived purpose session. */
+function blockWith(driver, message, code = 'SESSION_ARCHIVED') {
+  driver.ensureTicketSession = async () => {
+    throw Object.assign(new Error(message), { name: 'DispatchError', code })
+  }
+}
+
+/** Walk a picked-up ticket to the review phase the way the lifecycle allows. */
+function toReview(store, ticket) {
+  store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine' })
+  store.transitionTicket(ticket.id, { phase: 'review' }, { actor: 'engine' })
+  return store.getTicket(ticket.id)
+}
+
+test('an archived session parks the review with an actionable reason, not a blame-the-reviewer one', async () => {
+  const { store, engine } = setup()
+  const ticket = toReview(store, pickedUp(store))
+  blockWith(engine.driver, ARCHIVED_MESSAGE)
+  const result = await engine.review(ticket)
+  assert.equal(result.kind, 'needs_attention')
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.phase, 'review')
+  assert.match(parked.needsAttentionReason, /archived/)
+  assert.doesNotMatch(parked.needsAttentionReason, /ended without calling/)
+  assert.doesNotMatch(parked.needsAttentionReason, /DispatchError|at .*engine\.mjs/)
+  assert.equal(parked.needsAttentionReason, `turn failed in review: ${ARCHIVED_MESSAGE}`)
+  assert.equal(parked.needsAttentionReason.includes('\n'), false)
+  const span = store.listSpans(ticket.id).find((row) => row.name === 'review')
+  assert.equal(span.status, 'failed')
+  assert.equal(span.error, ARCHIVED_MESSAGE)
+})
+
+test('a blocked turn end reaches the board as a failed turn, not a silent no-op', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = toReview(store, pickedUp(store))
+  driver.sendTurn = async () => ({
+    status: 'failed',
+    error: 'turn blocked (session may be archived)',
+    finalText: '',
+    usage: null,
+    events: [],
+  })
+  await engine.review(ticket)
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.needsAttentionReason, 'turn failed in review: turn blocked (session may be archived)')
+  assert.doesNotMatch(parked.needsAttentionReason, /ended without calling/)
+})
+
+test('retrying an archived-session park dispatches the review again once the block is gone', async () => {
+  const { store, engine, driver } = setup({ review: [{ type: 'review', value: REVIEW_PASS }] })
+  const ticket = toReview(store, pickedUp(store))
+  store.replaceConditions(ticket.id, 1, [{ id: 'notes', statement: 'note exists', howVerified: 'test -f notes.txt', ordinal: 0 }], 'plan')
+  const working = driver.ensureTicketSession
+  blockWith(driver, ARCHIVED_MESSAGE)
+  await engine.review(ticket)
+  assert.equal(store.getTicket(ticket.id).column, 'needs_attention')
+  assert.equal(driver.turns.length, 0)
+  // The human unarchives; the retry runs the review for real.
+  driver.ensureTicketSession = working
+  const again = await engine.review(store.getTicket(ticket.id))
+  assert.equal(again.kind, 'wait')
+  assert.equal(driver.turns.length, 1)
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
+})

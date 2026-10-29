@@ -614,7 +614,9 @@ export class Engine {
       const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
       this.log.error('role turn %s/%s failed: %s', role, spanName, error?.stack ?? String(error));
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs });
-      return { kind: 'failed', error: String(error?.stack ?? error), spanId: span.id };
+      // The needs-attention reason is shown on the board, so it stays one
+      // actionable line; the stack is already in the log and the span message.
+      return { kind: 'failed', error: String(error?.message ?? error), spanId: span.id };
     }
   }
 
