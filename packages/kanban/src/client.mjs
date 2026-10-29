@@ -185,7 +185,7 @@ var CSS =
 		+ ".kb-statusdot.active{background:#2563eb;animation:kb-pulse 1.8s ease-out infinite}"
 		+ ".kb-statusdot.attention{background:#b91c1c;box-shadow:0 0 0 3px rgba(185,28,28,.16)}"
 		+ ".kb-phasechip{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--kb-accent,#64748b) 30%,transparent);background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}"
-		+ ".kb-phasechip.plan{--kb-accent:#2563eb}.kb-phasechip.build{--kb-accent:#0d9488}.kb-phasechip.review{--kb-accent:#db2777}.kb-phasechip.approval{--kb-accent:#7c3aed}.kb-phasechip.done{--kb-accent:#15803d}"
+		+ ".kb-phasechip.plan{--kb-accent:#2563eb}.kb-phasechip.build{--kb-accent:#0d9488}.kb-phasechip.review{--kb-accent:#db2777}.kb-phasechip.approval{--kb-accent:#7c3aed}.kb-phasechip.done{--kb-accent:#15803d}.kb-phasechip.discarded{--kb-accent:#64748b}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
 		+ ".kb-steps{display:flex;gap:3px;margin:1px 0 2px}"
 		+ ".kb-step{--kb-step-color:#64748b;height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--kb-step-color) 20%,transparent)}"
@@ -421,6 +421,17 @@ var CSS =
 		function phaseTone(phase) {
 			return phase === "plan" ? "plan" : phase === "implement" ? "build" : phase === "review" ? "review" : phase === "verify" ? "approval" : "done";
 		}
+		// Discarded is its own badge stage, derived from the column: a discard
+		// can land from any phase and the row's phase may stay where it was
+		// (only the approval-stage discard closes the phase). The lifecycle dot
+		// strip deliberately has no Discarded dot - the stage lives in the
+		// badge, and the Done / Discarded column holds both stages.
+		function stageTone(t) {
+			return t.column === "discarded" ? "discarded" : phaseTone(t.phase);
+		}
+		function stageLabel(t) {
+			return t.column === "discarded" ? "Discarded" : phaseLabel(t.phase);
+		}
 		// The bottom-left badge mirrors the card status: grey idle, blue active,
 		// red attention.
 		function statusTone(status) {
@@ -441,7 +452,7 @@ var CSS =
 					h("span", { className: "kb-key", children: t.key }),
 					h("span", { className: "kb-spacer" }),
 					h("span", { className: "kb-statusdot " + (t.status || "idle"), "aria-hidden": "true" }),
-					h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) })
+					h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) })
 				),
 				h("div", { className: "kb-cardtitle", children: t.title }),
 				phaseProgress(t),
@@ -484,7 +495,7 @@ var CSS =
 					h("span", { className: "kb-key", children: t.key }),
 					h("span", { className: "kb-spacer" }),
 					h("span", { className: "kb-statusdot " + status, title: status, "aria-label": "Status: " + status }),
-					h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) })
+					h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) })
 				),
 				h("div", { className: "kb-cardtitle", children: t.title }),
 				phaseProgress(t),
@@ -1013,7 +1024,7 @@ var CSS =
 						h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
 						h("span", { className: "kb-key", children: t.key }),
 						h("span", { className: "kb-statusdot " + detailStatus, title: detailStatus, "aria-label": "Status: " + detailStatus }),
-						h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) }),
+						h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) }),
 						h("span", { className: "kb-chip", children: t.column }),
 						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
 						h("button", { className: "kb-iconbtn", title: "Edit modes and budget", "aria-label": "Edit modes and budget", onClick: function () { setModal("modes"); } }, h(PencilIcon))
