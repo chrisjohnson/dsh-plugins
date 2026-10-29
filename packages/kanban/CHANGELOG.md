@@ -5,6 +5,19 @@
 
 ## Unreleased
 
+## 0.5.1
+
+### Fixed
+
+- A discarded ticket now badges **Discarded**. The top-right badge was derived
+  from the phase alone, but a discard can land from any phase - only the
+  approval-stage discard closes the phase, so a ticket discarded while planning
+  sat in the Done / Discarded column still reading "Plan". The badge stage is
+  now derived from the column: `discarded` is its own stage (grey), alongside
+  Plan / Build / Review / Approval / Done. The lifecycle dot strip is unchanged
+  by design - Discarded is a badge stage, not a dot - and the Done / Discarded
+  column keeps holding tickets from both closing stages.
+
 ## 0.5.0
 
 ### Changed
