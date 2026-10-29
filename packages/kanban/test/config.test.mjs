@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { DEFAULT_CONFIG, DEFAULT_TOOLS, ROLES, resolveConfig, routeForAttempt } from '../src/config.mjs'
+import { DEFAULT_CONFIG, DEPRECATED_ROLE_KEYS, ROLES, resolveConfig, routeForAttempt } from '../src/config.mjs'
 
 test('defaults resolve with the four workflow roles', () => {
   const { config, warnings } = resolveConfig({})
@@ -12,11 +12,31 @@ test('defaults resolve with the four workflow roles', () => {
   assert.equal(config.defaultPlanQuestions, 'interactive')
 })
 
-test('planner is read-only by declaration and can ask', () => {
+test('a role is a model route and carries no tool list', () => {
   const { config } = resolveConfig({})
-  assert.ok(config.roles.planner.allowTools.includes('ask_user_question'))
-  assert.equal(config.roles.planner.allowTools.includes('write'), false)
-  assert.equal(config.roles.planner.allowTools.includes('edit'), false)
+  for (const role of ROLES) {
+    assert.deepEqual(
+      Object.keys(config.roles[role]).sort(),
+      ['model', 'provider', 'reasoningEffort'],
+      `${role} must declare only its route`,
+    )
+    assert.equal(config.roles[role].allowTools, undefined)
+  }
+})
+
+test('the deprecated allowTools key is accepted and warned, not an error', () => {
+  assert.deepEqual(DEPRECATED_ROLE_KEYS, ['allowTools'])
+  const { config, warnings } = resolveConfig({
+    roles: { planner: { provider: 'local', model: 'm', allowTools: ['read'] } },
+  })
+  assert.equal(config.roles.planner.provider, 'local')
+  assert.ok(
+    warnings.some((w) => w.includes('roles.planner.allowTools') && w.includes('deprecated')),
+    `expected a deprecation warning, got ${JSON.stringify(warnings)}`,
+  )
+  // Any shape is tolerated now — the key decides nothing.
+  assert.doesNotThrow(() => resolveConfig({ roles: { planner: { allowTools: 'read' } } }))
+  assert.doesNotThrow(() => resolveConfig({ roles: { reviewer: { allowTools: [] } } }))
 })
 
 test('unknown keys warn, wrong values throw', () => {
@@ -24,13 +44,13 @@ test('unknown keys warn, wrong values throw', () => {
   assert.ok(warnings.some((w) => w.includes('nope')))
   assert.throws(() => resolveConfig({ defaultPlanTiming: 'later' }), /defaultPlanTiming/)
   assert.throws(() => resolveConfig({ defaultPlanQuestions: 'maybe' }), /defaultPlanQuestions/)
-  assert.throws(() => resolveConfig({ roles: { planner: { allowTools: 'read' } } }), /allowTools/)
+  assert.throws(() => resolveConfig({ roles: { planner: { toolGuard: true } } }), /unknown key/)
 })
 
 test('roles fall back to the deployment default and the ladder can override', () => {
   const { config } = resolveConfig({
     roles: {
-      planner: { provider: null, model: null, allowTools: [] },
+      planner: { provider: null, model: null },
       implementer: { provider: 'paid', model: 'big' },
     },
     escalationLadder: [{ rung: 0 }, { rung: 1, provider: 'paid', model: 'biggest', reasoningEffort: 'high' }],

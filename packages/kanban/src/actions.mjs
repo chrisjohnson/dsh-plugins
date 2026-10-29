@@ -1,8 +1,14 @@
 // dsh-kanban: model-facing phase actions.
 //
+// All five action tools are registered in every workflow session, whatever its
+// purpose: a session changes phase inside its own life (implement -> review) and
+// a restarted board can hand a plan session back as an approval session, so a
+// session must never be missing the tool its next turn needs. Each tool
+// therefore enforces its own phase and refuses a call that does not belong to
+// it; that rejection is an ordinary tool error the model can read and correct.
+//
 // These tools are registered inside the agent scope, so they are visible only
-// in that workflow session. A tool validates its payload before recording it;
-// a phase-mismatched call is an ordinary tool error the model can correct.
+// in that workflow session. A tool validates its payload before recording it.
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
@@ -111,95 +117,106 @@ function registerTool(ctx, definition) {
   return ctx.tools.register(defineTool(definition));
 }
 
+function validatePlanPayload(args) {
+  const errors = validatePlan(args);
+  if (errors.length > 0) throw new Error(`plan rejected: ${errors.join('; ')}`);
+  if (!Array.isArray(args.done_when) || args.done_when.length === 0) throw new Error('plan needs at least one done_when condition');
+}
+
 /**
- * Register the action tools for a session purpose.
+ * Register every Kanban action tool in one workflow session.
+ *
+ * The session purpose is deliberately not an input: what each tool accepts is
+ * decided by the session's current phase (`liveRef.phase.role`), so a session
+ * that changes phase mid-life, or one reattached after a restart, never finds
+ * the tool it needs missing. The engine re-validates the ticket's own phase, so
+ * a call that is in the right session but the wrong ticket state still fails
+ * cleanly.
+ *
  * @returns {() => void} disposer for all tools registered here.
  */
-export function registerActionTools({ ctx, sessionId, purpose, liveRef, driver }) {
+export function registerActionTools({ ctx, sessionId, liveRef, driver }) {
   const disposers = [];
-  if (purpose === 'plan') {
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_submit_plan',
-      description: 'Submit the complete implementation plan. Call this when you have enough information; it ends the planning session.',
-      parameters: PLAN_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        const errors = validatePlan(args);
-        if (errors.length > 0) throw new Error(`plan rejected: ${errors.join('; ')}`);
-        if (!Array.isArray(args.done_when) || args.done_when.length === 0) throw new Error('plan needs at least one done_when condition');
-        return accept(driver, sessionId, { type: 'plan', value: args }, exec);
-      },
-    }));
-  }
-  if (purpose === 'build') {
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_submit_implementation',
-      description: 'Submit the implementation result. Call this when the implementation work for this round is finished.',
-      parameters: IMPLEMENT_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        requirePhase(liveRef, 'implementer', 'kanban_submit_implementation');
-        const errors = validateImplementResult(args);
-        if (errors.length > 0) throw new Error(`implementation rejected: ${errors.join('; ')}`);
-        return accept(driver, sessionId, { type: 'implementation', value: args }, exec);
-      },
-    }));
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_submit_review',
-      description: 'Submit the review verdict. Include one done_when row per plan id and one acceptance_coverage row per acceptance statement; a pass advances to human approval.',
-      parameters: REVIEW_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        requirePhase(liveRef, 'reviewer', 'kanban_submit_review');
-        const errors = validateReview(args);
-        if (errors.length > 0) throw new Error(`review rejected: ${errors.join('; ')}`);
-        if (args.verdict === 'fail' && typeof args.instruction !== 'string') {
-          throw new Error('review rejected: a fail verdict needs a concrete instruction');
-        }
-        return accept(driver, sessionId, { type: 'review', value: args }, exec);
-      },
-    }));
-  }
-  if (purpose === 'approval') {
-    const runAfterTurn = (exec, fn) => {
-      exec.concludeTurn();
-      setTimeout(() => { Promise.resolve().then(fn).catch((error) => driver.log?.warn?.('approval action failed: %s', String(error?.stack ?? error))); }, 0);
-      return { accepted: true };
-    };
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_approve',
-      description: 'Approve the completed work and close the ticket as done. Use only after the work is actually complete.',
-      parameters: APPROVE_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
-        return runAfterTurn(exec, () => driver.approval.approve(liveRef.ticketId, args.message ?? ''));
-      },
-    }));
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_discard',
-      description: 'Discard the ticket and its work, closing it without approval.',
-      parameters: DISCARD_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
-        return runAfterTurn(exec, () => driver.approval.discard(liveRef.ticketId, args.reason ?? ''));
-      },
-    }));
-    disposers.push(registerTool(ctx, {
-      name: 'kanban_submit_plan',
-      description: 'Submit a new plan for another build/review round instead of approving or discarding.',
-      parameters: PLAN_PARAMETERS,
-      output: TOOL_OUTPUT,
-      async execute(args, exec) {
-        if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
-        const errors = validatePlan(args);
-        if (errors.length > 0) throw new Error(`plan rejected: ${errors.join('; ')}`);
-        if (!Array.isArray(args.done_when) || args.done_when.length === 0) throw new Error('plan needs at least one done_when condition');
-        return runAfterTurn(exec, () => driver.approval.plan(liveRef.ticketId, args));
-      },
-    }));
-  }
+  const register = (definition) => disposers.push(registerTool(ctx, definition));
+
+  // Approval actions close the ticket and its session, so they conclude the turn
+  // first and run the engine call after it has settled.
+  const runAfterTurn = (exec, fn) => {
+    exec.concludeTurn();
+    setTimeout(() => { Promise.resolve().then(fn).catch((error) => driver.log?.warn?.('approval action failed: %s', String(error?.stack ?? error))); }, 0);
+    return { accepted: true };
+  };
+
+  register({
+    name: 'kanban_submit_plan',
+    description: 'Submit the implementation plan. In a planning session this ends planning; in an approval session it sends the ticket back for another build/review round instead of approving or discarding it.',
+    parameters: PLAN_PARAMETERS,
+    output: TOOL_OUTPUT,
+    async execute(args, exec) {
+      const role = liveRef.phase.role;
+      if (role !== 'planner' && role !== 'approver') {
+        throw new Error(`kanban_submit_plan is not available in the ${role} phase`);
+      }
+      validatePlanPayload(args);
+      if (role === 'planner') return accept(driver, sessionId, { type: 'plan', value: args }, exec);
+      if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+      return runAfterTurn(exec, () => driver.approval.plan(liveRef.ticketId, args));
+    },
+  });
+
+  register({
+    name: 'kanban_submit_implementation',
+    description: 'Submit the implementation result. Call this when the implementation work for this round is finished.',
+    parameters: IMPLEMENT_PARAMETERS,
+    output: TOOL_OUTPUT,
+    async execute(args, exec) {
+      requirePhase(liveRef, 'implementer', 'kanban_submit_implementation');
+      const errors = validateImplementResult(args);
+      if (errors.length > 0) throw new Error(`implementation rejected: ${errors.join('; ')}`);
+      return accept(driver, sessionId, { type: 'implementation', value: args }, exec);
+    },
+  });
+
+  register({
+    name: 'kanban_submit_review',
+    description: 'Submit the review verdict. Include one done_when row per plan id and one acceptance_coverage row per acceptance statement; a pass advances to human approval.',
+    parameters: REVIEW_PARAMETERS,
+    output: TOOL_OUTPUT,
+    async execute(args, exec) {
+      requirePhase(liveRef, 'reviewer', 'kanban_submit_review');
+      const errors = validateReview(args);
+      if (errors.length > 0) throw new Error(`review rejected: ${errors.join('; ')}`);
+      if (args.verdict === 'fail' && typeof args.instruction !== 'string') {
+        throw new Error('review rejected: a fail verdict needs a concrete instruction');
+      }
+      return accept(driver, sessionId, { type: 'review', value: args }, exec);
+    },
+  });
+
+  register({
+    name: 'kanban_approve',
+    description: 'Approve the completed work and close the ticket as done. Use only after the work is actually complete.',
+    parameters: APPROVE_PARAMETERS,
+    output: TOOL_OUTPUT,
+    async execute(args, exec) {
+      requirePhase(liveRef, 'approver', 'kanban_approve');
+      if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+      return runAfterTurn(exec, () => driver.approval.approve(liveRef.ticketId, args.message ?? ''));
+    },
+  });
+
+  register({
+    name: 'kanban_discard',
+    description: 'Discard the ticket and its work, closing it without approval.',
+    parameters: DISCARD_PARAMETERS,
+    output: TOOL_OUTPUT,
+    async execute(args, exec) {
+      requirePhase(liveRef, 'approver', 'kanban_discard');
+      if (driver.approval === undefined) throw new Error('approval handlers are unavailable');
+      return runAfterTurn(exec, () => driver.approval.discard(liveRef.ticketId, args.reason ?? ''));
+    },
+  });
+
   return () => {
     for (const dispose of disposers.splice(0).reverse()) {
       try {

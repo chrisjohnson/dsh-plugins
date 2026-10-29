@@ -25,7 +25,7 @@ const skip = Driver === undefined ? 'no @deepseek-ai/dsh-llm installed' : false
 
 function harness() {
   const { config } = resolveConfig({
-    roles: { implementer: { provider: 'local', model: 'm', allowTools: ['read'] } },
+    roles: { implementer: { provider: 'local', model: 'm' } },
     providers: [{ name: 'local' }],
   })
   const db = new DatabaseSync(':memory:')

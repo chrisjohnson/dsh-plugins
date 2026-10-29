@@ -5,9 +5,15 @@
 //   build         implement <-> review (one session)
 //   verify        mechanical end gate (one session)
 //
-// Every session starts once in the standard preset. Phase changes do not rebind
-// a preset or replace a system prompt: they change the tool guard/mask and the
-// next user prompt.
+// Every session starts once in the standard preset, so every standard tool a
+// normal session has is available to every role. Kanban registers no tool guard:
+// the action tools are present in every workflow session and each one refuses a
+// call that does not belong to its phase.
+//
+// Phase changes do not rebind a preset or replace a system prompt: they change
+// the next user prompt and which action tool will accept a submission. The
+// sandbox mode is set by session purpose alone, so a phase change inside one
+// session never moves it.
 
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -17,7 +23,6 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
 
 import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
-import { phaseToolGuard } from './tools.mjs';
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -228,14 +233,9 @@ export class SessionDriver {
         const presets = this.ctx.get('agentPresets');
         if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
         await presets.mount(agentCtx, 'standard');
-        liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, purpose, liveRef, driver: this });
-        agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
-        agentCtx.tools.guard((execution) => {
-          if (purpose === 'plan' && execution.name === 'ask_user_question' && ticket.planQuestions === 'autonomous') {
-            return 'this ticket uses autonomous judgement; ask the user no questions';
-          }
-          return undefined;
-        });
+        // No tool guard of any kind: the standard preset's tools are the role's
+        // tools, and every Kanban action tool enforces its own phase.
+        liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this });
       },
     });
     liveRef.handle = handle;
@@ -257,9 +257,10 @@ export class SessionDriver {
   setPhase(sessionId, role) {
     const live = this.live.get(sessionId);
     if (live === undefined) throw new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' });
+    // The action tools' phase checks and the engine's route selection read this;
+    // the sandbox mode deliberately does not — it follows the purpose.
     live.role = role;
     live.phase.role = role;
-    this.#applySandboxMode(live);
   }
 
   async #attachWorkspace(sessionId, cwd, attempt) {
@@ -287,8 +288,14 @@ export class SessionDriver {
     void this.#attachWorkspace(sessionId, cwd, 0);
   }
 
+  /**
+   * The sandbox mode follows the session purpose and nothing else: planning and
+   * the mechanical verify gate read, building and approving write. A phase change
+   * inside one session (implementer -> reviewer) deliberately leaves it alone, so
+   * a reviewer can run the checks its own review asks for.
+   */
   #applySandboxMode(live) {
-    const mode = live.purpose === 'plan' || live.purpose === 'verify' || live.role === 'reviewer' ? 'read-only' : 'workspace-write';
+    const mode = live.purpose === 'plan' || live.purpose === 'verify' ? 'read-only' : 'workspace-write';
     if (live.sandboxMode === mode) return;
     try {
       setSandboxMode(live.handle.agent.session, mode);
@@ -371,20 +378,16 @@ export class SessionDriver {
     this.live.set(sessionId, liveRef);
     this.activity.negatives.delete(sessionId);
     this.#addTicketSession(ticket.id, purpose, sessionId);
-    await this.#registerExistingTools(agent.ctx, liveRef, ticket, sessionId, purpose);
+    await this.#registerExistingTools(agent.ctx, liveRef, sessionId);
     this.#applySandboxMode(liveRef);
     void this.#attachWorkspace(sessionId, ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd(), 0);
     this.log.info('kanban: reattached session %s to %s/%s', sessionId, ticket.key, purpose);
     return true;
   }
 
-  async #registerExistingTools(agentCtx, liveRef, ticket, sessionId, purpose) {
-    liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, purpose, liveRef, driver: this });
-    agentCtx.tools.guard(phaseToolGuard(() => liveRef.phase.role, () => this.getConfig().roles));
-    agentCtx.tools.guard((execution) => {
-      if (purpose === 'plan' && execution.name === 'ask_user_question' && ticket.planQuestions === 'autonomous') return 'this ticket uses autonomous judgement; ask the user no questions';
-      return undefined;
-    });
+  async #registerExistingTools(agentCtx, liveRef, sessionId) {
+    // Same as the setup path: every action tool, no guard.
+    liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this });
   }
 
   isAwaitingUser(ticketId) {
