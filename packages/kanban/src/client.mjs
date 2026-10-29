@@ -103,9 +103,8 @@ var CSS =
 		+ ".kb-chip.err{background:#fdecea;border-color:#f3b3ac;color:#9b1c1c}"
 		+ ".kb-chip.ok{background:#e8f6ec;border-color:#a8d8b5;color:#1d6b32}"
 		+ ".kb-body{flex:1;min-height:0;overflow:auto;padding:14px 18px 28px}"
-		+ ".kb-cols{display:grid;grid-template-columns:repeat(5,minmax(210px,1fr));gap:12px;align-items:start;min-width:1050px}"
+		+ ".kb-cols{display:grid;grid-template-columns:repeat(3,minmax(210px,1fr));gap:12px;align-items:start;min-width:700px}"
 		+ ".kb-col{border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-2,#f7f8fa);min-height:120px;display:flex;flex-direction:column;max-height:calc(100vh - 190px)}"
-		+ ".kb-col.attn{border-color:#f0b4ad;background:#fef6f5}"
 		+ ".kb-colhead{display:flex;align-items:center;gap:8px;padding:9px 11px 7px;font:600 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-secondary,#555);position:sticky;top:0;z-index:1;background:inherit;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0}"
 		+ ".kb-count{margin-left:auto;font:500 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
 		+ ".kb-list{display:flex;flex-direction:column;gap:7px;padding:0 8px 9px;overflow:auto}"
@@ -115,7 +114,6 @@ var CSS =
 		+ ".kb-card-ghost{opacity:.62;border-style:dashed;border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l2,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 5%,var(--dsw-alias-bg-base,#fff));box-shadow:0 5px 16px rgba(15,23,42,.10);pointer-events:none;transform:translateY(1px)}"
 		+ ".kb-card-ghost .kb-next{color:var(--dsw-alias-state-business-primary,#2563eb)}"
 		+ ".kb-col.drop-target{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l1,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 3%,var(--dsw-alias-bg-layer-2,#f7f8fa))}"
-		+ ".kb-card.attn{border-left:3px solid #c0392b}"
 		+ ".kb-key{font:600 11px/15px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}"
 		+ ".kb-meta{display:flex;flex-wrap:wrap;gap:5px;align-items:center;font:500 11px/15px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-tertiary,#888)}"
@@ -161,18 +159,15 @@ var CSS =
 		+ ".kb-title{margin:0;font:500 20px/28px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
 		+ ".kb-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary,#888);font-size:12px;line-height:18px}"
 		+ ".kb-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}"
-		+ ".kb-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;padding:18px clamp(20px,4vw,48px)}"
 		+ ".kb-kpi{position:relative;overflow:hidden;padding:10px 12px;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-md,12px);background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 8%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
 		+ ".kb-kpi::after{content:'';position:absolute;right:-16px;top:-22px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--kb-accent) 16%,transparent),transparent 70%)}"
 		+ ".kb-kpi-value{font:600 22px/26px var(--dsw-font-family,sans-serif);font-variant-numeric:tabular-nums;color:var(--kb-accent)}"
 		+ ".kb-kpi-label{margin-top:1px;font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
 		+ ".kb-tone-idle{--kb-accent:#64748b}.kb-tone-run{--kb-accent:#2563eb}.kb-tone-warn{--kb-accent:#b45309}.kb-tone-err{--kb-accent:#b91c1c}.kb-tone-ok{--kb-accent:#15803d}.kb-tone-violet{--kb-accent:#7c3aed}"
 		+ ".kb-body{padding:0 clamp(20px,4vw,48px) 48px}"
-		+ ".kb-cols{grid-template-columns:repeat(5,minmax(230px,1fr));gap:14px;min-width:1150px}"
+		+ ".kb-cols{grid-template-columns:repeat(3,minmax(250px,1fr));gap:14px;min-width:780px}"
 		+ ".kb-col{--kb-accent:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 18%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:color-mix(in srgb,var(--kb-accent) 4%,var(--dsw-alias-bg-layer-2,#f7f8fa));padding-top:3px;max-height:calc(100vh - 280px)}"
 		+ ".kb-col::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
-		+ ".kb-col-backlog{--kb-accent:#64748b}.kb-col-now{--kb-accent:#2563eb}.kb-col-blocked{--kb-accent:#b45309}.kb-col-needs_attention{--kb-accent:#b91c1c}.kb-col-done{--kb-accent:#15803d}"
-		+ ".kb-col.attn{border-color:color-mix(in srgb,#b91c1c 35%,var(--dsw-alias-border-l2,#e5e7eb));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-2,#f7f8fa))}"
 		+ ".kb-colhead{padding:9px 12px 7px;color:var(--dsw-alias-label-secondary,#555);background:transparent;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0}"
 		+ ".kb-coldot{width:7px;height:7px;border-radius:50%;background:var(--kb-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-accent) 14%,transparent);flex:none}"
 		+ ".kb-collabel{font:600 11px/16px var(--dsw-font-family,sans-serif);letter-spacing:.06em;text-transform:uppercase}"
@@ -180,15 +175,17 @@ var CSS =
 		+ ".kb-list{gap:8px;padding:0 9px 11px}"
 		+ ".kb-card{border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 10px;gap:6px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;position:relative}"
 		+ ".kb-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 45%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--kb-accent,#3b82f6) 13%,transparent)}"
-		+ ".kb-card.working{border-color:color-mix(in srgb,#22c55e 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#22c55e 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow 3.2s ease-in-out infinite}"
-		+ ".kb-card.working::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#22c55e,#06b6d4)}"
-		+ ".kb-card.attn{border-left:3px solid #b91c1c}"
+		+ ".kb-card.active{border-color:color-mix(in srgb,#2563eb 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#2563eb 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow-blue 3.2s ease-in-out infinite}"
+		+ ".kb-card.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#2563eb,#06b6d4)}"
+		+ ".kb-card.attention{border-color:color-mix(in srgb,#b91c1c 45%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow-red 1.6s ease-in-out infinite}"
+		+ ".kb-card.attention::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:#b91c1c}"
 		+ ".kb-cardtop{display:flex;align-items:center;gap:7px}"
 		+ ".kb-key{font:600 11px/15px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);letter-spacing:.02em}"
-		+ ".kb-live{margin-left:auto;display:inline-flex;align-items:center;gap:4px;color:#15803d;font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.05em;text-transform:uppercase}"
-		+ ".kb-live i{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:kb-pulse 1.8s ease-out infinite}"
-		+ ".kb-phasechip{margin-left:auto;display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--kb-accent,#64748b) 30%,transparent);background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}"
-		+ ".kb-phasechip.run{--kb-accent:#2563eb}.kb-phasechip.warn{--kb-accent:#b45309}.kb-phasechip.err{--kb-accent:#b91c1c}.kb-phasechip.ok{--kb-accent:#15803d}.kb-phasechip.idle{--kb-accent:#64748b}"
+		+ ".kb-statusdot{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}"
+		+ ".kb-statusdot.active{background:#2563eb;animation:kb-pulse 1.8s ease-out infinite}"
+		+ ".kb-statusdot.attention{background:#b91c1c;box-shadow:0 0 0 3px rgba(185,28,28,.16)}"
+		+ ".kb-phasechip{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--kb-accent,#64748b) 30%,transparent);background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}"
+		+ ".kb-phasechip.plan{--kb-accent:#2563eb}.kb-phasechip.build{--kb-accent:#0d9488}.kb-phasechip.review{--kb-accent:#db2777}.kb-phasechip.approval{--kb-accent:#7c3aed}.kb-phasechip.done{--kb-accent:#15803d}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
 		+ ".kb-steps{display:flex;gap:3px;margin:1px 0 2px}"
 		+ ".kb-step{--kb-step-color:#64748b;height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--kb-step-color) 20%,transparent)}"
@@ -197,14 +194,14 @@ var CSS =
 		+ ".kb-step.current{background:var(--kb-step-color);box-shadow:0 0 0 1px color-mix(in srgb,var(--kb-step-color) 45%,transparent)}"
 		+ ".kb-meta{gap:5px;font:500 11px/15px var(--dsw-font-family,sans-serif);align-items:center}"
 		+ ".kb-next{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font-weight:600;white-space:nowrap}"
-		+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.warn{--kb-accent:#b45309}.kb-next.err{--kb-accent:#b91c1c}.kb-next.ok{--kb-accent:#15803d}.kb-next.idle{--kb-accent:#64748b}"
+		+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.err{--kb-accent:#b91c1c}.kb-next.idle{--kb-accent:#64748b}"
 		+ ".kb-total{color:var(--dsw-alias-label-secondary,#555);font-variant-numeric:tabular-nums;white-space:nowrap}"
 		+ ".kb-age{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary,#999)}"
 		+ ".kb-empty{padding:20px 10px;border:1px dashed color-mix(in srgb,var(--kb-accent,#888) 22%,transparent);border-radius:var(--dsw-radius-md,12px);background:transparent;font-size:11px;line-height:16px}"
 		+ ".kb-detail{gap:12px;max-width:1180px}"
 		+ ".kb-hero{--kb-accent:#2563eb;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 7%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:14px 16px;box-shadow:0 10px 30px rgba(15,23,42,.04)}"
 		+ ".kb-hero::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
-		+ ".kb-hero-backlog{--kb-accent:#64748b}.kb-hero-now{--kb-accent:#2563eb}.kb-hero-blocked{--kb-accent:#b45309}.kb-hero-needs_attention{--kb-accent:#b91c1c}.kb-hero-done{--kb-accent:#15803d}"
+		+ ".kb-hero-backlog{--kb-accent:#64748b}.kb-hero-working{--kb-accent:#64748b}.kb-hero-discarded{--kb-accent:#64748b}.kb-hero-done{--kb-accent:#15803d}.kb-hero-attention{--kb-accent:#b91c1c}"
 		+ ".kb-hero-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}"
 		+ ".kb-hero-title{margin:8px 0 3px;font:500 18px/25px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
 		+ ".kb-hero-meta{display:flex;flex-wrap:wrap;gap:5px 14px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px;line-height:16px}"
@@ -221,10 +218,6 @@ var CSS =
 		+ ".kb-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}"
 		+ ".kb-tab.on{color:var(--dsw-alias-label-primary,#111);border-color:var(--dsw-alias-border-l2,#ddd);background:var(--dsw-alias-bg-layer-1,#fff)}"
 		+ ".kb-panel{border-color:var(--dsw-alias-border-l2,#e5e7eb);border-radius:var(--dsw-radius-md,12px);padding:13px 15px}"
-		+ ".kb-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 12px;padding:7px 10px;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1,#fff)}"
-		+ ".kb-flow-title{font:600 11px/16px var(--dsw-font-family,sans-serif);letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);margin-right:2px}"
-		+ ".kb-flow-chip{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);background:var(--dsw-alias-bg-layer-2,#f6f7f9);color:var(--dsw-alias-label-secondary,#555);font:600 11px/16px var(--dsw-font-family,sans-serif);white-space:nowrap}"
-		+ ".kb-flow-chip.run{color:#1d4ed8;border-color:#bfdbfe;background:#eff6ff}.kb-flow-chip.warn{color:#b45309;border-color:#fcd34d;background:#fffbeb}"
 		+ ".kb-timeline{display:flex;flex-direction:column;gap:7px}"
 		+ ".kb-tl-legend{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}"
 		+ ".kb-tl-key{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);color:var(--dsw-alias-label-secondary,#555);font:600 11px/15px var(--dsw-font-family,sans-serif);background:var(--dsw-alias-bg-layer-2,#f6f7f9)}"
@@ -343,11 +336,12 @@ var CSS =
 		+ ".kb-switch[aria-checked='true'] .kb-switch-thumb{background:var(--dsw-alias-label-primary-foreground,#fff);transform:translateX(16px)}"
 		+ ".kb-switchrow{display:flex;align-items:center;gap:8px}"
 		+ ".kb-worktree-path{font:400 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}"
-		+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
-		+ "@keyframes kb-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
-		+ "@media (prefers-reduced-motion:reduce){.kb-card.working,.kb-live i,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
-		+ "@media (max-width:900px){.kb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
-		+ "@media (max-width:600px){.kb-kpis{grid-template-columns:1fr}}";
+		+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.5)}70%{box-shadow:0 0 0 6px rgba(37,99,235,0)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}}"
+		+ "@keyframes kb-glow-blue{0%,100%{box-shadow:0 0 0 1px rgba(37,99,235,.08),0 4px 16px rgba(37,99,235,.05)}50%{box-shadow:0 0 0 1.5px rgba(37,99,235,.32),0 8px 28px rgba(37,99,235,.15)}}"
+		+ "@keyframes kb-glow-red{0%,100%{box-shadow:0 0 0 1px rgba(185,28,28,.16),0 4px 14px rgba(185,28,28,.08)}50%{box-shadow:0 0 0 2px rgba(185,28,28,.42),0 8px 26px rgba(185,28,28,.22)}}"
+		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-card.attention,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
+		+ "@media (max-width:900px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+		+ "";
 
 		function ensureStyles() {
 			var id = "kanban-styles";
@@ -369,8 +363,15 @@ var CSS =
 					if (!connection) return;
 					rpc("board", {}).then(function (res) {
 						if (!alive || !res || !res.ok || !res.value) return;
-						var counts = res.value.counts || {};
-						setBadges({ inFlight: Number(counts.now) || 0, attention: Number(counts.needs_attention) || 0 });
+						var columns = res.value.columns || {};
+						var inFlight = 0, attention = 0;
+						["backlog", "working", "done", "discarded"].forEach(function (name) {
+							(columns[name] || []).forEach(function (ticket) {
+								if (ticket.status === "active") inFlight += 1;
+								else if (ticket.status === "attention") attention += 1;
+							});
+						});
+						setBadges({ inFlight: inFlight, attention: attention });
 					}, function () {});
 				}
 				load();
@@ -415,17 +416,22 @@ var CSS =
 				})
 			);
 		}
-		function phaseTone(column) {
-			return column === "blocked" ? "warn" : column === "needs_attention" ? "err" : column === "now" ? "run" : column === "done" || column === "discarded" ? "ok" : "idle";
+		// Badge tone follows the lifecycle stage, not the column: Plan blue,
+		// Build teal, Review pink, Approval violet, Done green.
+		function phaseTone(phase) {
+			return phase === "plan" ? "plan" : phase === "implement" ? "build" : phase === "review" ? "review" : phase === "verify" ? "approval" : "done";
+		}
+		// The bottom-left badge mirrors the card status: grey idle, blue active,
+		// red attention.
+		function statusTone(status) {
+			return status === "attention" ? "err" : status === "active" ? "run" : "idle";
 		}
 		function nextAction(t) {
-			if (t.phase === "verify") return "Awaiting approval";
-			if (t.column === "needs_attention") return "Needs your decision";
-			if (t.phase === "plan" && t.planQuestions === "interactive") return "Grilling / planning";
-			if (t.column === "blocked") return "Blocked";
+			if (t.status === "attention") return t.phase === "verify" ? "Awaiting approval" : t.awaitingQuestion ? "Waiting on you" : "Needs your decision";
+			if (t.status === "active") return t.phase === "plan" ? "Grilling / planning" : "Running";
 			if (t.column === "done" || t.column === "discarded") return "Closed";
-			if (t.column === "now") return t.group === "waiting" ? "Waiting on you" : t.group === "active" ? "Running" : "Queued";
-			return "Ready when promoted";
+			if (t.column === "working") return "Queued";
+			return "Ready";
 		}
 
 		function DropGhost(props) {
@@ -433,23 +439,25 @@ var CSS =
 			return h("div", { className: "kb-card kb-card-ghost", "aria-hidden": "true" },
 				h("div", { className: "kb-cardtop" },
 					h("span", { className: "kb-key", children: t.key }),
-					h("span", { className: "kb-phasechip " + phaseTone(props.column), children: phaseLabel(t.phase) })
+					h("span", { className: "kb-spacer" }),
+					h("span", { className: "kb-statusdot " + (t.status || "idle"), "aria-hidden": "true" }),
+					h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) })
 				),
 				h("div", { className: "kb-cardtitle", children: t.title }),
 				phaseProgress(t),
 				h("div", { className: "kb-meta" },
-					h("span", { className: "kb-next " + phaseTone(props.column), children: "Drop here" })
+					h("span", { className: "kb-next idle", children: "Drop here" })
 				)
 			);
 		}
 
 		function Card(props) {
 			var t = props.ticket;
-			var working = t.column === "now" && t.group === "active";
+			var status = t.status || "idle";
 			return h(
 				"div",
 				{
-					className: "kb-card kb-card-" + t.column + (working ? " working" : "") + (t.column === "needs_attention" ? " attn" : "") + (props.dragging ? " dragging" : ""),
+					className: "kb-card" + (status === "active" ? " active" : "") + (status === "attention" ? " attention" : "") + (props.dragging ? " dragging" : ""),
 					draggable: true,
 					onDragStart: function (ev) {
 						ev.dataTransfer.setData("text/kanban", t.id);
@@ -474,12 +482,14 @@ var CSS =
 				},
 				h("div", { className: "kb-cardtop" },
 					h("span", { className: "kb-key", children: t.key }),
-					working ? h("span", { className: "kb-live" }, h("i"), "live") : h("span", { className: "kb-phasechip " + phaseTone(t.column), children: phaseLabel(t.phase) })
+					h("span", { className: "kb-spacer" }),
+					h("span", { className: "kb-statusdot " + status, title: status, "aria-label": "Status: " + status }),
+					h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) })
 				),
 				h("div", { className: "kb-cardtitle", children: t.title }),
 				phaseProgress(t),
 				h("div", { className: "kb-meta" },
-					h("span", { className: "kb-next " + phaseTone(t.column), children: nextAction(t) }),
+					h("span", { className: "kb-next " + statusTone(status), children: nextAction(t) }),
 					t.attemptCount > 0 ? h("span", { children: "try " + t.attemptCount }) : null,
 					t.spentUsd > 0 ? h("span", { children: fmtUsd(t.spentUsd) }) : null,
 					h("span", { className: "kb-total", title: "Total time on ticket", children: fmtDur(t.totalMs !== undefined ? t.totalMs : Date.now() - new Date(t.createdAt).getTime()) }),
@@ -504,7 +514,7 @@ var CSS =
 			return h(
 				"div",
 				{
-					className: "kb-col kb-col-" + props.column + (props.attention ? " attn" : "") + (active ? " drop-target" : ""),
+					className: "kb-col" + (active ? " drop-target" : ""),
 					onDragOver: function (ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; if (props.onDragOverColumn) props.onDragOverColumn(props.column); },
 					onDrop: function (ev) {
 						ev.preventDefault();
@@ -519,7 +529,7 @@ var CSS =
 				),
 				h("div", { className: "kb-list" },
 					items.length === 0 && ghost === null
-						? h("div", { className: "kb-empty", children: props.column === "backlog" ? "Nothing queued" : props.column === "done" ? "Nothing shipped yet" : "Nothing here" })
+						? h("div", { className: "kb-empty", children: props.column === "backlog" ? "Nothing queued" : props.column === "working" ? "Nothing in progress" : props.column === "done" ? "Nothing shipped yet" : "Nothing here" })
 						: rendered
 				)
 			);
@@ -657,8 +667,7 @@ var CSS =
 							onChange: function (value) { field("status", value); },
 							options: [
 								{ value: "backlog", label: "Backlog" },
-								{ value: "now", label: "Now (start immediately)" },
-								{ value: "blocked", label: "Blocked" }
+								{ value: "working", label: "Working (start immediately)" }
 							]
 						})
 					)
@@ -996,14 +1005,17 @@ var CSS =
 			}, [d]);
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
+			var detailStatus = d.status || t.status || "idle";
 			var tabs = ["overview", "timeline", "sessions", "events", "ticket analytics"];
 			return h("div", { className: "kb-detail" },
-				h("div", { className: "kb-hero kb-hero-" + t.column },
+				h("div", { className: "kb-hero " + (detailStatus === "attention" ? "kb-hero-attention" : "kb-hero-" + t.column) },
 					h("div", { className: "kb-hero-top" },
 						h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
 						h("span", { className: "kb-key", children: t.key }),
-						h("span", { className: "kb-phasechip " + phaseTone(t.column), children: t.column.replace("_", " ") }),
-						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: "needs attention" }) : null,
+						h("span", { className: "kb-statusdot " + detailStatus, title: detailStatus, "aria-label": "Status: " + detailStatus }),
+						h("span", { className: "kb-phasechip " + phaseTone(t.phase), children: phaseLabel(t.phase) }),
+						h("span", { className: "kb-chip", children: t.column }),
+						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
 						h("button", { className: "kb-iconbtn", title: "Edit modes and budget", "aria-label": "Edit modes and budget", onClick: function () { setModal("modes"); } }, h(PencilIcon))
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
@@ -1015,7 +1027,7 @@ var CSS =
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				t.column === "needs_attention" && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); }, onStartSession: function () { props.onApprovalSession(t.id); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
+				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); }, onStartSession: function () { props.onApprovalSession(t.id); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
@@ -1146,7 +1158,6 @@ var CSS =
 				h("div", { className: "kb-panel" },
 					h("h3", { children: "Actions" }),
 					h("div", { className: "kb-row" },
-						h("button", { className: "kb-btn sm", onClick: function () { props.onAction(t.id, "block"); }, children: "Block…" }),
 						h("button", { className: "kb-btn danger sm", onClick: function () { props.onAction(t.id, "discard"); }, children: "Discard" }),
 						h("button", { className: "kb-btn sm", onClick: function () { rpc("export", { id: t.id, format: "jsonl" }).then(function (res) { if (res && res.ok) download(t.key + ".jsonl", res.value.mime, res.value.body); }); }, children: "Export JSONL" }),
 						h("button", { className: "kb-btn sm", onClick: function () { rpc("export", { id: t.id, format: "csv" }).then(function (res) { if (res && res.ok) download(t.key + ".csv", res.value.mime, res.value.body); }); }, children: "Export CSV" }))
@@ -1360,7 +1371,7 @@ var CSS =
 			React.useEffect(function () {
 				if (!board) return;
 				var columns = board.columns || {};
-				var tickets = [].concat(columns.now || [], columns.backlog || []);
+				var tickets = [].concat(columns.working || [], columns.backlog || []);
 				var initial = !planSeen.current;
 				planSeen.current = true;
 				for (var i = 0; i < tickets.length; i += 1) {
@@ -1396,9 +1407,7 @@ var CSS =
 				}, function () { setNotice("Could not reach the Host."); });
 			}
 
-			var columns = board ? board.columns : { backlog: [], now: [], blocked: [], needs_attention: [], done: [], discarded: [] };
-			var nowGroups = board ? board.now : { active: [], waiting: [], blocked: [] };
-			var counts = board ? board.counts : {};
+			var columns = board ? board.columns : { backlog: [], working: [], done: [], discarded: [] };
 			var allTickets = Object.keys(columns).reduce(function (list, column) { return list.concat(columns[column] || []); }, []);
 			var dragTicket = dragId === null ? null : allTickets.find(function (ticket) { return ticket.id === dragId; }) || null;
 			return h("div", { className: "kb-root" },
@@ -1415,13 +1424,6 @@ var CSS =
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
 					)
 				),
-				board ? h("div", { className: "kb-kpis" },
-					h(Kpi, { tone: "kb-tone-idle", value: counts.backlog || 0, label: "Backlog" }),
-					h(Kpi, { tone: "kb-tone-run", value: counts.now || 0, label: "In flight" }),
-					h(Kpi, { tone: "kb-tone-warn", value: counts.blocked || 0, label: "Blocked" }),
-					h(Kpi, { tone: "kb-tone-err", value: counts.needs_attention || 0, label: "Needs attention" }),
-					h(Kpi, { tone: "kb-tone-ok", value: counts.done || 0, label: "Done" })
-				) : null,
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
 					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })),
@@ -1436,17 +1438,9 @@ var CSS =
 						onApprovalSession: function (id) { return act("action", { id: id, action: "approvalSession" }).then(function (res) { if (res && res.ok && res.value && res.value.sessionId && openSessionById) openSessionById(res.value.sessionId); }); },
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
-						board ? h("div", { className: "kb-flow" },
-							h("span", { className: "kb-flow-title", children: "In flight" }),
-							h("span", { className: "kb-flow-chip run", children: (nowGroups.active || []).length + " active" }),
-							h("span", { className: "kb-flow-chip warn", children: (nowGroups.waiting || []).length + " waiting on you" }),
-							h("span", { className: "kb-flow-chip", children: (nowGroups.blocked || []).length + " blocked" })
-						) : null,
 						h("div", { className: "kb-cols" },
 							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
-							h(Column, { column: "now", label: "In flight", items: columns.now, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
-							h(Column, { column: "blocked", label: "Blocked", items: columns.blocked, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
-							h(Column, { column: "needs_attention", label: "Needs attention", items: columns.needs_attention, attention: true, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
+							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
 							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard })
 						)
 					)

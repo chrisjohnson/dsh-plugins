@@ -25,7 +25,6 @@ const skip = Driver === undefined ? 'no @deepseek-ai/dsh-llm installed' : false
 
 function harness() {
   const { config } = resolveConfig({
-    autoPromote: false,
     roles: { implementer: { provider: 'local', model: 'm', allowTools: ['read'] } },
     providers: [{ name: 'local' }],
   })

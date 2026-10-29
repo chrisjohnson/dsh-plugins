@@ -53,7 +53,6 @@ const PROMPTS = {
 
 function setup(queues = {}, options = {}) {
   const { config } = resolveConfig({
-    autoPromote: false,
     roles: {
       planner: { provider: 'local', model: 'm', allowTools: ['read'] },
       implementer: { provider: 'local', model: 'm', allowTools: ['read', 'write', 'edit'] },
@@ -61,6 +60,7 @@ function setup(queues = {}, options = {}) {
     },
     providers: [{ name: 'local' }],
     confidenceThreshold: 0.7,
+    ...(options.config ?? {}),
   })
   const db = new DatabaseSync(':memory:')
   migrate(db)
@@ -139,8 +139,8 @@ function setup(queues = {}, options = {}) {
 }
 
 function pickedUp(store, extra = {}) {
-  const ticket = store.createTicket({ title: 'demo', acceptance: ['note exists'], workspaceCwd: CWD, planTiming: 'at_pickup', planQuestions: 'autonomous', ...extra })
-  store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human' })
+  // A human put this ticket in Working: that is where the engine drives it.
+  const ticket = store.createTicket({ title: 'demo', acceptance: ['note exists'], workspaceCwd: CWD, planTiming: 'at_pickup', planQuestions: 'autonomous', column: 'working', ...extra })
   return store.getTicket(ticket.id)
 }
 
@@ -149,7 +149,7 @@ test('flat plan -> implement -> review -> approval -> approve', async () => {
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const pending = store.getTicket(ticket.id)
-  assert.equal(pending.column, 'needs_attention')
+  assert.equal(pending.column, 'working')
   assert.equal(pending.phase, 'verify')
   assert.equal(pending.needsAttentionReason, 'Awaiting human approval')
   assert.equal(store.listConditions(ticket.id).length, 1)
@@ -174,7 +174,7 @@ test('review failure returns to implement in the same build session', async () =
   })
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
-  assert.equal(store.getTicket(ticket.id).column, 'needs_attention')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   assert.equal(store.getTicket(ticket.id).phase, 'verify')
   assert.equal(store.getTicket(ticket.id).attemptCount, 2)
   assert.equal([...driver.ticketSessions.keys()].filter((key) => key.includes(':build')).length, 1)
@@ -207,7 +207,7 @@ test('approval can submit a follow-up plan for another round', async () => {
     summary: 'second round',
     done_when: [{ id: 'round-two', statement: 'second', how_verified: 'true' }],
   })
-  assert.equal(next.column, 'now')
+  assert.equal(next.column, 'working')
   assert.equal(next.phase, 'implement')
   assert.equal(store.listConditions(ticket.id)[0].id, 'round-two')
 })
@@ -223,7 +223,7 @@ test('manual implementation submission advances to review', async () => {
     action: { type: 'implementation', value: IMPLEMENTATION },
   })
   assert.equal(store.getTicket(ticket.id).phase, 'review')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
 })
 
 test('plan without the tool call needs attention', async () => {
@@ -231,7 +231,7 @@ test('plan without the tool call needs attention', async () => {
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const blocked = store.getTicket(ticket.id)
-  assert.equal(blocked.column, 'needs_attention')
+  assert.equal(blocked.column, 'working')
   assert.match(blocked.needsAttentionReason, /kanban_submit_plan/)
 })
 
@@ -270,7 +270,7 @@ test('a reactivated ticket is in flight and the engine sends it no prompt while 
   waiting(store, ticket, 'turn failed in implement: boom')
   driver.busy = true
   engine.reactivateFromSession(ticket.id, 'session-1')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   engine.recovered = true
   await engine.tick()
   await flush()
@@ -307,11 +307,11 @@ test('a turn that ends without a submission returns the ticket to needs attentio
   waiting(store, ticket, 'attempt budget exhausted (3)')
   engine.reactivateFromSession(ticket.id, 'session-1')
   const flight = store.getTicket(ticket.id)
-  assert.equal(flight.column, 'now')
+  assert.equal(flight.column, 'working')
   assert.equal(flight.needsAttentionReason, null)
   engine.settleSessionTurn(ticket.id, 'session-1')
   const back = store.getTicket(ticket.id)
-  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.column, 'working')
   assert.equal(back.needsAttentionReason, 'attempt budget exhausted (3)')
   assert.equal(back.phase, 'implement')
   const kinds = store.listEvents(ticket.id).map((event) => event.kind)
@@ -324,13 +324,13 @@ test('a settle is deferred, not claimed, while another session of the ticket is 
   const ticket = pickedUp(store)
   waiting(store, ticket, 'turn failed in implement: boom')
   engine.reactivateFromSession(ticket.id, 'session-1')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   const parked = () => store.listEvents(ticket.id).filter((event) => event.kind === 'needs_attention').length
   const before = parked()
   driver.busy = true
   engine.settleSessionTurn(ticket.id, 'session-1')
   const held = store.getTicket(ticket.id)
-  assert.equal(held.column, 'now')
+  assert.equal(held.column, 'working')
   assert.equal(held.needsAttentionReason, null)
   const deferred = store.listEvents(ticket.id).map((event) => event.kind)
   assert.equal(deferred.includes('session_settled'), false)
@@ -340,7 +340,7 @@ test('a settle is deferred, not claimed, while another session of the ticket is 
   driver.busy = false
   engine.settleSessionTurn(ticket.id, 'session-1')
   const back = store.getTicket(ticket.id)
-  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.column, 'working')
   assert.equal(back.needsAttentionReason, 'turn failed in implement: boom')
   assert.ok(store.listEvents(ticket.id).map((event) => event.kind).includes('session_settled'))
 })
@@ -359,7 +359,7 @@ test('a structured submission from a human-driven turn is not settled back', asy
   assert.equal(store.getTicket(ticket.id).phase, 'review')
   engine.settleSessionTurn(ticket.id, 'session-1')
   const after = store.getTicket(ticket.id)
-  assert.equal(after.column, 'now')
+  assert.equal(after.column, 'working')
   assert.equal(after.phase, 'review')
   const attention = store.listEvents(ticket.id).filter((event) => event.kind === 'needs_attention')
   assert.equal(attention.length, 1)
@@ -371,12 +371,12 @@ test('an approval-waiting ticket flips with its approval session and returns to 
   await engine.advance(store.getTicket(ticket.id))
   const waitingTicket = store.getTicket(ticket.id)
   assert.equal(waitingTicket.phase, 'verify')
-  assert.equal(waitingTicket.column, 'needs_attention')
+  assert.equal(waitingTicket.column, 'working')
   engine.reactivateFromSession(ticket.id, 'session-approval')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   engine.settleSessionTurn(ticket.id, 'session-approval')
   const back = store.getTicket(ticket.id)
-  assert.equal(back.column, 'needs_attention')
+  assert.equal(back.column, 'working')
   assert.equal(back.phase, 'verify')
   assert.equal(back.needsAttentionReason, 'Awaiting human approval')
 })
@@ -385,11 +385,86 @@ test('a reactivation of a ticket that is not waiting for attention changes nothi
   const { store, engine, driver } = setup()
   const ticket = pickedUp(store)
   engine.reactivateFromSession(ticket.id, 'session-1')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   assert.equal(engine.reactivations.has(ticket.id), false)
   engine.settleSessionTurn(ticket.id, 'session-1')
-  assert.equal(store.getTicket(ticket.id).column, 'now')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   assert.equal(driver.turns.length, 0)
+})
+
+// ------------------------------------------------------ tick launch semantics
+//
+// Columns are intended state: tick launches Working tickets in queue order
+// plus Backlog plan-now tickets, skips parked and busy ones, and wipCap only
+// throttles how many turns run at once.
+
+function gatedDriver(driver) {
+  const pending = []
+  driver.sendTurn = ({ sessionId }) =>
+    new Promise((resolve) => {
+      driver.turns.push(sessionId)
+      pending.push(() => resolve({ status: 'ok', action: null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }))
+    })
+  return pending
+}
+
+test('tick launches Working tickets in queue order, capped by wipCap', async () => {
+  const { store, engine, driver } = setup({}, { config: { wipCap: 2 } })
+  const low = pickedUp(store, { title: 'low', priority: 1 })
+  const high = pickedUp(store, { title: 'high', priority: 5 })
+  const third = pickedUp(store, { title: 'third', priority: 0 })
+  const pending = gatedDriver(driver)
+  engine.recovered = true
+  await engine.tick()
+  await flush()
+  assert.equal(driver.turns.length, 2, 'the cap throttles launches, it does not reject tickets')
+  assert.equal(pending.length, 2)
+  // queue order: priority desc — the high-priority ticket was opened first,
+  // and the third ticket is still untouched, waiting its turn.
+  assert.equal(driver.ticketSessions.get(`${high.id}:plan`), 'session-1')
+  assert.equal(driver.ticketSessions.get(`${low.id}:plan`), 'session-2')
+  assert.equal([...driver.ticketSessions.keys()].some((key) => key.startsWith(third.id)), false)
+})
+
+test('tick plans plan-now tickets in Backlog and leaves at_pickup tickets alone', async () => {
+  const { store, engine, driver } = setup()
+  const nowTicket = store.createTicket({ title: 'plan me', acceptance: ['a'], workspaceCwd: CWD, planTiming: 'now', planQuestions: 'autonomous' })
+  store.createTicket({ title: 'later', acceptance: ['a'], workspaceCwd: CWD, planTiming: 'at_pickup', planQuestions: 'autonomous' })
+  gatedDriver(driver)
+  engine.recovered = true
+  await engine.tick()
+  await flush()
+  assert.equal(driver.turns.length, 1)
+  assert.equal(driver.sessions.get(driver.turns[0]).role, 'planner')
+  assert.equal(store.getTicket(nowTicket.id).column, 'backlog')
+})
+
+test('tick skips parked (needs-attention) tickets in Working', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  store.setNeedsAttention(ticket.id, 'turn failed in plan: boom')
+  gatedDriver(driver)
+  engine.recovered = true
+  await engine.tick()
+  await flush()
+  assert.deepEqual(driver.turns, [])
+})
+
+test('a plan-now ticket plans in Backlog and stops at Build until dragged to Working', async () => {
+  const { store, engine } = setup()
+  const ticket = store.createTicket({ title: 'plan in place', acceptance: ['note exists'], workspaceCwd: CWD, planTiming: 'now', planQuestions: 'autonomous' })
+  await engine.advance(store.getTicket(ticket.id))
+  const planned = store.getTicket(ticket.id)
+  assert.equal(planned.column, 'backlog')
+  assert.equal(planned.phase, 'implement')
+  assert.equal(store.listConditions(ticket.id).length, 1)
+  // dragging it to Working lets the engine build it
+  store.transitionTicket(ticket.id, { column: 'working' }, { actor: 'human' })
+  await engine.advance(store.getTicket(ticket.id))
+  const approved = store.getTicket(ticket.id)
+  assert.equal(approved.column, 'working')
+  assert.equal(approved.phase, 'verify')
+  assert.equal(approved.needsAttentionReason, 'Awaiting human approval')
 })
 
 // ------------------------------------------------------------------ auto-recovery
@@ -455,7 +530,7 @@ test('when the guard declines the kick, the ticket parks with the original reaso
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const parked = store.getTicket(ticket.id)
-  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.column, 'working')
   assert.equal(parked.needsAttentionReason, 'turn failed in implement: max-tokens')
   assert.equal(driver.waited.length, 0, 'nothing to wait for when no kick was sent')
   assert.equal(store.listEvents(ticket.id, { limit: 500 }).some((e) => e.kind === 'auto_recovered'), false)
@@ -474,7 +549,7 @@ test('without the service mounted, a halted turn parks exactly as before (degrad
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const parked = store.getTicket(ticket.id)
-  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.column, 'working')
   assert.equal(parked.needsAttentionReason, 'turn failed in implement: max-tokens')
   assert.equal(driver.waited.length, 0)
   assert.equal(store.listEvents(ticket.id, { limit: 500 }).some((e) => e.kind === 'auto_recovered'), false)
@@ -562,7 +637,7 @@ test('an archived session parks the review with an actionable reason, not a blam
   const result = await engine.review(ticket)
   assert.equal(result.kind, 'needs_attention')
   const parked = store.getTicket(ticket.id)
-  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.column, 'working')
   assert.equal(parked.phase, 'review')
   assert.match(parked.needsAttentionReason, /archived/)
   assert.doesNotMatch(parked.needsAttentionReason, /ended without calling/)
@@ -586,7 +661,7 @@ test('a blocked turn end reaches the board as a failed turn, not a silent no-op'
   })
   await engine.review(ticket)
   const parked = store.getTicket(ticket.id)
-  assert.equal(parked.column, 'needs_attention')
+  assert.equal(parked.column, 'working')
   assert.equal(parked.needsAttentionReason, 'turn failed in review: turn blocked (session may be archived)')
   assert.doesNotMatch(parked.needsAttentionReason, /ended without calling/)
 })
@@ -598,7 +673,7 @@ test('retrying an archived-session park dispatches the review again once the blo
   const working = driver.ensureTicketSession
   blockWith(driver, ARCHIVED_MESSAGE)
   await engine.review(ticket)
-  assert.equal(store.getTicket(ticket.id).column, 'needs_attention')
+  assert.equal(store.getTicket(ticket.id).column, 'working')
   assert.equal(driver.turns.length, 0)
   // The human unarchives; the retry runs the review for real.
   driver.ensureTicketSession = working

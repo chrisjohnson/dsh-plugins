@@ -5,6 +5,32 @@
 
 ## Unreleased
 
+## 0.5.0
+
+### Changed
+
+- **The board columns are now intended state: Backlog | Working | Done /
+  Discarded, all grey.** The engine never moves a ticket between columns on its
+  own. `autoPromote`/`autoPromotePerTick` are gone (unknown keys now, warned and
+  ignored), and `wipCap` became a pure concurrency throttle: Working tickets
+  beyond the cap wait as idle cards instead of being rejected on a human drag.
+- **"In flight" and "Needs attention" became card-level visual statuses**,
+  computed from live facts and never stored: a blue pulsing dot and glow while a
+  workflow turn is in flight, a red glowing card while the engine has parked the
+  ticket (failure, question, or awaiting approval), a plain grey card otherwise.
+  The KPI row and the In-flight chip row are gone; the phase badge carries the
+  lifecycle colour (Plan blue, Build teal, Review pink, Approval violet, Done
+  green).
+- **Backlog tickets with Planning=`now` plan in place** and stop at Build until
+  a human drags them to Working. Creating a ticket directly into Working is
+  unconditional.
+- **The Blocked column and Block/Unblock actions are removed.** A parked ticket's
+  reason text carries what "blocked" meant.
+- Schema migration **V4** rewrites the tickets table in place: `now` → `working`,
+  `needs_attention` → `backlog` and `blocked` → `backlog` (a parked ticket keeps
+  its reason and still glows red where it stands). Events, spans, sessions and
+  artifacts are untouched.
+
 ## 0.4.4
 
 ### Fixed

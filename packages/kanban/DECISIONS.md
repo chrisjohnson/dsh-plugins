@@ -218,3 +218,52 @@ the role routes differ. This preserves one continuous transcript (and its
 context) across intake → plan → implement → verify → review, instead of
 re-explaining the ticket at every boundary. `reuseSessionOnRetry` now controls
 whether a failed attempt keeps that live session or starts a fresh one.
+
+## 2026-10-29 — columns are intended state (0.5.0)
+
+The board used to mix two orthogonal things in one axis: where the human wants a
+ticket to live (`backlog`, `now`) and what the engine is doing about it
+(`needs_attention`, `blocked`). That made the engine a co-owner of the columns:
+`autoPromote` pulled Backlog tickets into Now on its own schedule, a failed turn
+pulled a ticket out of the column the human placed it in, and a WIP cap turned a
+human drag into a rejection. The board then lied in both directions — a ticket
+sitting in `needs_attention` could be a plan-now ticket nobody asked to start,
+and a ticket the human deliberately parked in Backlog could be promoted away.
+
+From 0.5.0 the columns are **intended state only**: `backlog | working | done |
+discarded`, all rendered grey. The engine never moves a ticket between columns;
+only a human drag (or create-into-Working) does, and it is unconditional — the
+WIP cap no longer rejects a move, it only throttles how many turns run at once.
+
+The two things that used to be columns became a **card-level visual status**,
+computed from live facts on every board read and never stored:
+
+- `attention` (red glowing card): a needs-attention reason is set, or a plan
+  session is waiting on a human answer. The reason stays on the ticket row, so
+  a restart keeps the park.
+- `active` (blue pulsing dot and glow): the engine is driving the ticket right
+  now — an engine advance in flight or any attached session with a turn running.
+- `idle` (plain grey card): everything else, including a Working ticket queued
+  behind the concurrency cap.
+
+Rules that follow from this:
+
+- **Planning in place.** A Backlog ticket with Planning=`now` plans where it
+  stands and stops at Build; dragging it to Working starts the build. An
+  `at_pickup` ticket plans only in Working.
+- **Parking is in place.** A failure, an exhausted attempt budget, a budget
+  refusal, or awaiting-approval sets the reason on the row and leaves the column
+  alone. A human column move clears the reason (that drag *is* the resolution);
+  retry/approve/manual submissions lift it explicitly.
+- **Blocked is gone.** Nothing distinguished it from a parked ticket; the reason
+  text carries the same information.
+- The phase badge (top-right of each card) now carries the lifecycle colour
+  (Plan blue, Build teal, Review pink, Approval violet, Done green) instead of
+  the column colour, because the column no longer has meaning to paint with.
+
+Schema V4 rewrites the tickets table in place (data-preserving, unlike the V3
+reset): `now` → `working`, `needs_attention` → `backlog` (reason kept, so a
+parked ticket still glows red in Backlog), `blocked` → `backlog`. The rewrite
+runs with `PRAGMA foreign_keys = OFF` outside the migration transaction — with
+them on, `DROP TABLE tickets` would fire every child's `ON DELETE CASCADE` and
+wipe the event/span history.

@@ -181,6 +181,7 @@ export class KanbanStore {
       throw new StoreError('bad_request', 'paid tickets need a positive budgetUsd');
     }
     const priority = Number.isInteger(input.priority) ? input.priority : 0;
+    const column = input.column === 'working' ? 'working' : 'backlog';
     const threshold = input.confidenceThreshold;
     if (threshold !== undefined && threshold !== null && (typeof threshold !== 'number' || threshold < 0 || threshold > 1)) {
       throw new StoreError('bad_request', 'confidenceThreshold must be in [0,1]');
@@ -199,13 +200,14 @@ export class KanbanStore {
           `INSERT INTO tickets (id, key, title, body, col, phase, plan_timing, plan_questions, priority, sort_order,
              allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
              needs_attention_reason, confidence_threshold, created_at, updated_at, version)
-           VALUES (?, ?, ?, ?, 'backlog', 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, 1)`,
+           VALUES (?, ?, ?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, 1)`,
         )
         .run(
           id,
           key,
           title,
           typeof input.body === 'string' ? input.body : '',
+          column,
           planTiming,
           planQuestions,
           priority,
@@ -312,7 +314,7 @@ export class KanbanStore {
       this.db
         .prepare(
           `UPDATE tickets SET col = ?, phase = ?, updated_at = ?, closed_at = COALESCE(?, closed_at),
-             needs_attention_reason = CASE WHEN ? = 'needs_attention' THEN needs_attention_reason ELSE NULL END,
+             needs_attention_reason = CASE WHEN ? = col THEN needs_attention_reason ELSE NULL END,
              version = version + 1
            WHERE id = ?`,
         )
@@ -327,6 +329,11 @@ export class KanbanStore {
     });
   }
 
+  /**
+   * Park a ticket in place: the reason is a card-level visual status, not a
+   * column move. The ticket keeps its column and glows red until a human
+   * resolves it (or a column transition clears it).
+   */
   setNeedsAttention(idOrKey, reason, payload = {}) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
@@ -336,13 +343,33 @@ export class KanbanStore {
     return this.transact(() => {
       const at = nowIso();
       this.db
-        .prepare("UPDATE tickets SET col = 'needs_attention', needs_attention_reason = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+        .prepare('UPDATE tickets SET needs_attention_reason = ?, updated_at = ?, version = version + 1 WHERE id = ?')
         .run(String(reason), at, ticket.id);
       this.#event(ticket.id, 'needs_attention', {
         actor: 'engine',
         phaseFrom: ticket.phase,
         phaseTo: ticket.phase,
         payload: { reason, ...payload },
+      });
+      return this.getTicket(ticket.id);
+    });
+  }
+
+  /** Lift the park: clear the reason in place (retry, human submission, session reactivation). */
+  clearNeedsAttention(idOrKey, { actor = 'human', reason = '' } = {}) {
+    const ticket = this.getTicket(idOrKey);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
+    if (ticket.needsAttentionReason === undefined || ticket.needsAttentionReason === null) return ticket;
+    return this.transact(() => {
+      const at = nowIso();
+      this.db
+        .prepare('UPDATE tickets SET needs_attention_reason = NULL, updated_at = ?, version = version + 1 WHERE id = ?')
+        .run(at, ticket.id);
+      this.#event(ticket.id, 'attention_cleared', {
+        actor,
+        phaseFrom: ticket.phase,
+        phaseTo: ticket.phase,
+        payload: { priorReason: ticket.needsAttentionReason, reason },
       });
       return this.getTicket(ticket.id);
     });
@@ -862,7 +889,7 @@ export class KanbanStore {
 
   counts() {
     const rows = this.db.prepare('SELECT col, COUNT(*) AS n FROM tickets GROUP BY col').all();
-    const out = { backlog: 0, now: 0, blocked: 0, needs_attention: 0, done: 0, discarded: 0 };
+    const out = { backlog: 0, working: 0, done: 0, discarded: 0 };
     for (const row of rows) out[row.col] = Number(row.n);
     return out;
   }

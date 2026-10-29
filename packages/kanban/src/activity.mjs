@@ -1,17 +1,19 @@
 // dsh-kanban: realtime turn activity.
 //
 // The board has to mirror what is actually happening on the box. While any
-// session attached to a needs-attention ticket has a turn running — a human
-// answering the engine's question, driving the build by hand, or talking an
-// approval through — that ticket is being worked on and belongs in In flight.
-// When the turn ends, the outcome depends on whether the session spoke through
-// a structured action tool: without one the ticket goes back to needs attention
-// with the reason it had before.
+// session attached to a parked (needs-attention) ticket has a turn running — a
+// human answering the engine's question, driving the build by hand, or talking
+// an approval through — that ticket is being worked on, so the engine lifts the
+// park in place and the card turns from red to blue. When the turn ends, the
+// outcome depends on whether the session spoke through a structured action
+// tool: without one the ticket is parked again with the reason it had before.
 //
 // This file is pure bookkeeping with no dsh imports, so the decision is testable
 // on its own. The driver feeds it `turn/start` and `turn/end` from the global
 // session event stream and owns the action record; the engine owns the
 // transitions it is told about.
+
+import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 
 const NO_LOG = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -77,7 +79,7 @@ export class TurnActivity {
     if (ticketId === undefined) return;
     this.active.add(sessionId);
     const ticket = this.store?.getTicket?.(ticketId);
-    if (ticket === undefined || ticket.column !== 'needs_attention') return;
+    if (ticket === undefined || !ticket.needsAttentionReason) return;
     if (typeof this.onReactivate !== 'function') return;
     this.marks.set(ticketId, { sessionId });
     let result;
@@ -106,9 +108,12 @@ export class TurnActivity {
     if (mark === undefined || mark.sessionId !== sessionId) return;
     this.marks.delete(ticketId);
     const ticket = this.store?.getTicket?.(ticketId);
-    if (ticket === undefined || ticket.column !== 'now') return;
+    if (ticket === undefined || TERMINAL_COLUMNS.includes(ticket.column)) return;
+    // The engine already parked this ticket again (a failed turn, say); a second
+    // settle would only restate the same park.
+    if (ticket.needsAttentionReason) return;
     // A structured submission owns the outcome: handleManualAction already moved
-    // the ticket, so settling here would flip it back under the submission.
+    // the ticket on, so settling here would flip it back under the submission.
     if (this.hasAction(sessionId)) return;
     if (typeof this.onSettle !== 'function') return;
     Promise.resolve(this.onSettle(ticketId, sessionId)).catch((error) =>
