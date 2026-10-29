@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 
 import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
-import { compareQueue } from './lifecycle.mjs';
+import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
@@ -119,18 +119,19 @@ export class Engine {
         await this.recover();
       }
       this.driver.reconcileTurns();
-      await this.autoPromote();
-      const now = this.store.listTickets({ columns: ['now'] });
-      for (const ticket of now) {
-        if (this.disposed) break;
+      // Columns are intended state: the engine launches what the human put in
+      // Working, plus Backlog tickets that asked to be planned now. wipCap is a
+      // pure concurrency throttle — queued tickets wait, nothing is promoted
+      // or rejected on capacity.
+      const config = this.getConfig();
+      const working = this.store.listTickets({ columns: ['working'] });
+      const planNow = this
+        .store.listTickets({ columns: ['backlog'] })
+        .filter((ticket) => ticket.phase === 'plan' && ticket.planTiming === 'now');
+      for (const ticket of [...working, ...planNow]) {
+        if (this.disposed || this.active.size >= config.wipCap) break;
         if (this.active.has(ticket.id)) continue;
-        if (this.busy(ticket)) continue;
-        this.launch(ticket);
-      }
-      for (const ticket of this.store.listTickets({ columns: ['backlog'] })) {
-        if (this.disposed) break;
-        if (this.active.has(ticket.id)) continue;
-        if (ticket.phase !== 'plan' || ticket.planTiming !== 'now') continue;
+        if (ticket.needsAttentionReason) continue;
         if (this.busy(ticket)) continue;
         this.launch(ticket);
       }
@@ -194,38 +195,6 @@ export class Engine {
     if (deleted > 0) this.log.info('pruned %d artifacts older than %s', deleted, cutoff);
   }
 
-  async autoPromote() {
-    const config = this.getConfig();
-    if (!config.autoPromote || config.wipCap <= 0) return;
-    const now = this.store.listTickets({ columns: ['now'] });
-    let room = config.wipCap - now.length;
-    let promoted = 0;
-    if (room <= 0) return;
-    const backlog = this.store.listTickets({ columns: ['backlog'] }).sort(compareQueue);
-    for (const ticket of backlog) {
-      if (room <= 0 || promoted >= config.autoPromotePerTick) break;
-      this.store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'engine', reason: 'auto_promote' });
-      this.appendEvent(ticket.id, 'auto_promoted', { payload: { priorColumn: 'backlog' } });
-      promoted += 1;
-      room -= 1;
-    }
-    if (promoted > 0) this.log.info('auto-promoted %d ticket(s)', promoted);
-  }
-
-  /** Human drag into now, with the WIP guard enforced in code. */
-  pickup(ticketId) {
-    const ticket = this.store.getTicket(ticketId);
-    if (ticket === undefined) throw new StoreError('not_found', 'no such ticket');
-    if (ticket.column !== 'backlog') throw new StoreError('invalid_transition', 'only a backlog ticket can be picked up');
-    const config = this.getConfig();
-    const nowCount = this.store.listTickets({ columns: ['now'] }).length;
-    if (nowCount >= config.wipCap) throw new StoreError('wip_cap', `WIP cap reached (${nowCount}/${config.wipCap}); finish or block a ticket first`);
-    const updated = this.store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human', reason: 'picked up' });
-    this.appendEvent(ticket.id, 'picked_up', { payload: { wip: nowCount + 1 } });
-    void this.tick();
-    return updated;
-  }
-
   /** Drive one ticket as far as the current session phase allows. */
   async advance(start) {
     if (this.busy(start)) return { kind: 'wait' };
@@ -236,17 +205,22 @@ export class Engine {
         this.log.error('ticket %s exceeded pipeline guard', ticket.key);
         return;
       }
-      if (['done', 'discarded', 'needs_attention', 'blocked'].includes(ticket.column)) return;
+      if (TERMINAL_COLUMNS.includes(ticket.column)) return;
+      // A parked ticket stays exactly where it is and glows red until a human
+      // resolves it; the engine never moves columns on its own.
+      if (ticket.needsAttentionReason) return;
       if (ticket.phase === 'closed') return;
       if (ticket.phase === 'plan') {
+        // Planning runs in Working, or in Backlog only for plan-now tickets.
         if (ticket.column === 'backlog' && ticket.planTiming !== 'now') return;
         const result = await this.plan(ticket);
         if (result.kind !== 'continue') return;
         ticket = this.store.getTicket(ticket.id);
-        if (ticket.column === 'backlog') return;
         continue;
       }
-      if (ticket.column !== 'now') return;
+      // Build, review and approval only ever run in Working. A plan-now ticket
+      // that planned in Backlog stops here at Build until a human drags it over.
+      if (ticket.column !== 'working') return;
       if (ticket.phase === 'implement') {
         const result = await this.implement(ticket);
         if (result.kind !== 'continue') return;
@@ -300,7 +274,7 @@ export class Engine {
     this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version } });
     await this.closeSession(turn.sessionId);
     const next = this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'plan submitted' });
-    return { kind: next.column === 'now' ? 'continue' : 'wait' };
+    return { kind: next.column === 'working' ? 'continue' : 'wait' };
   }
 
   // -------------------------------------------------------------- implement
@@ -346,7 +320,7 @@ export class Engine {
     if (value.status === 'blocked') return this.needsAttention(ticket, 'implementer reported blocked', { gaps: value.reasons ?? value.residual_risks ?? [] });
     this.appendEvent(ticket.id, 'implemented', { phaseFrom: 'implement', phaseTo: 'review', payload: { attempt } });
     const next = this.store.transitionTicket(ticket.id, { phase: 'review' }, { actor: 'engine', reason: 'implementation submitted' });
-    return { kind: next.column === 'now' ? 'continue' : 'wait' };
+    return { kind: next.column === 'working' ? 'continue' : 'wait' };
   }
 
   // ----------------------------------------------------------------- review
@@ -497,7 +471,10 @@ export class Engine {
     this.appendEvent(ticket.id, 'planned', { phaseFrom: 'verify', phaseTo: 'implement', payload: { planVersion: version, fromApproval: true } });
     const sessionId = this.driver.liveTicketSession(ticket.id, 'approval');
     if (sessionId !== undefined) await this.closeSession(sessionId);
-    return this.store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
+    // The follow-up plan takes over the ticket where it stands: the approval
+    // park is lifted and the engine drives Build again in the same column.
+    this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'approval follow-up plan' });
+    return this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
   }
 
   async handleManualAction({ ticketId, purpose, sessionId, action }) {
@@ -515,7 +492,10 @@ export class Engine {
       this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
       this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version, manual: true } });
       await this.closeSession(sessionId);
-      this.store.transitionTicket(ticket.id, { column: 'now', phase: 'implement' }, { actor: 'human', reason: 'manual plan submission' });
+      // A human submission is a resolution: the park is lifted and the ticket
+      // keeps moving from the column it is already in.
+      this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'manual plan submission' });
+      this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: 'manual plan submission' });
       return;
     }
     if (purpose === 'build' && action.type === 'implementation') {
@@ -524,7 +504,8 @@ export class Engine {
       this.store.addArtifact(ticket.id, 'implement_result', JSON.stringify(value, null, 2));
       if (value.status === 'blocked') return this.needsAttention(ticket, 'implementer reported blocked', { gaps: value.reasons ?? value.residual_risks ?? [], manual: true });
       this.appendEvent(ticket.id, 'implemented', { phaseFrom: 'implement', phaseTo: 'review', payload: { attempt: ticket.attemptCount, manual: true } });
-      this.store.transitionTicket(ticket.id, { column: 'now', phase: 'review' }, { actor: 'human', reason: 'manual implementation submission' });
+      this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'manual implementation submission' });
+      this.store.transitionTicket(ticket.id, { phase: 'review' }, { actor: 'human', reason: 'manual implementation submission' });
       return;
     }
     if (purpose === 'build' && action.type === 'review') {
@@ -554,22 +535,24 @@ export class Engine {
 
   // ------------------------------------------------ realtime session activity
   //
-  // The board mirrors what is actually happening. A needs-attention ticket
-  // whose session has a turn running — a human answering the engine's question,
-  // driving the build by hand, or talking an approval through — is being worked
-  // on, so it moves back to In flight. The engine keeps out of that conversation
+  // The board mirrors what is actually happening. A parked (needs-attention)
+  // ticket whose session has a turn running — a human answering the engine's
+  // question, driving the build by hand, or talking an approval through — is
+  // being worked on, so its card switches from red to blue: the park is lifted
+  // in place, no column moves. The engine keeps out of that conversation
   // (`busy`), and when the turn ends without a structured submission the ticket
-  // returns to needs attention with the reason it had before.
+  // is parked again with the reason it had before.
 
   reactivateFromSession(ticketId, sessionId) {
     const ticket = this.store.getTicket(ticketId);
-    if (ticket === undefined || ticket.column !== 'needs_attention') return;
-    this.reactivations.set(ticketId, { sessionId, reason: ticket.needsAttentionReason ?? null });
-    this.store.transitionTicket(ticketId, { column: 'now' }, { actor: 'engine', reason: 'session reactivated' });
+    if (ticket === undefined || !ticket.needsAttentionReason) return;
+    if (TERMINAL_COLUMNS.includes(ticket.column)) return;
+    this.reactivations.set(ticketId, { sessionId, reason: ticket.needsAttentionReason });
+    this.store.clearNeedsAttention(ticketId, { actor: 'engine', reason: 'session reactivated' });
     this.appendEvent(ticketId, 'session_reactivated', {
       phaseFrom: ticket.phase,
       phaseTo: ticket.phase,
-      payload: { sessionId, priorReason: ticket.needsAttentionReason ?? null },
+      payload: { sessionId, priorReason: ticket.needsAttentionReason },
     });
     this.log.info('ticket %s reactivated by session %s', ticket.key, sessionId);
   }
@@ -578,16 +561,16 @@ export class Engine {
     const mark = this.reactivations.get(ticketId);
     if (mark === undefined) return;
     const ticket = this.store.getTicket(ticketId);
-    if (ticket === undefined || ticket.column !== 'now') {
+    if (ticket === undefined || TERMINAL_COLUMNS.includes(ticket.column)) {
       this.reactivations.delete(ticketId);
       return;
     }
     const reason = mark.reason ?? 'session ended without submitting';
     const result = this.needsAttention(ticket, reason, { sessionId, settled: true });
     if (result.kind !== 'needs_attention') {
-      // A different session of this ticket is genuinely mid-turn, so In flight is
-      // the honest column right now. Keep the mark for that turn's end instead of
-      // recording a settle that never moved the ticket.
+      // A different session of this ticket is genuinely mid-turn, so leaving it
+      // un-parked is the honest state right now. Keep the mark for that turn's
+      // end instead of recording a settle that never moved the ticket.
       this.log.info('ticket %s settle deferred: another session is still active', ticket.key);
       return;
     }
@@ -870,7 +853,7 @@ export class Engine {
 
   stopped(ticketId) {
     const ticket = this.store.getTicket(ticketId);
-    return ticket === undefined || ['done', 'discarded', 'blocked'].includes(ticket.column);
+    return ticket === undefined || TERMINAL_COLUMNS.includes(ticket.column);
   }
 
   /** True while any session of this ticket has a turn in flight, engine-driven or human-driven. */

@@ -84,12 +84,10 @@ export const DEFAULT_CONFIG = {
   /** A turn with no observable progress for this long is abandoned. */
   stallTimeoutMs: 600000,
 
-  /** Tickets allowed to hold an active implement attempt at once. */
+  /** Maximum workflow turns the engine may drive concurrently. A pure throttle:
+   * columns are intended state, so nothing is promoted or rejected on capacity —
+   * queued Working tickets simply wait for a free slot. */
   wipCap: 4,
-  /** Promote backlog tickets into `now` when WIP allows. */
-  autoPromote: true,
-  /** Maximum promotions per tick, so one tick cannot flood the queue. */
-  autoPromotePerTick: 2,
 
   defaultBudgetUsd: 0,
   /** Artifacts older than this are pruned; spans/usage/events are never pruned. */
@@ -284,10 +282,6 @@ export function resolveConfig(input = {}) {
   positiveNumber(config.stallTimeoutMs, 'stallTimeoutMs', errors);
   if (!Number.isInteger(config.wipCap) || config.wipCap < 1) {
     errors.push(new ConfigError('must be an integer >= 1', 'wipCap'));
-  }
-  if (typeof config.autoPromote !== 'boolean') errors.push(new ConfigError('must be a boolean', 'autoPromote'));
-  if (!Number.isInteger(config.autoPromotePerTick) || config.autoPromotePerTick < 1) {
-    errors.push(new ConfigError('must be an integer >= 1', 'autoPromotePerTick'));
   }
   if (!isFiniteNumber(config.defaultBudgetUsd) || config.defaultBudgetUsd < 0) {
     errors.push(new ConfigError('must be a number >= 0', 'defaultBudgetUsd'));

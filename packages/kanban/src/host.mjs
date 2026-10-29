@@ -16,7 +16,7 @@ import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
-import { nowGroup } from './lifecycle.mjs';
+import { cardStatus } from './lifecycle.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
 const API_BASE = '/api/kanban';
@@ -148,44 +148,30 @@ export default async function kanban(ctx, config = {}) {
       return ticket;
     };
 
+    /** True while a plan session of this ticket is waiting on a human answer. */
+    const isAwaitingUser = (ticket) => ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id);
+
+    /** The card-level visual status: attention | active | idle. Never a column. */
+    const statusOf = (ticket) =>
+      cardStatus(ticket, {
+        active: engine.active.has(ticket.id) || driver.isTicketBusy(ticket.id),
+        awaitingUser: isAwaitingUser(ticket),
+      });
+
     const board = () => {
       const tickets = store.listTickets();
-      const active = new Map([...engine.active.keys()].map((id) => [id, true]));
-      const byColumn = { backlog: [], now: [], blocked: [], needs_attention: [], done: [], discarded: [] };
+      const byColumn = { backlog: [], working: [], done: [], discarded: [] };
       for (const ticket of tickets) {
         const item = summary(ticket);
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
+        item.awaitingQuestion = isAwaitingUser(ticket);
+        item.status = statusOf(ticket);
+        if (item.status === 'attention' && !ticket.needsAttentionReason) item.needsAttentionReason = 'Waiting on your answer';
         byColumn[ticket.column]?.push(item);
       }
-      const awaiting = new Set(tickets.filter((ticket) => ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id)).map((ticket) => ticket.id));
-      for (const ticket of byColumn.now.slice()) {
-        if (!awaiting.has(ticket.id)) continue;
-        byColumn.now = byColumn.now.filter((item) => item.id !== ticket.id);
-        byColumn.needs_attention.push({
-          ...ticket,
-          column: 'needs_attention',
-          group: 'waiting',
-          awaitingQuestion: true,
-          needsAttentionReason: 'Waiting on your answer',
-        });
-      }
-      const now = byColumn.now.map((ticket) => {
-        const full = store.getTicket(ticket.id);
-        const latest = store.listEvents(ticket.id, { limit: 1 })[0];
-        const waiting = latest?.kind === 'awaiting_human' || (full.phase === 'plan' && full.planQuestions === 'interactive');
-        return { ...ticket, group: nowGroup(full, { active: active.has(ticket.id), waiting }) };
-      });
-      const groups = { active: [], waiting: [], blocked: [] };
-      for (const ticket of now) groups[ticket.group]?.push(ticket);
-      byColumn.now = now;
-      const counts = store.counts();
-      counts.now = byColumn.now.length;
-      counts.needs_attention = byColumn.needs_attention.length;
       return {
-        counts,
+        counts: store.counts(),
         columns: byColumn,
-        now: groups,
-        inFlight: now.filter((t) => t.group === 'active' || t.group === 'waiting'),
       };
     };
 
@@ -200,11 +186,13 @@ export default async function kanban(ctx, config = {}) {
       const plan = store.latestArtifact(ticket.id, 'plan');
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
+      const awaitingQuestion = isAwaitingUser(ticket);
       return {
-        ticket: ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id)
-          ? { ...ticket, column: 'needs_attention', needsAttentionReason: 'Waiting on your answer' }
+        ticket: awaitingQuestion && !ticket.needsAttentionReason
+          ? { ...ticket, needsAttentionReason: 'Waiting on your answer' }
           : ticket,
-        awaitingQuestion: ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id),
+        awaitingQuestion,
+        status: statusOf(ticket),
         approvalSessionId: ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'approval') ?? null) : null,
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
@@ -218,7 +206,6 @@ export default async function kanban(ctx, config = {}) {
         plan: plan === undefined ? null : safeJson(plan.content),
         review: review === undefined ? null : safeJson(review.content),
         verification: verification === undefined ? null : safeJson(verification.content),
-        nowGroup: nowGroup(ticket, { active: engine.active.has(ticket.id) }),
       };
     };
 
@@ -243,14 +230,9 @@ export default async function kanban(ctx, config = {}) {
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
           case 'create': {
             const column = p.column ?? 'backlog';
-            if (!['backlog', 'now', 'blocked'].includes(column)) return fail('bad_request', 'column must be backlog, now, or blocked');
-            let ticket = store.createTicket(p);
+            if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');
+            const ticket = store.createTicket({ ...p, column });
             appendConfigFingerprint(store, ticket.id);
-            if (column === 'now') {
-              ticket = engineRef.current.pickup(ticket.id);
-            } else if (column === 'blocked') {
-              ticket = store.transitionTicket(ticket.id, { column: 'blocked' }, { actor: 'human', reason: 'created blocked' });
-            }
             void engineRef.current.tick();
             return { ok: true, value: { ticket } };
           }
@@ -261,22 +243,26 @@ export default async function kanban(ctx, config = {}) {
           }
           case 'move': {
             const column = String(p.column);
-            if (column === 'now' && store.getTicket(String(p.id))?.column === 'backlog') {
-              return { ok: true, value: { ticket: engineRef.current.pickup(String(p.id)) } };
+            if (!['backlog', 'working', 'done', 'discarded'].includes(column)) {
+              return fail('bad_request', 'column must be backlog, working, done, or discarded');
             }
-            if (column === 'discarded' || column === 'done') {
+            if (column === 'done') return fail('bad_request', 'done is set by human approval, not by dragging');
+            if (column === 'discarded') {
               const t = store.getTicket(String(p.id));
               if (t === undefined) return fail('not_found', 'no such ticket');
-              if (column === 'done') return fail('bad_request', 'done is set by human approval, not by dragging');
               await engineRef.current.abortTicket(t.id);
             }
+            // A column move is an unconditional human statement of intent:
+            // into Working starts the engine (any park is cleared by the move),
+            // back into Backlog parks it. No WIP guard — the cap only throttles
+            // concurrency, queued Working tickets wait their turn.
             const updated = store.transitionTicket(String(p.id), { column }, { actor: 'human', reason: p.reason ?? 'human move' });
             void engineRef.current.tick();
             return { ok: true, value: { ticket: updated } };
           }
           case 'resolve': {
             const ticket = requireTicket(String(p.id));
-            if (ticket.column !== 'needs_attention') return fail('bad_request', 'ticket is not in needs_attention');
+            if (!ticket.needsAttentionReason) return fail('bad_request', 'ticket is not parked for attention');
             const action = String(p.action ?? 'retry');
             if (action === 'discard') {
               if (ticket.phase === 'verify') {
@@ -308,7 +294,12 @@ export default async function kanban(ctx, config = {}) {
                 store.updateTicket(ticket.id, p.patch, { actor: 'human', reason: 'needs_attention resolution' });
               }
               const resumePhase = engineRef.current.retryPhase(ticket);
-              const updated = store.transitionTicket(ticket.id, { column: 'now', phase: resumePhase }, { actor: 'human', reason: 'human retry' });
+              // Retry lifts the park and relaunches the ticket in the column it
+              // is in: a Working ticket runs again immediately; a Backlog one
+              // waits idle until it is dragged to Working (or plans in place if
+              // it is a plan-now ticket back at the plan phase).
+              store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
+              const updated = store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
               void engineRef.current.tick();
               return { ok: true, value: { ticket: updated } };
             }
@@ -317,16 +308,6 @@ export default async function kanban(ctx, config = {}) {
           case 'action': {
             const ticket = requireTicket(String(p.id));
             const action = String(p.action);
-            if (action === 'block') {
-              if (typeof p.reason !== 'string' || p.reason.trim() === '') return fail('bad_request', 'blocked needs a reason');
-              const updated = store.transitionTicket(ticket.id, { column: 'blocked' }, { actor: 'human', reason: p.reason });
-              return { ok: true, value: { ticket: updated } };
-            }
-            if (action === 'unblock') {
-              const updated = store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human', reason: p.reason ?? 'unblocked' });
-              void engineRef.current.tick();
-              return { ok: true, value: { ticket: updated } };
-            }
             if (action === 'discard') {
               if (ticket.phase === 'verify') {
                 const updated = await engineRef.current.discard(ticket.id, typeof p.reason === 'string' ? p.reason : '');
@@ -479,7 +460,6 @@ export default async function kanban(ctx, config = {}) {
                 tickIntervalMs: live.tickIntervalMs,
                 stallTimeoutMs: live.stallTimeoutMs,
                 wipCap: live.wipCap,
-                autoPromote: live.autoPromote,
                 escalationLadder: live.escalationLadder,
                 promptsDir,
                 promptHashes: prompts.hashes,

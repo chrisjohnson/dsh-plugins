@@ -41,7 +41,6 @@ const CWD = mkdtempSync(join(tmpdir(), 'kanban-dispatch-'))
 
 function makeConfig() {
   return resolveConfig({
-    autoPromote: false,
     roles: {
       planner: { provider: 'local', model: 'm', allowTools: ['read'] },
       implementer: { provider: 'local', model: 'm', allowTools: ['read', 'write', 'edit'] },

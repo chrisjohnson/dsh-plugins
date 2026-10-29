@@ -21,15 +21,15 @@ function setup() {
     onReactivate: (ticketId, sessionId) => { calls.reactivate.push([ticketId, sessionId]) },
     onSettle: (ticketId, sessionId) => { calls.settle.push([ticketId, sessionId]) },
   })
-  const ticket = store.createTicket({ title: 't', acceptance: ['a'] })
-  store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human' })
+  const ticket = store.createTicket({ title: 't', acceptance: ['a'], column: 'working' })
   store.attachSession({ ticketId: ticket.id, dshSessionId: 'session-1', role: 'implementer', purpose: 'build' })
   return { store, activity, calls, actions, ticket }
 }
 
-/** Stand in for the engine transition a real reactivation performs. */
+/** Stand in for the engine transition a real reactivation performs: the park
+ * is lifted in place, the ticket keeps its column. */
 function inFlight(store, ticket) {
-  store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'engine', reason: 'session reactivated' })
+  store.clearNeedsAttention(ticket.id, { actor: 'engine', reason: 'session reactivated' })
 }
 
 test('a turn on a needs-attention ticket reactivates it and marks the session busy', () => {

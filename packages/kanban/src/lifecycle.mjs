@@ -3,8 +3,12 @@
 // Nothing here imports dsh or touches SQLite. The engine, the HTTP surface and
 // the tests all call these same decisions, which is what makes an illegal move
 // unrepresentable rather than "blocked in the UI".
+//
+// Columns are *intended state* — where a human wants the ticket to live.
+// Whether the engine is running it or it needs a human is a card-level status
+// computed from live facts (see cardStatus), never a column.
 
-export const COLUMNS = ['backlog', 'now', 'blocked', 'needs_attention', 'done', 'discarded'];
+export const COLUMNS = ['backlog', 'working', 'done', 'discarded'];
 export const PHASES = ['plan', 'implement', 'review', 'verify', 'closed'];
 export const TERMINAL_COLUMNS = ['done', 'discarded'];
 
@@ -32,10 +36,8 @@ export const NEXT_PHASE = {
 };
 
 const COLUMN_EDGES = {
-  backlog: ['now', 'blocked', 'discarded', 'needs_attention'],
-  now: ['backlog', 'blocked', 'needs_attention', 'done', 'discarded'],
-  blocked: ['now', 'needs_attention', 'discarded'],
-  needs_attention: ['now', 'discarded', 'backlog', 'done'],
+  backlog: ['working', 'done', 'discarded'],
+  working: ['backlog', 'done', 'discarded'],
   done: [],
   discarded: [],
 };
@@ -90,10 +92,21 @@ export function compareQueue(a, b) {
   return String(a.createdAt).localeCompare(String(b.createdAt));
 }
 
-/** Narrow UI grouping for a ticket in the Now column. */
-export function nowGroup(ticket, { active = false, waiting = false } = {}) {
-  if (waiting) return 'waiting';
+/**
+ * The card-level visual status, computed from live facts — never a column.
+ *
+ * - `attention`: the engine parked the ticket (a reason is set) or a plan
+ *   session is waiting on a human answer. Red glow on the board.
+ * - `active`: the engine is driving the ticket right now (a workflow turn is in
+ *   flight, engine- or human-initiated). Blue pulse.
+ * - `idle`: nothing is running and nothing is asked of anyone. Plain card.
+ */
+export function cardStatus(ticket, { active = false, awaitingUser = false } = {}) {
+  if (ticket === undefined || ticket === null) return 'idle';
+  const reason = ticket.needsAttentionReason;
+  if (awaitingUser || (reason !== undefined && reason !== null && String(reason).trim() !== '')) {
+    return 'attention';
+  }
   if (active) return 'active';
-  if (ticket?.column === 'blocked') return 'blocked';
-  return 'active';
+  return 'idle';
 }

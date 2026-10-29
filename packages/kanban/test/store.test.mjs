@@ -25,6 +25,14 @@ test('createTicket starts in plan and stores the two mode choices', () => {
   assert.equal(store.listAcceptance(ticket.id)[0].statement, 'a')
 })
 
+test('a ticket may be created straight into Working', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 't', column: 'working' })
+  assert.equal(ticket.column, 'working')
+  assert.equal(store.counts().working, 1)
+  assert.equal(store.counts().backlog, 0)
+})
+
 test('invalid modes are rejected by the store', () => {
   const { store } = setup()
   assert.throws(() => store.createTicket({ title: 't', planTiming: 'later' }), /planTiming/)
@@ -53,14 +61,27 @@ test('sessions keep their purpose', () => {
   assert.equal(sessions[0].role, 'plan')
 })
 
-test('the engine moves a needs-attention ticket back to now and the reason clears', () => {
+test('needs-attention parks the ticket in place; a column move lifts the park', () => {
   const { store } = setup()
   const ticket = store.createTicket({ title: 't', acceptance: ['a'] })
-  store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'human' })
+  store.transitionTicket(ticket.id, { column: 'working' }, { actor: 'human' })
   store.setNeedsAttention(ticket.id, 'turn failed in plan: boom')
-  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'turn failed in plan: boom')
-  const back = store.transitionTicket(ticket.id, { column: 'now' }, { actor: 'engine', reason: 'session reactivated' })
-  assert.equal(back.column, 'now')
-  assert.equal(back.phase, 'plan')
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'working')
+  assert.equal(parked.needsAttentionReason, 'turn failed in plan: boom')
+  // A phase move keeps the park; a column move clears it.
+  const phaseMove = store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine' })
+  assert.equal(phaseMove.needsAttentionReason, 'turn failed in plan: boom')
+  const back = store.transitionTicket(ticket.id, { column: 'backlog' }, { actor: 'human', reason: 'dragged back' })
+  assert.equal(back.column, 'backlog')
   assert.equal(back.needsAttentionReason, null)
+})
+
+test('clearNeedsAttention lifts the park in place', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 't', column: 'working' })
+  store.setNeedsAttention(ticket.id, 'awaiting')
+  const cleared = store.clearNeedsAttention(ticket.id)
+  assert.equal(cleared.needsAttentionReason, null)
+  assert.equal(cleared.column, 'working')
 })

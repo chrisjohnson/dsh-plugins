@@ -27,7 +27,7 @@ build-review session
   fail → implement again in the same session
       ↓ review pass with one done_when row per plan id
       ↓ and acceptance_coverage for every acceptance statement
-approval (Needs Attention)
+approval (attention card)
   human approves, discards, or opens an interactive approval session
   approval session tools: kanban_approve, kanban_discard, kanban_submit_plan
       ↓ approve
@@ -40,13 +40,21 @@ met/confidence/evidence, and every acceptance statement must be covered. A
 missing or incomplete review goes back to implementation. Only when that code
 gate passes does the ticket enter human approval.
 
-Needs attention is a state, not a parking brake. The moment any session attached
-to a needs-attention ticket starts a turn — you answering the engine's question,
-driving the build by hand, or talking an approval through — the card moves back
-to **In flight**, and the engine will not inject a role prompt into a session
-that already has a turn running. When that turn ends without a structured
-submission the card returns to Needs attention with the reason it had before; a
-`kanban_submit_*` call from the same turn advances the ticket as usual.
+Columns are **intended state** — where you want the ticket to live — and the
+engine never moves a ticket between them on its own. Whether work is happening
+is a card-level visual status computed from live facts: a blue pulsing dot and
+glow while a workflow turn is in flight, a red glowing card when the engine has
+parked the ticket for a human (a failure, a question, or approval), and a plain
+grey card otherwise.
+
+Needs attention is a state, not a parking brake or a column. The moment any
+session attached to a parked ticket starts a turn — you answering the engine's
+question, driving the build by hand, or talking an approval through — the park
+lifts in place and the card turns blue, and the engine will not inject a role
+prompt into a session that already has a turn running. When that turn ends
+without a structured submission the card returns to red with the reason it had
+before; a `kanban_submit_*` call from the same turn advances the ticket as
+usual.
 
 Every session starts once in the **standard preset** and uses its natural system
 prompt. The plugin does not rebind presets or install a custom system prompt.
@@ -82,8 +90,7 @@ Everything below lives on the `kanban` row.
 | `escalationLadder[]` | attempt-to-route overrides. |
 | `tickIntervalMs` | worker tick (default 5000). |
 | `stallTimeoutMs` | idle turn timeout (default 10 min); suspended while a native question waits. |
-| `wipCap` | tickets allowed in `now`. |
-| `autoPromote`, `autoPromotePerTick` | backlog promotion. |
+| `wipCap` | maximum workflow turns the engine drives concurrently (a pure throttle — queued Working tickets wait, nothing is rejected). |
 | `defaultPlanTiming` | `now` or `at_pickup`. |
 | `defaultPlanQuestions` | `interactive` or `autonomous`. |
 | `defaultBudgetUsd`, `retentionDays`, `promptsDir` | budget, artifact retention, prompt directory. |
@@ -111,18 +118,28 @@ denied by the native read-only mode and the role allow-list.
 ## Lifecycle
 
 ```text
-phase: plan → implement → review → approval → closed
-column: backlog | now | blocked | needs_attention | done | discarded
+phase:  plan → implement → review → approval → closed
+column: backlog | working | done | discarded        (intended state, all grey)
+status: idle | active | attention                  (computed per card, never stored)
 ```
 
-- Plan runs immediately for `now`, or when the ticket enters `now` for
+- The engine drives every **Working** ticket as far as its phase allows, plus
+  **Backlog** tickets whose Planning is `now` — those plan in place and stop at
+  Build until a human drags them to Working.
+- Plan runs immediately for `now`, or when the ticket enters Working for
   `at_pickup`.
 - Review pass is checked against the plan/acceptance by code and then moves to
-  `approval`, where the ticket is `needs_attention`.
+  `approval`, where the ticket parks with an attention card wherever it stands.
 - Approval offers approve, discard, or an interactive workspace-write session.
   The approval session can merge/deploy/iterate; its `kanban_submit_plan` starts
-  another implement/review round.
-- Historical tickets/sessions are discarded by the schema V3 reset.
+  another implement/review round in the same column.
+- Dragging a ticket between Backlog and Working is an unconditional human
+  statement of intent: into Working starts (or resumes) the engine and lifts any
+  park; back into Backlog stops it. There is no Blocked column and no automatic
+  promotion.
+- Historical tickets/sessions are discarded by the schema V3 reset. Schema V4
+  renames the column set in place: `now` → `working`, and `needs_attention` /
+  `blocked` → `backlog` (a parked ticket keeps its reason and still glows red).
 
 ## Model routing
 
@@ -150,8 +167,8 @@ Now the engine recovers it inside the workflow. When a plan, implement or review
 turn fails, kanban asks the `continueKicker` service that plugin provides for
 one explicit kick (`kick(sessionId, { bypassCooldown: true })`), waits for the
 turn it starts, and takes the structured submission from that turn exactly as it
-would from one it prompted itself. The ticket stays In flight throughout;
-nothing parks until recovery stops.
+would from one it prompted itself. The ticket keeps its attention card off
+(blue, active) throughout; nothing parks until recovery stops.
 
 **The policy is not duplicated here.** What counts as a kickable halt, which
 message is sent, and how many kicks in a row still count as recovery rather than
@@ -175,8 +192,8 @@ halt flavor and the kick number.
 
 ## Restart safety
 
-Running spans are abandoned on restart; affected tickets return to implement or
-needs attention, and their workflow sessions are closed so continue-kicker does
-not resume a dead Kanban session.
+Running spans are abandoned on restart; affected tickets park in place with a
+needs-attention reason (their column is untouched), and their workflow sessions
+are closed so continue-kicker does not resume a dead Kanban session.
 
 [dsh-continue-kicker]: https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/continue-kicker#provided-service-continuekicker

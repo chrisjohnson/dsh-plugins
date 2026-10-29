@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -181,6 +181,68 @@ DROP TABLE IF EXISTS acceptance;
 DROP TABLE IF EXISTS tickets;
 ` + V1;
 
+const V4 = `
+-- Intended-state columns. The board is Backlog | Working | Done / Discarded;
+-- "needs attention" and "in flight" became card-level visual statuses, so the
+-- 'now', 'blocked' and 'needs_attention' columns are retired. Data-preserving
+-- rewrite (V3 already reset history once): build the new table beside the old
+-- one, copy every ticket with its column mapped, then swap.
+--
+--   now              -> working
+--   needs_attention  -> backlog (the reason is kept, so the card still glows)
+--   blocked          -> backlog
+--
+-- 'foreign_keys' is per-connection and cannot change inside a transaction, so
+-- the runner turns it off before this migration and back on after (see
+-- src/db.mjs). Without that, DROP TABLE tickets would fire the children's
+-- ON DELETE CASCADE and wipe every event, span and artifact row.
+CREATE TABLE tickets_v4 (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  col TEXT NOT NULL CHECK (col IN ('backlog','working','done','discarded')),
+  phase TEXT NOT NULL CHECK (phase IN ('plan','implement','review','verify','closed')),
+  plan_timing TEXT NOT NULL CHECK (plan_timing IN ('now','at_pickup')),
+  plan_questions TEXT NOT NULL CHECK (plan_questions IN ('interactive','autonomous')),
+  priority INTEGER NOT NULL DEFAULT 0,
+  sort_order REAL NOT NULL DEFAULT 0,
+  allow_paid INTEGER NOT NULL DEFAULT 0 CHECK (allow_paid IN (0,1)),
+  budget_usd REAL NOT NULL DEFAULT 0,
+  spent_usd REAL NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  escalation_rung INTEGER NOT NULL DEFAULT 0,
+  workspace_cwd TEXT,
+  needs_attention_reason TEXT,
+  confidence_threshold REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1
+);
+INSERT INTO tickets_v4 (
+  id, key, title, body, col, phase, plan_timing, plan_questions, priority, sort_order,
+  allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
+  needs_attention_reason, confidence_threshold, created_at, updated_at, closed_at, version
+)
+SELECT
+  id, key, title, body,
+  CASE col
+    WHEN 'now' THEN 'working'
+    WHEN 'needs_attention' THEN 'backlog'
+    WHEN 'blocked' THEN 'backlog'
+    ELSE col
+  END,
+  phase, plan_timing, plan_questions, priority, sort_order,
+  allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
+  needs_attention_reason, confidence_threshold, created_at, updated_at, closed_at, version
+FROM tickets;
+DROP TABLE tickets;
+ALTER TABLE tickets_v4 RENAME TO tickets;
+CREATE INDEX IF NOT EXISTS tickets_col ON tickets(col, priority DESC, sort_order ASC);
+CREATE INDEX IF NOT EXISTS tickets_updated ON tickets(updated_at);
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -196,5 +258,14 @@ export const MIGRATIONS = [
     version: 3,
     name: 'flat-plan-workflow',
     sql: V3,
+  },
+  {
+    version: 4,
+    name: 'intended-state-columns',
+    sql: V4,
+    // Runs outside the migration transaction: PRAGMA foreign_keys is a no-op
+    // inside one.
+    before: 'PRAGMA foreign_keys = OFF;',
+    after: 'PRAGMA foreign_keys = ON;',
   },
 ];

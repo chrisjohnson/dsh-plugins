@@ -37,15 +37,25 @@ export function migrate(db) {
   }
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) continue;
+    // `before`/`after` run outside the migration transaction — they exist for
+    // statements a transaction cannot carry, like PRAGMA foreign_keys.
+    if (migration.before) db.exec(migration.before);
+    let failure = null;
     db.exec('BEGIN IMMEDIATE;');
     try {
       db.exec(migration.sql);
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(migration.version, new Date().toISOString());
       db.exec('COMMIT;');
     } catch (error) {
-      db.exec('ROLLBACK;');
-      throw error;
+      failure = error;
+      try {
+        db.exec('ROLLBACK;');
+      } catch {
+        // The transaction may already be gone; the original error is the useful one.
+      }
     }
+    if (migration.after) db.exec(migration.after);
+    if (failure !== null) throw failure;
   }
   return SCHEMA_VERSION;
 }
