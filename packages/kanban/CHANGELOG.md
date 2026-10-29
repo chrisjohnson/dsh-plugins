@@ -5,6 +5,32 @@
 
 ## Unreleased
 
+## 0.4.4
+
+### Fixed
+
+- A workflow session a human archived is no longer dispatched into. Sessions are
+  grouped by purpose, not role, so an archived build session stayed in the
+  driver's live map and the next phase of that purpose — a review, usually — was
+  injected into it. Core rejects every turn in an archived session before its
+  first step, so the ticket sat in Needs Attention forever and Retry repeated
+  the identical dead path. `ensureTicketSession` now consults the workspace
+  registry's archive set: it uses a non-archived live session when one exists,
+  and when the only live sessions for the purpose are archived it fails with
+  `workflow session <id> is archived; unarchive it and retry` instead of
+  silently opening a second session. Archived sessions are skipped, never
+  evicted, so unarchiving makes them usable again without a restart.
+- A turn that ends with reason `blocked` — the shape of that archived-session
+  rejection — now settles as a failed turn. It used to read as a successful turn
+  that simply did nothing, which produced the misleading
+  `reviewer ended without calling kanban_submit_review`. The board now shows
+  `turn failed in review: turn blocked (session may be archived)`.
+- Reopening an archived session no longer registers it as an engine-live ticket
+  session, so it cannot pull its ticket back into flight.
+- A failed role turn now records the error's one-line message as its
+  needs-attention reason instead of the whole stack trace. The stack still goes
+  to the log and the message to the span.
+
 ## 0.4.3
 
 ### Fixed
