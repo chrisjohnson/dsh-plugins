@@ -157,3 +157,34 @@ test('reconcile will not settle a waiter on a turn that ended before it was arme
   assert.equal(out.status, 'ok')
   assert.equal(out.turn, 2)
 })
+
+// The recovery loop's real situation: the session's snapshot has not caught up
+// with the turn that just ended, so the caller says which turn it already
+// watched. A `turn/end` for that turn must not settle the new waiter.
+test('afterTurn pins the waiter to a turn newer than the one the caller saw', async (t) => {
+  if (skip) { t.skip(skip); return }
+  const { driver, sessionId, agent, emit } = harness()
+
+  // The log only knows turn 1 (a lagging snapshot); the caller saw turn 2 end.
+  agent.session.snapshotEvents = () => [{ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } }]
+  agent.status = 'idle'
+  const waiting = driver.waitTurn({ sessionId, stallTimeoutMs: 60_000, afterTurn: 2 })
+  let settled = false
+  void waiting.then(() => { settled = true })
+
+  driver.waiters.get(sessionId).lastEventAt = Date.now() - 5_000
+  driver.reconcileTurns()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false, 'a turn/end older than afterTurn must not settle the waiter')
+  assert.equal(driver.waiters.has(sessionId), true, 'the waiter stays armed for the real turn')
+
+  // Turn 3 is the kicked turn: its end belongs to this waiter.
+  agent.session.snapshotEvents = () => [
+    { type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } },
+    { type: 'turn/end', data: { turn: 3, reason: { kind: 'max-tokens' } } },
+  ]
+  emit({ type: 'turn/end', data: { turn: 3, reason: { kind: 'max-tokens' } } })
+  const result = await waiting
+  assert.equal(result.status, 'failed')
+  assert.equal(result.turn, 3)
+})

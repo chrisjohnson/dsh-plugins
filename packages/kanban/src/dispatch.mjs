@@ -491,13 +491,18 @@ export class SessionDriver {
    * Same waiter machinery as sendTurn, same stall timeout, same reconcileTurns
    * coverage; the only difference is that no prompt is injected.
    */
-  waitTurn({ sessionId, stallTimeoutMs }) {
+  waitTurn({ sessionId, stallTimeoutMs, afterTurn = null }) {
     const live = this.live.get(sessionId);
     if (live === undefined) return Promise.reject(new DispatchError(`session ${sessionId} is not live`, { code: 'NOT_LIVE' }));
     if (this.waiters.has(sessionId)) {
       return Promise.reject(new DispatchError(`session ${sessionId} already has a turn in flight`, { code: 'BUSY' }));
     }
-    return this.#armWaiter(sessionId, stallTimeoutMs, this.#lastTurn(live.handle.agent.session)).promise;
+    // The caller's own observation of the last ended turn wins: the session's
+    // event snapshot can lag behind what the driver just settled on, and a
+    // baseline read from the lagging log is how a waiter gets settled by the
+    // very halt the kick was meant to recover from.
+    const baseline = Number.isFinite(afterTurn) ? afterTurn : this.#lastTurn(live.handle.agent.session);
+    return this.#armWaiter(sessionId, stallTimeoutMs, baseline).promise;
   }
 
   reconcileTurns() {
