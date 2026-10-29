@@ -10,14 +10,12 @@
 
 export const ROLES = ['planner', 'implementer', 'reviewer', 'approver'];
 
-export const DEFAULT_TOOLS = {
-  // Planning is read-only by intent; the guard also blocks write/edit.
-  planner: ['read', 'read_image', 'glob', 'grep', 'bash', 'ask_user_question', 'subagent', 'subagent_fork'],
-  implementer: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
-  // Review inspects; the engine's edit guard blocks write/edit in review.
-  reviewer: ['read', 'read_image', 'glob', 'grep', 'bash'],
-  approver: ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'job_list', 'job_output', 'job_kill', 'subagent', 'subagent_fork'],
-};
+/**
+ * Deprecated: `roles.<role>.allowTools` was the tool allow-list the phase guard
+ * enforced. Kanban registers no tool guard now — a workflow session has the
+ * standard preset's tools — so the key is accepted and ignored with a warning.
+ */
+export const DEPRECATED_ROLE_KEYS = ['allowTools'];
 
 /** Prompt files, relative to promptsDir. */
 export const DEFAULT_PROMPTS = {
@@ -37,31 +35,27 @@ export const DEFAULT_CONFIG = {
   /** Provider concurrency/pricing. Unknown providers are admitted one at a time at an unknown price. */
   providers: [],
 
-  /** role -> route + tool allow-list. Roles are model routes, not system prompts. */
+  /** role -> model route. Roles are routes, not system prompts and not tool lists. */
   roles: {
     planner: {
       provider: null,
       model: null,
       reasoningEffort: null,
-      allowTools: DEFAULT_TOOLS.planner,
     },
     implementer: {
       provider: null,
       model: null,
       reasoningEffort: null,
-      allowTools: DEFAULT_TOOLS.implementer,
     },
     reviewer: {
       provider: null,
       model: null,
       reasoningEffort: null,
-      allowTools: DEFAULT_TOOLS.reviewer,
     },
     approver: {
       provider: null,
       model: null,
       reasoningEffort: null,
-      allowTools: DEFAULT_TOOLS.approver,
     },
   },
 
@@ -101,7 +95,10 @@ export const DEFAULT_CONFIG = {
 };
 
 const TOP_LEVEL_KEYS = new Set(Object.keys(DEFAULT_CONFIG));
-const ROLE_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'allowTools']);
+// `allowTools` is a deprecated no-op (see DEPRECATED_ROLE_KEYS): it stays in the
+// accepted set so an existing deployment row validates instead of taking the
+// profile down, and resolveConfig warns that it is ignored.
+const ROLE_KEYS = new Set(['provider', 'model', 'reasoningEffort', ...DEPRECATED_ROLE_KEYS]);
 const PROVIDER_KEYS = new Set([
   'name',
   'tier',
@@ -188,7 +185,7 @@ function validateProviders(providers, errors, warnings) {
   });
 }
 
-function validateRoles(roles, errors) {
+function validateRoles(roles, errors, warnings = []) {
   if (!isObject(roles)) {
     errors.push(new ConfigError('roles must be an object', 'roles'));
     return;
@@ -210,8 +207,8 @@ function validateRoles(roles, errors) {
     optionalString(entry.provider, `${at}.provider`, errors);
     optionalString(entry.model, `${at}.model`, errors);
     optionalString(entry.reasoningEffort, `${at}.reasoningEffort`, errors);
-    if (!Array.isArray(entry.allowTools) || entry.allowTools.some((name) => !isNonEmptyString(name))) {
-      errors.push(new ConfigError('allowTools must be an array of tool names', `${at}.allowTools`));
+    if (entry.allowTools !== undefined) {
+      warnings.push(`${at}.allowTools is deprecated and ignored: a workflow session has the standard preset's tools`);
     }
   }
 }
@@ -265,7 +262,7 @@ export function resolveConfig(input = {}) {
   optionalString(config.dbPath, 'dbPath', errors);
   optionalString(config.defaultWorkspaceCwd, 'defaultWorkspaceCwd', errors);
   validateProviders(config.providers, errors, warnings);
-  validateRoles(config.roles, errors);
+  validateRoles(config.roles, errors, warnings);
   validateLadder(config.escalationLadder, errors);
 
   if (!isFiniteNumber(config.confidenceThreshold) || config.confidenceThreshold < 0 || config.confidenceThreshold > 1) {

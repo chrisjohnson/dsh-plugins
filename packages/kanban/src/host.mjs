@@ -452,7 +452,7 @@ export default async function kanban(ctx, config = {}) {
                 roles: Object.fromEntries(
                   Object.entries(live.roles).map(([role, entry]) => [
                     role,
-                    { provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort, allowTools: entry.allowTools },
+                    { provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort },
                   ]),
                 ),
                 confidenceThreshold: live.confidenceThreshold,

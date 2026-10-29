@@ -54,9 +54,9 @@ const PROMPTS = {
 function setup(queues = {}, options = {}) {
   const { config } = resolveConfig({
     roles: {
-      planner: { provider: 'local', model: 'm', allowTools: ['read'] },
-      implementer: { provider: 'local', model: 'm', allowTools: ['read', 'write', 'edit'] },
-      reviewer: { provider: 'local', model: 'm', allowTools: ['read'] },
+      planner: { provider: 'local', model: 'm' },
+      implementer: { provider: 'local', model: 'm' },
+      reviewer: { provider: 'local', model: 'm' },
     },
     providers: [{ name: 'local' }],
     confidenceThreshold: 0.7,

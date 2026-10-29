@@ -42,9 +42,9 @@ const CWD = mkdtempSync(join(tmpdir(), 'kanban-dispatch-'))
 function makeConfig() {
   return resolveConfig({
     roles: {
-      planner: { provider: 'local', model: 'm', allowTools: ['read'] },
-      implementer: { provider: 'local', model: 'm', allowTools: ['read', 'write', 'edit'] },
-      reviewer: { provider: 'local', model: 'm', allowTools: ['read'] },
+      planner: { provider: 'local', model: 'm' },
+      implementer: { provider: 'local', model: 'm' },
+      reviewer: { provider: 'local', model: 'm' },
     },
     providers: [{ name: 'local' }],
     confidenceThreshold: 0.7,
@@ -78,10 +78,24 @@ function makeCtx({ archived = [], store } = {}) {
       status: 'idle',
       session,
       prompts: [],
+      /** every tool the plugin registered into this agent, in order */
+      registered: [],
+      /** every tool guard the plugin registered — must stay empty (KAN-9) */
+      guards: [],
+      /** the sandbox/mode events this session has been given, oldest first */
+      sandboxModes: () => session.appended.filter((e) => e.type === 'sandbox/mode').map((e) => e.data.mode),
       ctx: {
         tools: {
-          register: () => () => {},
-          guard: () => {},
+          register: (tool) => {
+            agent.registered.push(tool)
+            return () => {
+              const at = agent.registered.indexOf(tool)
+              if (at >= 0) agent.registered.splice(at, 1)
+            }
+          },
+          guard: (fn) => {
+            agent.guards.push(fn)
+          },
         },
       },
       followup: (message) => {
@@ -286,4 +300,189 @@ test('a completed turn still settles as success', { skip }, async () => {
   const result = await pending
   assert.equal(result.status, 'ok')
   assert.equal(result.error, null)
+})
+
+// ---------------------------------------------------------------- KAN-9 tools
+//
+// A workflow session runs the bone standard preset, so every standard tool a
+// normal session has is available to every role. Kanban's own contribution is
+// the five action tools, and they are all present in all three purposes with the
+// phase check inside each tool — a session that changes phase (implement ->
+// review) or is reattached after a restart never finds a tool missing.
+
+const ACTION_TOOLS = [
+  'kanban_submit_plan',
+  'kanban_submit_implementation',
+  'kanban_submit_review',
+  'kanban_approve',
+  'kanban_discard',
+]
+
+const PLAN_VALUE = {
+  summary: 'do the thing',
+  steps: ['step one'],
+  done_when: [{ id: 'a', statement: 'A holds', how_verified: 'node --test' }],
+}
+
+const IMPLEMENT_VALUE = {
+  status: 'complete',
+  summary: 'did the thing',
+  changed_files: ['src/x.mjs'],
+  done_when: [{ id: 'a', met: true, confidence: 0.9, evidence: 'tests pass' }],
+}
+
+const REVIEW_VALUE = {
+  verdict: 'pass',
+  reasons: ['matches the plan'],
+  done_when: [{ id: 'a', met: true, confidence: 0.9, evidence: 'tests pass' }],
+}
+
+function toolOf(agent, name) {
+  const tool = agent.registered.find((item) => item.name === name)
+  assert.ok(tool, `${name} is not registered (registered: ${agent.registered.map((t) => t.name).join(', ') || 'none'})`)
+  return tool
+}
+
+const EXEC = () => ({ concluded: 0, concludeTurn() { this.concluded += 1 } })
+
+test('all five action tools are registered in every workflow session purpose', { skip }, async () => {
+  for (const [purpose, role] of [['plan', 'planner'], ['build', 'implementer'], ['approval', 'approver']]) {
+    const store = newStore()
+    const ticket = ticketFor(store)
+    const harness = makeCtx({ store })
+    const driver = makeDriver({ ...harness, store })
+    const { sessionId } = await driver.ensureTicketSession({ ticket, role, route: ROUTE, purpose })
+    const agent = harness.agentsById.get(sessionId)
+    assert.deepEqual(
+      agent.registered.map((tool) => tool.name).sort(),
+      [...ACTION_TOOLS].sort(),
+      `the ${purpose} session must carry every action tool`,
+    )
+  }
+})
+
+test('a reattached session registers every action tool too', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const id = 'session-reattach-tools'
+  store.attachSession({ ticketId: ticket.id, dshSessionId: id, role: 'build', purpose: 'build' })
+  const agent = harness.makeAgent(id)
+  assert.equal(await driver.attachExistingSession(id, agent), true)
+  assert.deepEqual(agent.registered.map((tool) => tool.name).sort(), [...ACTION_TOOLS].sort())
+})
+
+test('kanban registers no tool guard at all, so standard tools are undenied', { skip }, async () => {
+  for (const [purpose, role] of [['plan', 'planner'], ['build', 'implementer'], ['approval', 'approver']]) {
+    const store = newStore()
+    const ticket = ticketFor(store)
+    const harness = makeCtx({ store })
+    const driver = makeDriver({ ...harness, store })
+    const { sessionId } = await driver.ensureTicketSession({ ticket, role, route: ROUTE, purpose })
+    const agent = harness.agentsById.get(sessionId)
+    // The old phase guard denied todo_write and ask_user_question in a build
+    // session; with no guard registered nothing can deny a standard tool.
+    assert.deepEqual(agent.guards, [], `the ${purpose} session must have no tool guard`)
+  }
+})
+
+test('the sandbox mode follows the purpose, and a phase change leaves it alone', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const plan = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+  const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  const approval = await driver.ensureTicketSession({ ticket, role: 'approver', route: ROUTE, purpose: 'approval' })
+  assert.deepEqual(harness.agentsById.get(plan.sessionId).sandboxModes(), ['read-only'])
+  assert.deepEqual(harness.agentsById.get(build.sessionId).sandboxModes(), ['workspace-write'])
+  assert.deepEqual(harness.agentsById.get(approval.sessionId).sandboxModes(), ['workspace-write'])
+  // implement -> review inside the build session: same mode, no new switch.
+  driver.setPhase(build.sessionId, 'reviewer')
+  assert.equal(driver.live.get(build.sessionId).role, 'reviewer')
+  assert.deepEqual(harness.agentsById.get(build.sessionId).sandboxModes(), ['workspace-write'])
+})
+
+test('an action tool refuses a call that does not belong to its phase', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const { sessionId } = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  const agent = harness.agentsById.get(sessionId)
+  await assert.rejects(() => toolOf(agent, 'kanban_approve').execute({}, EXEC()), /kanban_approve is not available in the implementer phase/)
+  await assert.rejects(() => toolOf(agent, 'kanban_discard').execute({}, EXEC()), /kanban_discard is not available in the implementer phase/)
+  await assert.rejects(() => toolOf(agent, 'kanban_submit_review').execute(REVIEW_VALUE, EXEC()), /kanban_submit_review is not available in the implementer phase/)
+  await assert.rejects(() => toolOf(agent, 'kanban_submit_plan').execute(PLAN_VALUE, EXEC()), /kanban_submit_plan is not available in the implementer phase/)
+  // The reviewer half of the same session: implementation is now the wrong call.
+  driver.setPhase(sessionId, 'reviewer')
+  await assert.rejects(() => toolOf(agent, 'kanban_submit_implementation').execute(IMPLEMENT_VALUE, EXEC()), /kanban_submit_implementation is not available in the reviewer phase/)
+  await assert.rejects(() => toolOf(agent, 'kanban_approve').execute({}, EXEC()), /kanban_approve is not available in the reviewer phase/)
+  // And in the approval session, the build tools are the wrong calls.
+  const appr = await driver.ensureTicketSession({ ticket, role: 'approver', route: ROUTE, purpose: 'approval' })
+  const apprAgent = harness.agentsById.get(appr.sessionId)
+  await assert.rejects(() => toolOf(apprAgent, 'kanban_submit_implementation').execute(IMPLEMENT_VALUE, EXEC()), /not available in the approver phase/)
+  await assert.rejects(() => toolOf(apprAgent, 'kanban_submit_review').execute(REVIEW_VALUE, EXEC()), /not available in the approver phase/)
+})
+
+test('the right action tool in the right phase is accepted', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const { sessionId } = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  const agent = harness.agentsById.get(sessionId)
+  const exec = EXEC()
+  assert.deepEqual(await toolOf(agent, 'kanban_submit_implementation').execute(IMPLEMENT_VALUE, exec), {
+    accepted: true,
+    action: 'implementation',
+    manual: true,
+  })
+  assert.equal(exec.concluded, 1)
+  assert.equal(driver.actions.get(sessionId).type, 'implementation')
+  driver.setPhase(sessionId, 'reviewer')
+  assert.equal((await toolOf(agent, 'kanban_submit_review').execute(REVIEW_VALUE, EXEC())).action, 'review')
+})
+
+test('kanban_submit_plan branches on the phase: planner submits, approver re-plans', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const planned = []
+  driver.approval = { plan: async (ticketId, value) => { planned.push([ticketId, value]) } }
+
+  const planSession = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+  const planAgent = harness.agentsById.get(planSession.sessionId)
+  const planExec = EXEC()
+  assert.deepEqual(await toolOf(planAgent, 'kanban_submit_plan').execute(PLAN_VALUE, planExec), {
+    accepted: true,
+    action: 'plan',
+    manual: true,
+  })
+  assert.equal(driver.actions.get(planSession.sessionId).type, 'plan')
+  assert.deepEqual(planned, [], 'the planner branch must not touch the approval handlers')
+
+  const approvalSession = await driver.ensureTicketSession({ ticket, role: 'approver', route: ROUTE, purpose: 'approval' })
+  const approvalAgent = harness.agentsById.get(approvalSession.sessionId)
+  const approvalExec = EXEC()
+  assert.deepEqual(await toolOf(approvalAgent, 'kanban_submit_plan').execute(PLAN_VALUE, approvalExec), { accepted: true })
+  assert.equal(approvalExec.concluded, 1)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.deepEqual(planned, [[ticket.id, PLAN_VALUE]])
+})
+
+test('a plan payload is rejected before the phase branch accepts it', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  driver.approval = { plan: async () => {} }
+  const { sessionId } = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+  const agent = harness.agentsById.get(sessionId)
+  await assert.rejects(
+    () => toolOf(agent, 'kanban_submit_plan').execute({ ...PLAN_VALUE, done_when: [] }, EXEC()),
+    /done_when/,
+  )
 })

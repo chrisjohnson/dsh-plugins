@@ -5,6 +5,42 @@
 
 ## Unreleased
 
+## 0.6.0
+
+### Removed
+
+- **The tool guard is gone.** `src/tools.mjs` (`phaseToolGuard`, `roleToolGuard`,
+  `allowedTools`) is deleted and `dispatch.mjs` registers no `tools.guard` at all
+  — neither the phase allow-list nor the autonomous-question backstop. A workflow
+  session runs the bone **standard** preset and has every tool a normal session
+  has: `todo_write`, `web_search`, `browser_*`, `subagent`, jobs and the rest are
+  no longer denied with `kanban: role "…" may not call "…"`. That denial was a
+  second policy stacked on the harness's own sandbox and approval rules, and in
+  practice it only crippled the plugin's own sessions.
+
+### Changed
+
+- **All five action tools are registered in every workflow session**, whatever its
+  purpose: `kanban_submit_plan`, `kanban_submit_implementation`,
+  `kanban_submit_review`, `kanban_approve` and `kanban_discard`. Phase enforcement
+  lives inside the tools now — implementation requires the implementer phase,
+  review requires the reviewer phase, approve and discard require the approver
+  phase, and `kanban_submit_plan` branches on the phase (planner submits the plan
+  and ends planning; approver sends the ticket back for another build/review
+  round). A misdirected call is an ordinary tool error the model can correct, and
+  the engine still re-validates the ticket's own phase.
+- **The sandbox mode is set by purpose only.** Plan (and the legacy verify gate)
+  runs read-only; build and approval run workspace-write. A build session that
+  moves from implementer to reviewer no longer flips to read-only, so a reviewer
+  can run the checks its own review asks for; `setPhase` changes the role and the
+  next prompt and leaves the sandbox alone.
+
+### Deprecated
+
+- `roles.<role>.allowTools` decides nothing. It stays an accepted config key so an
+  existing deployment row validates, and `resolveConfig` warns that it is ignored.
+  Delete it from your `kanban` row when convenient.
+
 ## 0.5.1
 
 ### Fixed

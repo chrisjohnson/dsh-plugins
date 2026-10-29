@@ -267,3 +267,34 @@ parked ticket still glows red in Backlog), `blocked` → `backlog`. The rewrite
 runs with `PRAGMA foreign_keys = OFF` outside the migration transaction — with
 them on, `DROP TABLE tickets` would fire every child's `ON DELETE CASCADE` and
 wipe the event/span history.
+
+## 2026-10-29 supersession — no tool guard at all (0.6.0)
+
+The allow-list decisions above are superseded. A workflow session runs the bone
+standard preset and keeps every tool a normal session has: `phaseToolGuard`,
+`roleToolGuard` and `src/tools.mjs` are deleted, and `dispatch.mjs` registers no
+`tools.guard` of any kind — not the phase guard, not the autonomous-question
+backstop.
+
+Why: the guard was a second, plugin-owned policy on top of the harness's own
+sandbox and approval policy, and it was wrong in practice. A build session could
+not use `todo_write` or `web_search` because the role's list did not name them,
+which read as "kanban cripples its own sessions" rather than as a safety
+property — the roles are the operator's own model routes, and the human stays in
+the loop at approval.
+
+What replaced each part of it:
+
+- **Phase discipline** moved into the action tools. All five (`kanban_submit_plan`,
+  `kanban_submit_implementation`, `kanban_submit_review`, `kanban_approve`,
+  `kanban_discard`) are registered in every workflow session regardless of
+  purpose, and each one refuses a call outside its phase. `kanban_submit_plan`
+  branches on the phase: planner submits the plan, approver sends the ticket back
+  for another round. The engine re-validates the ticket's phase either way.
+- **Write restriction** is now purely the sandbox mode, set by purpose and never
+  by phase: plan (and the legacy verify gate) read-only, build and approval
+  workspace-write. A build session that moves implementer → reviewer stays
+  workspace-write, so a reviewer can run the checks its own review asks for.
+- `roles.<role>.allowTools` stays in the accepted config keys as a deprecated
+  no-op, warned and ignored, so an existing deployment row does not fail
+  validation on upgrade.

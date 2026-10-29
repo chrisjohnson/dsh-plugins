@@ -57,9 +57,11 @@ before; a `kanban_submit_*` call from the same turn advances the ticket as
 usual.
 
 Every session starts once in the **standard preset** and uses its natural system
-prompt. The plugin does not rebind presets or install a custom system prompt.
-Plan and review run in the native read-only sandbox mode; implementation and
-the approval session run workspace-write. Workflow sessions attach to the
+prompt, so a workflow session has every tool a normal session has. The plugin
+does not rebind presets, install a custom system prompt, or register a tool
+guard. The sandbox mode follows the session's **purpose**: plan is read-only,
+build (including its review phase) and approval are workspace-write, and a phase
+change inside one session never moves it. Workflow sessions attach to the
 ticket's selected workspace and are titled `KAN-n · purpose`.
 
 Ticket choices:
@@ -83,7 +85,7 @@ Everything below lives on the `kanban` row.
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
-| `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`, `allowTools[]`. A null route falls back to the host default model. |
+| `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
 | `confidenceThreshold` | default `0.70`. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
 | `maxAttempts` | implement/review rounds before `needs_attention`. |
@@ -104,16 +106,23 @@ previous config.
 
 ## Roles
 
-| Role | Tools |
-|---|---|
-| `planner` | read-only inspection + `ask_user_question`; plan action tool |
-| `implementer` | read/write/edit/shell/jobs; implementation action tool |
-| `reviewer` | read-only inspection; review action tool |
-| `approver` | workspace-write approval session; approve/discard/plan tools |
+A role is a model route and a phase — not a tool list. Every role session gets
+the standard preset's tools, and all five Kanban action tools are registered in
+every workflow session, whichever purpose it belongs to. Each action tool
+enforces its own phase and refuses a call that does not belong to it, so a
+session that changes phase (implement → review) or is reattached after a restart
+never finds the tool it needs missing.
 
-The phase guard denies tools outside `allowTools`; Kanban action tools are
-allowed through and enforce their own phase. Plan and review have write/edit
-denied by the native read-only mode and the role allow-list.
+| Role | Purpose | Sandbox mode | Action tools that accept a call |
+|---|---|---|---|
+| `planner` | plan | read-only | `kanban_submit_plan` |
+| `implementer` | build | workspace-write | `kanban_submit_implementation` |
+| `reviewer` | build | workspace-write | `kanban_submit_review` |
+| `approver` | approval | workspace-write | `kanban_approve`, `kanban_discard`, `kanban_submit_plan` |
+
+A misdirected call is an ordinary tool error the model can read and correct, and
+the engine re-validates the ticket's own phase before it records anything, so a
+call made in the right session but the wrong ticket state still fails cleanly.
 
 ## Lifecycle
 
