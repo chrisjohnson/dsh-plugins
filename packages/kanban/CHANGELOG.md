@@ -5,6 +5,22 @@
 
 ## Unreleased
 
+## 0.8.1
+
+### Fixed
+
+- **A stale reasoning level no longer blocks the whole routing save.** When a
+  role's model offers no reasoning levels its effort picker is hidden — but the
+  draft kept whatever level the route carried, and `saveRouting` sent it, so the
+  host rejected the entire payload (`role X: model "…" offers no reasoning
+  effort levels`) and no role could be saved at all. The dialog now drops a level
+  its row's model does not offer, both when the draft is seeded and at the save
+  boundary, so that row goes out as Default. Reachable through a documented
+  operator step: reassigning a role's backend, or declaring
+  `reasoningEfforts: false` for a model that stops thinking, while a level is
+  still saved for it. A model that is not in the catalog at all is left alone and
+  the host, which reads the live registry, decides.
+
 ## 0.8.0
 
 ### Added
