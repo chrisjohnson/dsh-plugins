@@ -1285,6 +1285,31 @@ var CSS =
 			return [];
 		}
 
+		// The effort a role row is allowed to send. A level survives only if the
+		// model on that row actually offers it: a stale one — a hand-edited row,
+		// or a provider-config swap that dropped the model's reasoning metadata —
+		// has no control on screen to clear it (the picker is hidden), and the
+		// host rejects the whole payload for one bad row, so nothing could be
+		// saved at all. Such a level goes out as Default instead. When the model
+		// is not in the catalog at all the value is left alone and the host, which
+		// reads the live registry, decides.
+		function sendableEffort(groups, provider, model, effort) {
+			if (effort === "" || effort === undefined || effort === null) return null;
+			var known = false;
+			(groups || []).forEach(function (group) {
+				if (!group || group.id !== provider) return;
+				(group.models || []).forEach(function (candidate) {
+					if (candidate && candidate.id === model) known = true;
+				});
+			});
+			if (!known) return effort;
+			var offered = effortsForModel(groups, provider, model);
+			for (var i = 0; i < offered.length; i += 1) {
+				if (offered[i].id === effort) return effort;
+			}
+			return null;
+		}
+
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
@@ -1512,7 +1537,9 @@ var CSS =
 				var draft = {};
 				["planner", "implementer", "reviewer", "approver"].forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
-					draft[role] = { provider: route.provider || "", model: route.model || "", reasoningEffort: route.reasoningEffort || "" };
+					// A level the row's model does not offer is dropped here, not
+					// just hidden, so the draft can never carry an unsendable value.
+					draft[role] = { provider: route.provider || "", model: route.model || "", reasoningEffort: sendableEffort(routing.groups, route.provider, route.model, route.reasoningEffort) || "" };
 				});
 				setRoutingDraft(draft);
 				setRoutingError(null);
@@ -1532,13 +1559,15 @@ var CSS =
 				var roles = ["planner", "implementer", "reviewer", "approver"];
 				var routes = roles.map(function (role) {
 					var entry = routingDraft[role] || {};
+					// Same rule as the seed, applied at the boundary: "" is the
+					// dialog's Default, and a level the row's model does not offer
+					// goes out as null so the host clears it instead of rejecting
+					// the whole save.
 					return {
 						role: role,
 						provider: entry.provider,
 						model: entry.model,
-						// "" is the dialog's Default: send null so the host clears
-						// any level saved earlier instead of keeping it.
-						reasoningEffort: entry.reasoningEffort === "" || entry.reasoningEffort === undefined || entry.reasoningEffort === null ? null : entry.reasoningEffort,
+						reasoningEffort: sendableEffort(routing.groups, entry.provider, entry.model, entry.reasoningEffort),
 					};
 				});
 				setRoutingSaving(true);

@@ -180,7 +180,10 @@ offer a level the provider has not declared.
   level saved earlier instead of leaving it behind.
 - A model with no reasoning metadata shows **no effort control at all** — there
   is nothing to pick. Switching a role to such a model, or to one that does not
-  offer the level you had picked, resets that draft back to Default.
+  offer the level you had picked, resets that draft back to Default — and a row
+  that *starts* edit carrying a level its model no longer offers (a hand-edited
+  row, or a backend swap that dropped the model's reasoning metadata) drops it
+  the same way, so one stale level cannot block the save of the other roles.
 - Saving validates every non-null level against the live catalog and answers
   `bad_request` naming the role, the model and the levels it offers. A level
   that cannot be checked because the provider is unreachable is rejected rather

@@ -107,6 +107,31 @@ test('a deprecated role key survives a route rewrite', async () => {
   assert.deepEqual(saved.next.roles.planner, { provider: 'local', model: 'big-moe', reasoningEffort: 'medium', allowTools: ['read'] })
 })
 
+test('one stale level rejects the whole payload, so the client must never send it', async () => {
+  // The dialog always saves all four roles. A role left on a model that offers no
+  // levels — a hand-edited row, or a provider-config swap that dropped the
+  // model's reasoning metadata — must not be able to hold the other three saves
+  // hostage, which is what `sendableEffort` in the client exists to prevent.
+  const current = { roles: { planner: { provider: 'local', model: 'plain', reasoningEffort: 'low' } } }
+  const stale = await setRoutes([
+    { role: 'planner', provider: 'local', model: 'plain', reasoningEffort: 'low' },
+    { role: 'implementer', provider: 'local', model: 'big-moe', reasoningEffort: 'xhigh' },
+  ], { current })
+  assert.equal(stale.ok, false)
+  assert.equal(stale.code, 'bad_request')
+  assert.match(stale.message, /planner/)
+  assert.match(stale.message, /no reasoning effort levels/)
+  // Had the client dropped the stale level the way its hidden control implies,
+  // the same payload saves and the good row is written.
+  const fixed = await setRoutes([
+    { role: 'planner', provider: 'local', model: 'plain', reasoningEffort: null },
+    { role: 'implementer', provider: 'local', model: 'big-moe', reasoningEffort: 'xhigh' },
+  ], { current })
+  assert.equal(fixed.ok, true)
+  assert.equal(fixed.next.roles.planner.reasoningEffort, null)
+  assert.equal(fixed.next.roles.implementer.reasoningEffort, 'xhigh')
+})
+
 test('the existing route checks are unchanged', async () => {
   assert.equal((await setRoutes([{ role: 'ghost', provider: 'local', model: 'big-moe' }])).code, 'bad_request')
   assert.equal((await setRoutes([{ role: 'planner', provider: 'other', model: 'big-moe' }])).code, 'bad_request')
