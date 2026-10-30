@@ -5,6 +5,37 @@
 
 ## Unreleased
 
+## 0.7.0
+
+### Changed
+
+- **Approval moved into the build session.** A passing review no longer tears the
+  build session down and waits for a human to launch a separate approval one. The
+  session that wrote the code and reviewed it is flipped to the `approver` phase,
+  moved onto the configured `approver` route, and sent one slim hand-over prompt
+  as a normal role turn: it summarizes what was built and asks the human what to
+  do. The ticket then parks **Awaiting human approval** in that same conversation,
+  where `kanban_approve`, `kanban_discard` and `kanban_submit_plan` are already
+  live (0.6.0 registered them everywhere and gated them by phase; the phase flip
+  is what makes the approval half of that gate reachable). A failed approval turn
+  parks as `turn failed in approval: …` like any other phase, and an approval the
+  agent closes from inside that turn is not parked over.
+- **A reopened build session comes back as the phase its ticket is in.** A
+  `verify` ticket's build session reattaches as `approver`, a `review` one as
+  `reviewer`; rows written before this release whose purpose was literally
+  `approval` still reattach as `approver`.
+- **The board's approval card points at the build session.** `approvalSessionId`
+  now resolves the ticket's build session, the panel button reads **Open build
+  session**, and the hint says where approval actually happens.
+
+### Removed
+
+- The separate approval session is gone: `Engine.startApprovalSession` and
+  `Engine.approvalIntro` are deleted, the `approvalSession` sub-action is removed
+  from both the `resolve` and `action` endpoints, and the client no longer offers
+  a **Launch approval session** button. Nothing creates a purpose-`approval`
+  session any more.
+
 ## 0.6.0
 
 ### Removed

@@ -298,3 +298,53 @@ What replaced each part of it:
 - `roles.<role>.allowTools` stays in the accepted config keys as a deprecated
   no-op, warned and ignored, so an existing deployment row does not fail
   validation on upgrade.
+
+## 2026-10-30 supersession — approval is a build-session phase (0.7.0)
+
+The separate approval session is gone. On a passing review the engine keeps the
+build session open, flips its phase role to `approver`, switches it to the
+configured `approver` route, sends it one slim hand-over prompt as a normal role
+turn, and then parks the ticket **Awaiting human approval** in that same
+conversation. `startApprovalSession`, `approvalIntro`, the `approvalSession`
+resolve/action sub-actions and the client's **Launch approval session** button are
+deleted; nothing creates a purpose-`approval` session any more.
+
+Why: the approval session was a third conversation about work the second one had
+just done. It started with no history, so its intro prompt had to re-paste the
+ticket body, the acceptance list, the plan and the review verdict — the same text
+the build session already had in context — and then sit there waiting for a human
+to press a button to launch it. Meanwhile the build session, which knew exactly
+what it had built and what the review had checked, was closed and thrown away at
+the one moment its context was most useful. Merging the stages also removes a
+route the human had to remember: approving and discarding were available in two
+places with two different launch paths.
+
+What made this cheap: 0.6.0 already registers all five action tools in every
+workflow session and gates each one on the session's phase role, so approval
+needed no new tool surface — only the phase flip that makes the approver half of
+that gate reachable, plus a route switch (the approver route is usually a
+different, stronger model than the implementer's) and one prompt.
+
+Consequences, and how they are handled:
+
+- **The ticket is in `verify` while the approval turn runs**, and the park is only
+  set once the turn ends cleanly. An agent that approves, discards or re-plans
+  from inside that turn has already moved the ticket, so the engine re-reads it
+  and says nothing rather than parking a closed or re-planned ticket.
+- **A manual review submission asks for the approval turn in the same beat that
+  concluded the human's own turn.** Sending into a session whose turn is still
+  finishing is rejected as busy, so the engine waits (bounded) for the ticket's
+  sessions to go quiet first.
+- **A reopened build session must come back as the phase its ticket is in**:
+  `verify` → `approver`, `review` → `reviewer`, otherwise `implementer`. Rows
+  written before this release whose purpose was literally `approval` keep their
+  mapping, so an upgrade does not strand a parked ticket.
+- **The sandbox mode does not move.** It follows the purpose, and the build
+  purpose was already workspace-write, so the approver can merge, deploy or
+  iterate in the session it built in — which is the point.
+- **`approvalSessionId` keeps its name** and now resolves the build session. It is
+  the client's contract; renaming it would be a second change for no benefit.
+- **No budget admission for the approval turn**, matching the intro it replaces:
+  it is a hand-over, not a work round. With no `approver` route configured the
+  engine skips the turn and parks the ticket the way it used to, so a deployment
+  that never configured one loses the prompt and nothing else.

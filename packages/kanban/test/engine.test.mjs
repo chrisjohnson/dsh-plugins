@@ -47,6 +47,7 @@ const PROMPTS = {
     implement: 'implement {{plan}} {{done_when}}',
     rework: 'rework {{review}}',
     review: 'review {{diff}}',
+    approval: 'approval {{plan}} {{review}}',
   },
   hashes: { plan: 'h' },
 }
@@ -57,6 +58,7 @@ function setup(queues = {}, options = {}) {
       planner: { provider: 'local', model: 'm' },
       implementer: { provider: 'local', model: 'm' },
       reviewer: { provider: 'local', model: 'm' },
+      approver: { provider: 'local', model: 'm' },
     },
     providers: [{ name: 'local' }],
     confidenceThreshold: 0.7,
@@ -73,6 +75,8 @@ function setup(queues = {}, options = {}) {
     busy: false,
     /** every session the engine actually sent a role prompt to */
     turns: [],
+    /** every session the engine closed: approval must not appear here */
+    closed: [],
     /** every session the engine waited on after a recovery kick */
     waited: [],
     /** scripted waitTurn results, shifted one per wait */
@@ -81,6 +85,9 @@ function setup(queues = {}, options = {}) {
       planner: [...(queues.plan ?? [{ type: 'plan', value: PLAN }])],
       implementer: [...(queues.implement ?? [{ type: 'implementation', value: IMPLEMENTATION }])],
       reviewer: [...(queues.review ?? [{ type: 'review', value: REVIEW_PASS }])],
+      // The approval turn asks the human a question and ends without a
+      // structured submission; that is its normal shape.
+      approver: [...(queues.approval ?? [null])],
     },
     async ensureTicketSession({ ticket, role, purpose }) {
       const key = `${ticket.id}:${purpose}`
@@ -94,16 +101,18 @@ function setup(queues = {}, options = {}) {
       return { sessionId: id }
     },
     setPhase(id, role) { this.sessions.get(id).role = role },
-    setRoute() {},
+    /** every route the engine pushed onto a session, in order */
+    routes: [],
+    setRoute(id, route) { this.routes.push({ sessionId: id, route }) },
     async sendTurn({ sessionId }) {
       this.turns.push(sessionId)
       const session = this.sessions.get(sessionId)
-      const next = this.queues[session.role]?.shift()
+      const next = this.queues[session.role]?.shift() ?? null
       // A queue entry `{ fail: 'max-tokens' }` stands in for a halted turn.
-      if (next !== undefined && next.fail !== undefined) {
+      if (next !== null && next.fail !== undefined) {
         return { status: 'failed', error: next.fail, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
       }
-      return { status: 'ok', action: next ?? null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+      return { status: 'ok', action: next, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
     },
     async waitTurn({ sessionId }) {
       this.waited.push(sessionId)
@@ -113,7 +122,7 @@ function setup(queues = {}, options = {}) {
       if (next.status === 'disposed') return { status: 'disposed', error: 'session closed', finalText: '', usage: null, events: [] }
       return { status: 'ok', action: next.action ?? null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
     },
-    async closeSession() {},
+    async closeSession(id) { this.closed.push(id) },
     async closeTicketSessions() {},
     liveTicketSession(ticketId, purpose) { return this.ticketSessions.get(`${ticketId}:${purpose}`) },
     isLive(id) { return this.sessions.has(id) },
@@ -145,7 +154,7 @@ function pickedUp(store, extra = {}) {
 }
 
 test('flat plan -> implement -> review -> approval -> approve', async () => {
-  const { store, engine } = setup()
+  const { store, engine, driver } = setup()
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const pending = store.getTicket(ticket.id)
@@ -159,6 +168,92 @@ test('flat plan -> implement -> review -> approval -> approve', async () => {
   const done = await engine.approve(ticket.id)
   assert.equal(done.column, 'done')
   assert.equal(done.phase, 'closed')
+})
+
+// ------------------------------------------------------- approval in the build session
+//
+// KAN-11: a passing review does not tear the build session down and open a
+// separate approval one. The same session that wrote the code and reviewed it is
+// flipped to the approver phase, moved onto the approver route, and asked what
+// the human wants to do — then the ticket parks for them.
+
+test('the approval turn runs in the build session, on the approver phase and route', async () => {
+  const { store, engine, driver } = setup({}, {
+    config: {
+      roles: {
+        planner: { provider: 'local', model: 'm' },
+        implementer: { provider: 'local', model: 'm' },
+        reviewer: { provider: 'local', model: 'm' },
+        approver: { provider: 'local', model: 'approver-m' },
+      },
+    },
+  })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const planId = driver.ticketSessions.get(`${ticket.id}:plan`)
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  // No approval-purpose session was ever created, and the build session is the
+  // only one the engine spoke to after the plan.
+  assert.equal([...driver.ticketSessions.keys()].some((key) => key.endsWith(':approval')), false)
+  assert.equal(store.listSessions(ticket.id).some((s) => s.purpose === 'approval'), false)
+  assert.deepEqual(driver.turns, [planId, buildId, buildId, buildId])
+  // implement -> review -> approval: the session ends in the approver phase, on
+  // the approver route, and the engine never closed it.
+  assert.equal(driver.sessions.get(buildId).role, 'approver')
+  assert.equal(driver.routes[driver.routes.length - 1].sessionId, buildId)
+  assert.equal(driver.routes[driver.routes.length - 1].route.model, 'approver-m')
+  assert.equal(driver.closed.includes(buildId), false)
+  const approvalSpan = store.listSpans(ticket.id).find((span) => span.name === 'approval')
+  assert.ok(approvalSpan, 'the approval turn is recorded as its own span')
+  assert.equal(approvalSpan.role, 'approver')
+  assert.equal(approvalSpan.status, 'ok')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
+})
+
+test('a failed approval turn parks the ticket as an approval failure', async () => {
+  const { store, engine } = setup({ approval: [{ fail: 'max-tokens' }] }, { kicker: null })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.column, 'working')
+  assert.equal(parked.phase, 'verify')
+  assert.equal(parked.needsAttentionReason, 'turn failed in approval: max-tokens')
+})
+
+test('an approval decided inside the approval turn is not parked over', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  const sendTurn = driver.sendTurn.bind(driver)
+  driver.sendTurn = async (input) => {
+    if (driver.sessions.get(input.sessionId).role !== 'approver') return sendTurn(input)
+    // What kanban_approve does when the human answers inside the turn.
+    await engine.approve(ticket.id, 'ship it')
+    return { status: 'ok', action: null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  const done = store.getTicket(ticket.id)
+  assert.equal(done.column, 'done')
+  assert.equal(done.phase, 'closed')
+  assert.equal(done.needsAttentionReason, null)
+})
+
+test('a re-planned approval is not parked back to awaiting approval', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  const sendTurn = driver.sendTurn.bind(driver)
+  driver.sendTurn = async (input) => {
+    if (driver.sessions.get(input.sessionId).role !== 'approver') return sendTurn(input)
+    await engine.submitApprovalPlan(ticket.id, {
+      ...PLAN,
+      summary: 'second round',
+      done_when: [{ id: 'round-two', statement: 'second', how_verified: 'true' }],
+    })
+    return { status: 'ok', action: null, finalText: '', usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  const again = store.getTicket(ticket.id)
+  assert.equal(again.phase, 'implement')
+  assert.equal(again.needsAttentionReason, null)
 })
 
 test('review failure returns to implement in the same build session', async () => {
@@ -679,7 +774,8 @@ test('retrying an archived-session park dispatches the review again once the blo
   driver.ensureTicketSession = working
   const again = await engine.review(store.getTicket(ticket.id))
   assert.equal(again.kind, 'wait')
-  assert.equal(driver.turns.length, 1)
+  // The review turn, then the approval turn in the same build session.
+  assert.equal(driver.turns.length, 2)
   assert.equal(store.getTicket(ticket.id).phase, 'verify')
   assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
 })

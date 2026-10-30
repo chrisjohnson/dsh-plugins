@@ -46,3 +46,22 @@ test('the standard preset is mounted once and no preset is recomposed', async ()
   assert.equal(/recompose\s*\(/.test(dispatch), false)
   assert.equal(/ensurePresets/.test(dispatch), false)
 })
+
+test('approval is a phase of the build session, not a session of its own', async () => {
+  const files = await sources()
+  // The separate approval session is gone: no engine method creates one, and no
+  // endpoint asks for one.
+  assert.equal(/startApprovalSession|approvalIntro/.test(files['engine.mjs']), false, 'engine still has the deleted approval-session code')
+  assert.equal(/action === 'approvalSession'/.test(files['host.mjs']), false, 'host still routes an approval-session action')
+  assert.equal(/liveTicketSession\(ticket\.id, 'approval'\)/.test(files['engine.mjs']), false)
+  // The review-pass path hands its own session to the approval phase.
+  assert.match(files['engine.mjs'], /enterApproval\(ticket, turn\.sessionId\)/)
+  assert.match(files['engine.mjs'], /role: 'approver', purpose: 'build'/)
+  assert.match(files['dispatch.mjs'], /role === 'approver'\) return 'build'/)
+})
+
+test('the client offers no approval-session launch', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.equal(/Launch approval session|onApprovalSession|onStartSession/.test(client), false)
+  assert.match(client, /Open build session/)
+})

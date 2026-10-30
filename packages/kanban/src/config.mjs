@@ -24,6 +24,7 @@ export const DEFAULT_PROMPTS = {
   implement: 'implement.md',
   rework: 'rework.md',
   review: 'review.md',
+  approval: 'approval.md',
 };
 
 export const DEFAULT_CONFIG = {

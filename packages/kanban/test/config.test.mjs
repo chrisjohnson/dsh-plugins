@@ -60,3 +60,22 @@ test('roles fall back to the deployment default and the ladder can override', ()
   assert.equal(route.model, 'biggest')
   assert.equal(route.reasoningEffort, 'high')
 })
+
+test('every default prompt, approval included, loads from the package prompts dir', async () => {
+  const { fileURLToPath } = await import('node:url')
+  const { DEFAULT_PROMPTS } = await import('../src/config.mjs')
+  const { loadPrompts } = await import('../src/prompts.mjs')
+  const packageDir = fileURLToPath(new URL('..', import.meta.url))
+  assert.equal(DEFAULT_PROMPTS.approval, 'approval.md')
+  const prompts = await loadPrompts({}, packageDir)
+  for (const name of Object.keys(DEFAULT_PROMPTS)) {
+    assert.ok(prompts.bodies[name]?.length > 0, `${name} prompt did not load`)
+    assert.ok(prompts.hashes[name], `${name} prompt was not hashed`)
+  }
+  // The approval prompt is the slim hand-over: it names the three approval
+  // tools and tells the agent not to use them until the human asks.
+  assert.match(prompts.bodies.approval, /kanban_approve/)
+  assert.match(prompts.bodies.approval, /kanban_discard/)
+  assert.match(prompts.bodies.approval, /kanban_submit_plan/)
+  assert.match(prompts.bodies.approval, /\{\{key\}\}/)
+})
