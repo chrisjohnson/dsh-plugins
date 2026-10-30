@@ -40,6 +40,7 @@ const ENDPOINTS = [
   'capabilities',
   'worktree',
   'events',
+  'sessionInfo',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -232,6 +233,43 @@ export default async function kanban(ctx, config = {}) {
             return { ok: true, value: detail(String(p.id)) };
           case 'events':
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
+          case 'sessionInfo': {
+            // Read-only projection of the ticket a session belongs to. The chat
+            // banner asks "did this turn's kanban_* call actually move the
+            // ticket?" and answers it from the board's real state, never from
+            // what the tool call claimed. Unknown sessions say so plainly.
+            const sessionId = String(p.sessionId ?? '');
+            if (sessionId === '') return fail('bad_request', 'sessionId is required');
+            const session = store.findSession(sessionId);
+            if (session === undefined || session.ticketId === null || session.ticketId === undefined) {
+              return fail('not_found', `no kanban ticket is attached to session ${sessionId}`);
+            }
+            const ticket = store.getTicket(session.ticketId);
+            if (ticket === undefined) return fail('not_found', `no such ticket ${session.ticketId}`);
+            const planArtifact = store.latestArtifact(ticket.id, 'plan');
+            const reviewArtifact = store.latestArtifact(ticket.id, 'review');
+            const feedbackArtifact = store.latestArtifact(ticket.id, 'review_feedback');
+            return {
+              ok: true,
+              value: {
+                session: { sessionId: session.sessionId, role: session.role, purpose: session.purpose },
+                ticket: {
+                  id: ticket.id,
+                  key: ticket.key,
+                  title: ticket.title,
+                  column: ticket.column,
+                  phase: ticket.phase,
+                  planTiming: ticket.planTiming ?? null,
+                  needsAttentionReason: ticket.needsAttentionReason ?? null,
+                },
+                plan: planArtifact === undefined ? null : safeJson(planArtifact.content),
+                conditions: store.listConditions(ticket.id),
+                review: reviewArtifact === undefined ? null : safeJson(reviewArtifact.content),
+                reviewFeedback: feedbackArtifact === undefined ? null : feedbackArtifact.content,
+                acceptance: store.listAcceptance(ticket.id),
+              },
+            };
+          }
           case 'create': {
             const column = p.column ?? 'backlog';
             if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');

@@ -5,6 +5,54 @@
 
 ## Unreleased
 
+## 0.9.0
+
+### Added
+
+- **A phase-change banner at the turn tail.** A turn that ends on a `kanban_*`
+  call now says, one line under the "Completed in …" disclosure, what that turn
+  did to the ticket: plan submitted, implementation submitted, review not
+  finished (with the reviewer's feedback), review passed, approved or discarded.
+  The line is never folded into the disclosure and never taken from the tool call
+  itself — a call refused by its phase gate looks identical in the transcript —
+  so it is confirmed against the ticket's real phase through a new read-only
+  `sessionInfo` endpoint before it renders, and stays hidden when the call did
+  not move the ticket. Long values truncate to one line with the full text on
+  hover.
+- **`kanban_plan`, a read-only tool in every workflow session.** It returns the
+  current plan (summary, steps, `done_when` with each condition's id, statement
+  and verification), the live conditions and the latest review, so a session can
+  re-read the contract it is working against instead of trusting its own summary
+  of it. No phase gate: it is available in a plan session exactly as in an
+  approval one, and says so plainly when there is no plan yet.
+
+### Changed
+
+- **The needs-attention card is static.** The red glow animation and the status
+  dot's ring are gone; the border, tint, left accent bar and red dot stay. The
+  blue in-flight glow is untouched — motion now means a turn is running, and
+  nothing else.
+- **Nothing opens a session on its own.** Both auto-open paths are deleted: the
+  ticket detail no longer navigates into a plan session when you click a card,
+  and the board poll no longer follows a newly created plan session. Card clicks
+  open the ticket detail, and the explicit **Open build session**, **Open** and
+  **Recover tools** buttons are unchanged.
+- **The review, rework and approval prompts are slim.** Those three phases run
+  inside the build session that already holds the plan, the implementation and
+  the diff, so they no longer repaste them. The review prompt keeps the
+  adversarial instruction and instead enumerates every key of
+  `kanban_submit_review`, what the engine checks, and the plan's own condition
+  ids; rework is one job statement plus, at most, a short reminder of the
+  instruction; approval is the one-line hand-over. `implement.md` and the two
+  planning prompts are unchanged — they open fresh sessions and need the full
+  contract.
+- **A `done_when` id the plan never declared is now a tool error, not a silent
+  gap.** `kanban_submit_review` (on a pass) and `kanban_submit_implementation`
+  compare the submitted ids against the board's and throw an error naming the
+  expected set, so the model corrects itself in the turn instead of producing a
+  review the engine can only reject afterwards. A fail verdict may omit rows; it
+  may not invent them.
+
 ## 0.8.1
 
 ### Fixed

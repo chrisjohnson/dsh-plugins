@@ -316,6 +316,7 @@ const ACTION_TOOLS = [
   'kanban_submit_review',
   'kanban_approve',
   'kanban_discard',
+  'kanban_plan',
 ]
 
 const PLAN_VALUE = {
@@ -345,7 +346,7 @@ function toolOf(agent, name) {
 
 const EXEC = () => ({ concluded: 0, concludeTurn() { this.concluded += 1 } })
 
-test('all five action tools are registered in every workflow session purpose', { skip }, async () => {
+test('all six action tools are registered in every workflow session purpose', { skip }, async () => {
   for (const [purpose, role] of [['plan', 'planner'], ['build', 'implementer'], ['build', 'approver']]) {
     const store = newStore()
     const ticket = ticketFor(store)

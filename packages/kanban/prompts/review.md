@@ -2,32 +2,19 @@ Review the implementation of kanban ticket {{key}}: "{{title}}".
 
 Working directory: {{cwd}}
 
-The implementer's work and the diff are below. Review against the plan and the done_when conditions. Do not edit files.
+The plan, the acceptance statements, the implementer's result and the diff are already in this conversation. If they are not — a session reopened after a restart starts empty — call `kanban_plan` for the plan and its conditions and read the working tree with git before judging anything. Do not edit files. Review adversarially: assume the work is broken until you have proved otherwise, and check every `done_when` condition against the code, not against what the implementer claimed.
 
-A passing review must be code-checkable against the plan:
+Then call `kanban_submit_review` with exactly these keys:
 
-- Return exactly one `done_when` row for every plan condition, using the **same id** as the plan. Mark `met`, give a confidence, and cite concrete evidence.
-- Return one `acceptance_coverage` row for every starting acceptance statement, naming the plan condition id it is covered by.
-- Do not return `pass` if any condition is unproven or any acceptance statement is uncovered. Return `fail` with a concrete `instruction` for the next implementation round.
+- `verdict` — `"pass"` or `"fail"`.
+- `reasons` — array of strings: why you reached the verdict. A `fail` must carry at least one.
+- `scope_drift` — optional string: any work outside the ticket/plan scope.
+- `done_when` — one row per plan condition listed below, using the **same id**. Each row is `{id, met, confidence, evidence}`: `met` a boolean, `confidence` a number 0..1, `evidence` a concrete observable (a path, a `file:line`, a command and what it printed). The engine rejects a `pass` while any condition is missing, unmet, below the confidence threshold, has no evidence, or carries an id the plan never declared.
+- `acceptance_coverage` — one row per starting acceptance statement, `{condition, acceptance}`, naming the plan condition id that covers it. The engine rejects a `pass` while any acceptance statement is uncovered.
+- `instruction` — required on a `fail`: the concrete changes the next implementation round must make.
 
-Call `kanban_submit_review`. A complete pass is approved by code and moves directly to human approval; there is no separate verification session.
+A complete pass is approved by code and moves the ticket straight to human approval; there is no separate verification session.
 
-## Acceptance
-
-{{acceptance}}
-
-## Plan
-
-{{plan}}
-
-## done_when
+## The plan's conditions
 
 {{done_when}}
-
-## Implementation result
-
-{{implementation}}
-
-## Diff
-
-{{diff}}

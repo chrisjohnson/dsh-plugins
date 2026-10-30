@@ -255,7 +255,7 @@ export class SessionDriver {
         await presets.mount(agentCtx, 'standard');
         // No tool guard of any kind: the standard preset's tools are the role's
         // tools, and every Kanban action tool enforces its own phase.
-        liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this });
+        liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this, store: this.store });
       },
     });
     liveRef.handle = handle;
@@ -407,7 +407,7 @@ export class SessionDriver {
 
   async #registerExistingTools(agentCtx, liveRef, sessionId) {
     // Same as the setup path: every action tool, no guard.
-    liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this });
+    liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this, store: this.store });
   }
 
   isAwaitingUser(ticketId) {
