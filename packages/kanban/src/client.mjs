@@ -1621,6 +1621,20 @@ var CSS =
 		// Confirmed banners only: a turn that has not been validated yet must
 		// refetch, so failures are deliberately never cached.
 		var bannerCache = new Map();
+		// One entry per kanban turn ever rendered, in one browser tab that may stay
+		// open for weeks, so the cache needs a ceiling. A Map keeps insertion order,
+		// so the first key is the oldest entry and eviction is one delete.
+		var BANNER_CACHE_MAX = 200;
+
+		function rememberBanner(key, value) {
+			if (bannerCache.has(key)) bannerCache.delete(key);
+			bannerCache.set(key, value);
+			while (bannerCache.size > BANNER_CACHE_MAX) {
+				var oldest = bannerCache.keys().next();
+				if (oldest.done) break;
+				bannerCache.delete(oldest.value);
+			}
+		}
 
 		function parseToolArgs(raw) {
 			if (typeof raw !== "string" || raw === "") return {};
@@ -1663,6 +1677,39 @@ var CSS =
 			return String(value === null || value === undefined ? "" : value).replace(/\s+/g, " ").trim();
 		}
 
+		/** What a review call said for itself: its instruction, else its reasons. */
+		function callFeedback(args) {
+			if (!args || typeof args !== "object") return "";
+			var instruction = typeof args.instruction === "string" ? args.instruction : "";
+			var reasons = Array.isArray(args.reasons)
+				? args.reasons.filter(function (r) { return typeof r === "string"; }).join("; ")
+				: "";
+			return oneLine(instruction !== "" ? instruction : reasons);
+		}
+
+		/**
+		 * Is the ticket's latest review artifact the one this call submitted? The
+		 * engine stores the submitted object verbatim, so verdict, reasons and
+		 * condition ids together identify it. Absent or unreadable args cannot be
+		 * matched, and are treated as latest so an old transcript still renders.
+		 */
+		function sameReview(args, review) {
+			if (!review || typeof review !== "object") return false;
+			if (!args || typeof args !== "object" || Object.keys(args).length === 0) return true;
+			var parts = (value) => [
+				String(value.verdict || "").toLowerCase(),
+				Array.isArray(value.reasons) ? value.reasons.join("|") : "",
+				Array.isArray(value.done_when) ? value.done_when.map((row) => String(row && row.id)).join("|") : "",
+				String(value.instruction || ""),
+			];
+			var mine = parts(args);
+			var theirs = parts(review);
+			// Nothing to identify by — a truncated argsRaw. The verdict alone is all
+			// there is, so compare that rather than silence a real transition.
+			if (mine.slice(1).every((part) => part === "")) return mine[0] === theirs[0];
+			return mine.join("::") === theirs.join("::");
+		}
+
 		function conditionIds(info) {
 			var plan = info && info.plan;
 			var list = plan && Array.isArray(plan.conditions) ? plan.conditions : (plan && Array.isArray(plan.done_when) ? plan.done_when : []);
@@ -1672,8 +1719,12 @@ var CSS =
 
 		/**
 		 * Decide the one banner line for a turn, or null when nothing about this
-		 * turn is confirmed yet. Every branch checks the ticket's real state,
-		 * never the tool call's own claim.
+		 * turn is confirmed yet. Two sources, and each answers a different question:
+		 * the call's own arguments say what this turn tried to do, and the ticket's
+		 * real phase says whether it actually happened. A banner needs both — the
+		 * phase alone cannot tell a failed review from a later passed one in the
+		 * same session, and the call alone cannot tell an accepted submission from
+		 * one a phase gate refused.
 		 */
 		function bannerFor(calls, info) {
 			if (!info || !info.ticket) return null;
@@ -1697,12 +1748,51 @@ var CSS =
 					};
 				}
 				if (name === "kanban_submit_review") {
-					if (order >= PHASE_ORDER.verify) {
+					// Which transition to look for is decided by the verdict THIS call
+					// carried, not by where the ticket happens to sit now. A session
+					// with one rework round holds a failed review and a later passed
+					// one, and reading only the current phase would label both of
+					// them "Review passed" — the opposite of what the first turn did.
+					var verdict = typeof calls[i].args.verdict === "string" ? calls[i].args.verdict.toLowerCase() : "";
+					// And an outcome belongs to this turn only if the ticket's latest
+					// review is the one this call submitted. The engine stores the
+					// submitted object verbatim, so a mismatch means a later round has
+					// already replaced it and nothing can be claimed here.
+					var isLatest = sameReview(calls[i].args, info.review);
+					// The text is the call's own too: info.reviewFeedback is the
+					// ticket's latest artifact, so every earlier round would else
+					// display the newest round's feedback.
+					var own = callFeedback(calls[i].args);
+					if (verdict === "fail" && phase === "implement") {
+						// The call's own instruction is truthful about this turn
+						// whatever round the ticket is in now, so no identity check is
+						// needed here — only the phase, which confirms a fail actually
+						// sent the work back.
+						var failText = own !== "" ? own : oneLine(info.reviewFeedback || "");
+						return { tone: "warn", text: "Review status: not finished" + (failText ? " — " + failText : "") + ". Back to implementation." };
+					}
+					if (verdict === "pass" && order >= PHASE_ORDER.verify && isLatest) {
 						return { tone: "ok", text: "Review passed — all conditions met. Now proceeding to approval." };
 					}
-					if (phase === "implement" && info.review) {
-						var feedback = oneLine(info.reviewFeedback || (info.review && info.review.instruction) || (Array.isArray(info.review.reasons) ? info.review.reasons.join("; ") : ""));
-						return { tone: "warn", text: "Review status: not finished" + (feedback ? " — " + feedback : "") + ". Back to implementation." };
+					if (verdict === "pass" && phase === "implement" && isLatest) {
+						// The reviewer claimed a complete pass and the code check sent
+						// it back: the gaps are the engine's, so the ticket's feedback
+						// is the honest text here and the call's own is the fallback.
+						var gaps = oneLine(info.reviewFeedback || "");
+						if (gaps === "") gaps = own;
+						return { tone: "warn", text: "Review status: not finished" + (gaps ? " — " + gaps : "") + ". Back to implementation." };
+					}
+					// No verdict to read — an old transcript, or args that did not
+					// parse. Fall back to the phase-only reading rather than show
+					// nothing at all.
+					if (verdict === "") {
+						if (order >= PHASE_ORDER.verify) {
+							return { tone: "ok", text: "Review passed — all conditions met. Now proceeding to approval." };
+						}
+						if (phase === "implement" && info.review) {
+							var legacy = oneLine(info.reviewFeedback || "");
+							return { tone: "warn", text: "Review status: not finished" + (legacy ? " — " + legacy : "") + ". Back to implementation." };
+						}
 					}
 				}
 				if (name === "kanban_approve" && ticket.column === "done") {
@@ -1746,7 +1836,7 @@ var CSS =
 						if (!alive) return;
 						var next = bannerFor(calls, info);
 						if (next) {
-							bannerCache.set(cacheKey, next);
+							rememberBanner(cacheKey, next);
 							setBanner(next);
 							return;
 						}

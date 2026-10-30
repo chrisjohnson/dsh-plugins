@@ -5,6 +5,29 @@
 
 ## Unreleased
 
+## 0.9.1
+
+### Fixed
+
+- **A banner now describes its own turn, not the ticket's current state.** The
+  review banner decided pass-versus-fail from the ticket's phase alone, so a
+  session with one rework round — a failed review, then a later passed one —
+  rendered **Review passed** on the turn whose review had failed, the exact
+  opposite of what that turn did. The rework loop is the normal path, so this was
+  ordinary to hit. The verdict the call itself carried now decides which
+  transition to look for, and a pass is only claimed when the ticket's latest
+  review is the one that call submitted, so a superseded claim renders nothing
+  rather than a later round's outcome.
+- **A rejected review quotes its own instruction.** The feedback text came from
+  the ticket's latest `review_feedback` artifact, which is one value per ticket,
+  so every earlier round displayed the newest round's text. Each banner now uses
+  the instruction (or reasons) its own call carried; the ticket's latest feedback
+  is only a fallback for a call that carried none, and for the distinct case of a
+  claimed pass the code check sent back, where the gaps are the engine's to state.
+- **The banner cache is bounded.** It was keyed per session turn with no
+  eviction, so one browser tab left open indefinitely grew without limit. It now
+  holds the most recent 200 confirmed banners and drops the oldest.
+
 ## 0.9.0
 
 ### Added
