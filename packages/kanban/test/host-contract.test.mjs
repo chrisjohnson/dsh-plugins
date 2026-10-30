@@ -65,3 +65,28 @@ test('the client offers no approval-session launch', async () => {
   assert.equal(/Launch approval session|onApprovalSession|onStartSession/.test(client), false)
   assert.match(client, /Open build session/)
 })
+
+test('setRoutes decides nothing itself: it delegates to the routing module', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /import \{ applyRoutes, prepareRoutes, staleEffortWarnings \} from '\.\/routing\.mjs'/)
+  assert.match(host, /const prepared = await prepareRoutes\(\{/)
+  // The exact-model lookup is the host registry, so an effort is checked against
+  // the same catalog the dialog was built from.
+  assert.match(host, /resolveModel: \(provider, model\) => llm\.resolveModelInfo\(provider, model\)/)
+  assert.match(host, /await configEditor\.edit\(row\.entry, \(current, inherited\) => applyRoutes\(current, inherited, routes\)\)/)
+  // The pre-effort inline write is gone: it silently kept a stale effort.
+  assert.equal(/next\.roles\[route\.role\] = \{/.test(host), false, 'host.mjs re-inlined the route write')
+  // A stale effort is a warning at boot, never a thrown error.
+  assert.match(host, /staleEffortWarnings\(config\.roles,/)
+})
+
+test('the routing dialog edits a per-role effort and sends it', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /function effortsForModel\(groups, provider, model\)/)
+  assert.match(client, /kb-route-effort-picker/)
+  assert.match(client, /children: "Default"/)
+  assert.match(client, /reasoningEffort: route\.reasoningEffort \|\| ""/)
+  // Default is sent as null so the host clears a level saved earlier.
+  assert.match(client, /reasoningEffort: entry\.reasoningEffort === ""[\s\S]{0,120}\? null : entry\.reasoningEffort/)
+  assert.match(client, /efforts\.length > 0 \? h\("select"/)
+})

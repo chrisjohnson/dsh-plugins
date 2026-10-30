@@ -304,8 +304,9 @@ var CSS =
 		+ ".kb-route-rows{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l1,#e8ebef);border-radius:var(--dsw-radius-md,12px);overflow:hidden}"
 		+ ".kb-route-row{display:grid;grid-template-columns:minmax(120px,150px) minmax(0,1fr) minmax(120px,170px);align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--dsw-alias-border-l1,#eef1f4);border-left:3px solid var(--kb-route-color);background:var(--dsw-alias-bg-layer-1,#fff)}"
 		+ ".kb-route-row:first-child{border-top:0}"
-		+ ".kb-route-edit{grid-template-columns:minmax(100px,135px) minmax(0,1fr);background:color-mix(in srgb,var(--kb-route-color) 3%,var(--dsw-alias-bg-layer-1,#fff))}"
+		+ ".kb-route-edit{grid-template-columns:minmax(100px,135px) minmax(0,1fr) minmax(110px,150px);background:color-mix(in srgb,var(--kb-route-color) 3%,var(--dsw-alias-bg-layer-1,#fff))}"
 		+ ".kb-route-picker{width:100%;min-width:0}"
+		+ ".kb-route-effort-picker{width:100%;min-width:0;font:400 12px/18px var(--dsw-font-family,sans-serif)}"
 		+ ".kb-route-label{display:flex;flex-direction:column;min-width:0}"
 		+ ".kb-route-label b{font:600 11px/15px var(--dsw-font-family,sans-serif);color:var(--kb-route-color)}"
 		+ ".kb-route-label span{font:400 10px/13px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#999)}"
@@ -315,7 +316,7 @@ var CSS =
 		+ ".kb-route-effort{display:flex;flex-direction:column;align-items:flex-end;gap:1px;font:400 10px/13px var(--dsw-font-family,sans-serif);text-align:right;color:var(--dsw-alias-label-tertiary,#888)}"
 		+ ".kb-routing-editfoot{display:flex;align-items:center;gap:8px;margin-top:10px}"
 		+ ".kb-routing-editfoot .kb-err{flex:1}"
-		+ "@media (max-width:560px){.kb-route-row,.kb-route-edit{grid-template-columns:100px minmax(0,1fr);gap:6px}.kb-route-effort{align-items:flex-start;text-align:left}}"
+		+ "@media (max-width:560px){.kb-route-row,.kb-route-edit{grid-template-columns:100px minmax(0,1fr);gap:6px}.kb-route-edit{grid-template-columns:88px minmax(0,1fr) minmax(84px,104px)}.kb-route-effort{align-items:flex-start;text-align:left}.kb-route-effort-picker{height:28px;font:400 11px/16px var(--dsw-font-family,sans-serif)}}"
 		+ ".kb-modal .kb-routing{margin:0;padding:0;border:0;background:transparent}"
 		+ ".kb-modal .kb-routing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}"
 		+ "@media (max-width:520px){.kb-modal .kb-routing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
@@ -1265,34 +1266,73 @@ var CSS =
 			);
 		}
 
+		// The reasoning levels the catalog offers for one exact model, in catalog
+		// order. Empty means "not a reasoning model" (or not in the catalog yet),
+		// and the row then shows no effort control at all.
+		function effortsForModel(groups, provider, model) {
+			var list = groups || [];
+			for (var i = 0; i < list.length; i += 1) {
+				var group = list[i];
+				if (!group || group.id !== provider) continue;
+				var models = group.models || [];
+				for (var j = 0; j < models.length; j += 1) {
+					var candidate = models[j];
+					if (!candidate || candidate.id !== model) continue;
+					var reasoning = candidate.reasoning;
+					return reasoning && Array.isArray(reasoning.efforts) ? reasoning.efforts : [];
+				}
+			}
+			return [];
+		}
+
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
 			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", approver: "Approval" };
 			var order = ["planner", "implementer", "reviewer", "approver"];
 			return h("div", { className: "kb-routing" },
-				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model for each role. Models are grouped by provider; saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
+				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model and reasoning effort for each role. Models are grouped by provider; \"Default\" leaves the effort to the model. Saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
 					var route = routes[role] || {};
 					var config = roles[role] || {};
 					var isFallback = config.provider === null || config.provider === undefined || config.model === null || config.model === undefined;
 					if (props.editing) {
-						var entry = props.draft[role] || { provider: route.provider || "", model: route.model || "" };
+						var entry = props.draft[role] || { provider: route.provider || "", model: route.model || "", reasoningEffort: route.reasoningEffort || "" };
 						var groups = props.groups || [];
 						var current = entry.provider + "\u0000" + entry.model;
+						var effort = entry.reasoningEffort || "";
 						var known = groups.some(function (group) { return group.id === entry.provider && group.models.some(function (model) { return model.id === entry.model; }); });
+						var efforts = effortsForModel(groups, entry.provider, entry.model);
 						return h("div", { className: "kb-route-row kb-route-edit kb-route-" + role, key: role },
 							h("div", { className: "kb-route-label" }, h("b", { children: labels[role] }), h("span", { children: role })),
 							h("select", { className: "kb-select kb-route-picker", value: current, onChange: function (event) {
 								var parts = event.target.value.split("\u0000");
-								props.onDraft(role, { provider: parts[0] || "", model: parts[1] || "" });
+								var nextProvider = parts[0] || "";
+								var nextModel = parts[1] || "";
+								var patch = { provider: nextProvider, model: nextModel };
+								// A level the new model does not offer would only be
+								// rejected on save, so drop it back to Default here.
+								if (effort !== "" && !effortsForModel(groups, nextProvider, nextModel).some(function (candidate) { return candidate.id === effort; })) {
+									patch.reasoningEffort = "";
+								}
+								props.onDraft(role, patch);
 							} },
 								known ? null : h("option", { value: current, children: (entry.provider || "?") + " / " + (entry.model || "?") + " (not in catalog)" }),
 								groups.map(function (group) {
 									return h("optgroup", { key: group.id, label: group.id },
 										group.models.map(function (model) { return h("option", { key: model.id, value: group.id + "\u0000" + model.id, children: model.name || model.id }); }));
 								})
-							)
+							),
+							efforts.length > 0 ? h("select", {
+								className: "kb-select kb-route-effort-picker",
+								"aria-label": labels[role] + " reasoning effort",
+								title: "Reasoning effort (" + entry.provider + "/" + entry.model + ")",
+								value: effort,
+								onChange: function (event) { props.onDraft(role, { reasoningEffort: event.target.value }); },
+							},
+								h("option", { value: "", children: "Default" }),
+								efforts.map(function (candidate) { return h("option", { key: candidate.id, value: candidate.id, children: candidate.name || candidate.id }); })
+							) : null
 						);
 					}
 					return h("div", { className: "kb-route-row kb-route-" + role, key: role },
@@ -1472,7 +1512,7 @@ var CSS =
 				var draft = {};
 				["planner", "implementer", "reviewer", "approver"].forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
-					draft[role] = { provider: route.provider || "", model: route.model || "" };
+					draft[role] = { provider: route.provider || "", model: route.model || "", reasoningEffort: route.reasoningEffort || "" };
 				});
 				setRoutingDraft(draft);
 				setRoutingError(null);
@@ -1490,13 +1530,23 @@ var CSS =
 			function saveRouting() {
 				if (!routing) return;
 				var roles = ["planner", "implementer", "reviewer", "approver"];
-				var routes = roles.map(function (role) { return { role: role, provider: routingDraft[role].provider, model: routingDraft[role].model }; });
+				var routes = roles.map(function (role) {
+					var entry = routingDraft[role] || {};
+					return {
+						role: role,
+						provider: entry.provider,
+						model: entry.model,
+						// "" is the dialog's Default: send null so the host clears
+						// any level saved earlier instead of keeping it.
+						reasoningEffort: entry.reasoningEffort === "" || entry.reasoningEffort === undefined || entry.reasoningEffort === null ? null : entry.reasoningEffort,
+					};
+				});
 				setRoutingSaving(true);
 				setRoutingError(null);
 				rpc("setRoutes", { routes: routes, revision: routing.revision }).then(function (res) {
 					if (res && res.ok) {
 						var nextRoutes = Object.assign({}, routing.routes);
-						routes.forEach(function (route) { nextRoutes[route.role] = Object.assign({}, nextRoutes[route.role] || {}, { provider: route.provider, model: route.model }); });
+						routes.forEach(function (route) { nextRoutes[route.role] = Object.assign({}, nextRoutes[route.role] || {}, { provider: route.provider, model: route.model, reasoningEffort: route.reasoningEffort }); });
 						setRouting(Object.assign({}, routing, { routes: nextRoutes }));
 						setRoutingEditing(false);
 						setTimeout(function () { rpc("config", {}).then(function (next) { if (next && next.ok) setRouting(next.value); }); }, 6000);
