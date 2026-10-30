@@ -240,12 +240,16 @@ explicit buttons still do — **Open build session** on the approval panel,
 In a kanban session's chat, a turn that ended on a `kanban_*` call gets one line
 at the turn tail, below the "Completed in …" disclosure, naming the transition
 that turn caused: plan submitted, implementation submitted, review not finished
-(with the reviewer's feedback), review passed, approved or discarded. The line
-is not taken from the tool call — a call refused by its phase gate looks
-identical in the transcript — so it is confirmed against the ticket's real
-phase through the `sessionInfo` endpoint before it appears, and nothing appears
-when the call did not actually move the ticket. Long values are truncated to one
-line and the full text is in the hover tooltip.
+(with the reviewer's feedback), review passed, approved or discarded. Neither
+source is enough on its own. The call alone cannot tell an accepted submission
+from one a phase gate refused, so the ticket's real phase is checked through the
+`sessionInfo` endpoint. The phase alone cannot tell a failed review from a later
+passed one in the same session, and would print **Review passed** on the turn
+that failed — so the verdict and feedback the call itself carried decide *which*
+transition to look for, and a pass is only claimed when the ticket's latest
+review is the one that call submitted. When the two do not agree, nothing is
+rendered. Long values are truncated to one line and the full text is in the
+hover tooltip.
 
 ## Auto-recovery of a halted turn
 
