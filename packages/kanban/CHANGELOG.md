@@ -5,6 +5,39 @@
 
 ## Unreleased
 
+## 0.8.0
+
+### Added
+
+- **A reasoning-effort picker in the Model routing dialog.** Every role row now
+  has a second dropdown next to its model picker: **Default** plus the levels
+  the selected model actually offers, taken from the host model catalog
+  (`reasoning.efforts` — the same declaration the global provider settings use),
+  with the catalog's own labels. A model with no reasoning metadata gets no
+  control at all, and switching a role to a model that does not offer the level
+  you had picked resets that row back to Default.
+- **`setRoutes` accepts `reasoningEffort` per route** — a level string, or
+  `null`/`""` for Default — validates a non-null level against the live catalog
+  and answers `bad_request` naming the role, the model and what it offers, and
+  writes the key explicitly into `roles.<role>` so Default clears a level saved
+  earlier instead of leaving it behind. The runtime already threaded the value
+  into `agentOptions`; only the write path was missing.
+
+### Changed
+
+- The route write path moved out of `src/host.mjs` into a decision module,
+  `src/routing.mjs`, so the validation and the row fold are testable without a
+  harness (`test/routing.test.mjs`).
+
+### Fixed
+
+- Saving a route no longer silently keeps a stale `reasoningEffort`. The old
+  spread merged into the existing role entry and never wrote the key, so a level
+  picked once stayed in effect after the model was changed under it.
+- A configured effort the live catalog no longer offers is now warned about at
+  boot and on config reload instead of failing silently on the first turn. It
+  stays a warning: a provider-config swap must not take the profile down.
+
 ## 0.7.0
 
 ### Changed

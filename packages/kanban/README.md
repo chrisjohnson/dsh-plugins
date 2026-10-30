@@ -167,6 +167,38 @@ The top-right **Model routing** dialog edits each role's base route through
 `configEditor.edit`. The picker is one provider-grouped list sourced from the
 host model catalog.
 
+Next to each model picker is a **reasoning effort** picker. Its options are
+**Default** plus the levels the selected model actually offers, read from the
+same host catalog the global model settings use (`reasoning.efforts` on the
+model's resolved info — for a hand-declared provider route that is its declared
+`reasoningEfforts`). Labels come from the catalog too, so the dialog can never
+offer a level the provider has not declared.
+
+- **Default** stores `reasoningEffort: null`, which means "ask the model": the
+  harness applies the model's own default, and an escalation rung or the
+  deployment default model may still supply one. Choosing Default clears a
+  level saved earlier instead of leaving it behind.
+- A model with no reasoning metadata shows **no effort control at all** — there
+  is nothing to pick. Switching a role to such a model, or to one that does not
+  offer the level you had picked, resets that draft back to Default.
+- Saving validates every non-null level against the live catalog and answers
+  `bad_request` naming the role, the model and the levels it offers. A level
+  that cannot be checked because the provider is unreachable is rejected rather
+  than guessed at.
+- At boot and on config reload a level the catalog no longer offers is a
+  **warning**, not a failure: the request path already rejects it with
+  `UNSUPPORTED_REASONING_EFFORT`, and a provider-config swap must not take the
+  profile down.
+
+The written row looks like any other role route:
+
+```yaml
+- id: kanban
+  config:
+    roles:
+      implementer: { provider: local-ai-machine, model: big-moe, reasoningEffort: xhigh }
+```
+
 ## Telemetry
 
 Spans record role, provider/model, attempt, timing, status and prompt hash;

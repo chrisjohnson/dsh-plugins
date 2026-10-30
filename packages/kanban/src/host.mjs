@@ -10,6 +10,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './config.mjs';
+import { applyRoutes, prepareRoutes, staleEffortWarnings } from './routing.mjs';
 import { KanbanStore } from './store.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
@@ -69,7 +70,7 @@ export default async function kanban(ctx, config = {}) {
   }
 
   // ---- boot validation: refuse to run a route the host does not offer ------
-  await validateRoutes(initial, llm);
+  await validateRoutes(initial, llm, log);
 
   const db = openDatabase(dbPath);
   const store = new KanbanStore(db, {
@@ -113,7 +114,7 @@ export default async function kanban(ctx, config = {}) {
         const next = resolveConfig(row.override ?? {});
         for (const warning of next.warnings) log.warn(warning);
         const nextPrompts = await loadPrompts(next.config, PACKAGE_DIR);
-        await validateRoutes(next.config, llm);
+        await validateRoutes(next.config, llm, log);
         live = next.config;
         prompts = nextPrompts;
         engineRef.current.configHash = shortHash(hashText(JSON.stringify(next.config)));
@@ -467,30 +468,16 @@ export default async function kanban(ctx, config = {}) {
             if (configEditor === undefined) return fail('forbidden', 'this profile does not accept configuration edits');
             const row = configEditor.configuration().find((item) => item.entry?.id === 'kanban' || item.entry?.id?.endsWith(':kanban'));
             if (row === undefined) return fail('not_found', 'kanban has no config entry');
-            const hostProviders = new Map(llm.listProviders().map((provider) => [provider.id, provider]));
-            const routes = [];
-            for (const item of Array.isArray(p.routes) ? p.routes : []) {
-              const role = String(item.role ?? '');
-              if (!Object.hasOwn(live.roles, role)) return fail('bad_request', `unknown role "${role}"`);
-              const provider = String(item.provider ?? '');
-              const model = String(item.model ?? '');
-              if (provider === '' || model === '') return fail('bad_request', `role ${role} needs both provider and model`);
-              if (!hostProviders.has(provider)) return fail('bad_request', `provider "${provider}" is not offered by the host`);
-              const models = await llm.listModels(provider).catch(() => []);
-              if (models.length > 0 && !models.some((candidate) => candidate.id === model)) {
-                return fail('bad_request', `model "${model}" is not offered by provider "${provider}"`);
-              }
-              routes.push({ role, provider, model });
-            }
-            if (routes.length === 0) return fail('bad_request', 'no routes supplied');
-            await configEditor.edit(row.entry, (current, inherited) => {
-              const next = structuredClone(current ?? {});
-              next.roles = { ...(inherited?.roles ?? {}), ...(next.roles ?? {}) };
-              for (const route of routes) {
-                next.roles[route.role] = { ...(next.roles[route.role] ?? {}), provider: route.provider, model: route.model };
-              }
-              return next;
+            const prepared = await prepareRoutes({
+              items: p.routes,
+              roles: live.roles,
+              providers: llm.listProviders().map((provider) => provider.id),
+              listModels: (provider) => llm.listModels(provider),
+              resolveModel: (provider, model) => llm.resolveModelInfo(provider, model),
             });
+            if (!prepared.ok) return fail(prepared.code, prepared.message);
+            const routes = prepared.routes;
+            await configEditor.edit(row.entry, (current, inherited) => applyRoutes(current, inherited, routes));
             return { ok: true, value: { saved: routes.length } };
           }
           default:
@@ -724,7 +711,7 @@ function appendConfigFingerprint(store, ticketId) {
 }
 
 /** Verify every configured route against the host's live catalog. */
-async function validateRoutes(config, llm) {
+async function validateRoutes(config, llm, log) {
   const providers = new Map(llm.listProviders().map((provider) => [provider.id, provider]));
   const declared = new Set(config.providers.map((p) => p.name));
   for (const name of declared) {
@@ -742,5 +729,12 @@ async function validateRoutes(config, llm) {
     if (models.length > 0 && !models.some((model) => model.id === entry.model)) {
       throw new Error(`kanban config: roles.${role}.model "${entry.model}" is not offered by provider "${entry.provider}"`);
     }
+  }
+  // A level the live catalog no longer offers is a warning, never a boot failure:
+  // the request path already rejects it with UNSUPPORTED_REASONING_EFFORT, and a
+  // provider-config swap must not be able to take the profile down.
+  if (log === undefined) return;
+  for (const warning of await staleEffortWarnings(config.roles, (provider, model) => llm.resolveModelInfo(provider, model))) {
+    log.warn(warning);
   }
 }
