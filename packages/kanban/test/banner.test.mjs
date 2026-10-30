@@ -83,9 +83,36 @@ test('a pass the code check sent back reads as not finished', async () => {
   const { bannerFor } = await bannerModule()
   // The reviewer claimed a pass; verifyReview found gaps and returned it to implement.
   const claimed = { verdict: 'pass', reasons: ['looks done'] }
-  const banner = bannerFor([review(claimed)], { ...IMPLEMENT, review: claimed, reviewFeedback: 'Review cannot be code-verified: done_when.alpha is missing' })
+  const banner = bannerFor([review(claimed)], {
+    ...IMPLEMENT,
+    review: claimed,
+    reviewFeedback: 'Review cannot be code-verified: done_when.alpha is missing',
+    reviewRejected: true,
+  })
   assert.equal(banner.tone, 'warn')
   assert.match(banner.text, /^Review status: not finished — Review cannot be code-verified: done_when\.alpha is missing\. Back to implementation\.$/)
+})
+
+test('a pass that landed is never called not finished by a later phase move', async () => {
+  const { bannerFor } = await bannerModule()
+  // The review passed and the ticket reached verify. Later the human asked for a
+  // follow-up plan from approval, which moves the ticket back to implement
+  // (engine submitApprovalPlan). The passed turn must not read "not finished",
+  // and must not quote the stale feedback an earlier round left behind.
+  const landed = { verdict: 'pass', reasons: ['all conditions met'] }
+  const followUp = {
+    ticket: { phase: 'implement', column: 'working' },
+    plan: { summary: 's', conditions: [{ id: 'alpha' }] },
+    review: landed,
+    reviewFeedback: 'round one gaps: coverage mismatch',
+    reviewRejected: false,
+  }
+  const banner = bannerFor([review(landed)], followUp)
+  assert.equal(banner, null, 'a clean pass returned to implement by a follow-up plan renders nothing')
+  if (banner !== null) assert.equal(banner.text.includes('not finished'), false, 'must not claim the pass did not finish')
+  // The same state with no reviewRejected field at all (an older host) is also
+  // silence: only an explicit rejection may call a pass "not finished".
+  assert.equal(bannerFor([review(landed)], { ...followUp, reviewRejected: undefined }), null)
 })
 
 test('a review call with no readable verdict keeps the phase-only reading', async () => {
@@ -151,4 +178,40 @@ test('tool calls are read out of the turn the way the renderer needs them', asyn
   assert.deepEqual(parseToolArgs('not json'), {}, 'unparseable args become an empty object, never a throw')
   assert.deepEqual(parseToolArgs(null), {})
   assert.deepEqual(kanbanCallsInTurn(undefined), [])
+})
+
+// The banner trusts the host's `reviewRejected` flag, so the premise behind it
+// must hold on the real store: the engine writes the `review` row before the
+// `review_feedback` row that rejects it, and artifact ids are AUTOINCREMENT, so
+// "feedback newer than review" can only mean "that review was sent back".
+test('reviewRejected ordering holds against a real store', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { migrate } = await import('../src/db.mjs')
+  const { KanbanStore } = await import('../src/store.mjs')
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  const store = new KanbanStore(db)
+  const ticket = store.createTicket({ title: 'x', acceptance: [], column: 'working' })
+
+  const rejected = () => {
+    const review = store.latestArtifact(ticket.id, 'review')
+    const feedback = store.latestArtifact(ticket.id, 'review_feedback')
+    return review !== undefined && feedback !== undefined && Number(feedback.id) > Number(review.id)
+  }
+
+  // A pass the code check bounced: review first, then the feedback that rejects it.
+  store.addArtifact(ticket.id, 'review', JSON.stringify({ verdict: 'pass', reasons: ['looks done'] }))
+  assert.equal(rejected(), false, 'a pass with no feedback has not been sent back')
+  store.addArtifact(ticket.id, 'review_feedback', 'Review cannot be code-verified: done_when.alpha is missing')
+  assert.equal(rejected(), true, 'feedback written after the review means that review was bounced')
+
+  // A later round passes cleanly: its review is newer than the old feedback.
+  store.addArtifact(ticket.id, 'review', JSON.stringify({ verdict: 'pass', reasons: ['all conditions met'] }))
+  assert.equal(rejected(), false, 'a clean pass must not inherit an older round rejection')
+
+  // A fail verdict sends feedback too, and is still a rejection of that review.
+  store.addArtifact(ticket.id, 'review', JSON.stringify({ verdict: 'fail', reasons: ['nope'] }))
+  store.addArtifact(ticket.id, 'review_feedback', 'fix it')
+  assert.equal(rejected(), true)
+  db.close()
 })

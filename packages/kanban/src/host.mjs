@@ -266,6 +266,18 @@ export default async function kanban(ctx, config = {}) {
                 conditions: store.listConditions(ticket.id),
                 review: reviewArtifact === undefined ? null : safeJson(reviewArtifact.content),
                 reviewFeedback: feedbackArtifact === undefined ? null : feedbackArtifact.content,
+                // Did the LATEST review get sent back? The engine always writes
+                // the `review` artifact before the `review_feedback` that rejects
+                // it, and artifact ids are AUTOINCREMENT, so a feedback row newer
+                // than the review row can only mean that review was rejected. This
+                // is the one thing the client cannot infer from content alone: a
+                // ticket sitting in `implement` with a passing latest review is
+                // either a pass the code check bounced, or a pass that landed and
+                // was later returned to implement by an approval follow-up plan —
+                // and those two deserve opposite banners.
+                reviewRejected: reviewArtifact !== undefined
+                  && feedbackArtifact !== undefined
+                  && Number(feedbackArtifact.id) > Number(reviewArtifact.id),
                 acceptance: store.listAcceptance(ticket.id),
               },
             };
