@@ -3,6 +3,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Activity panel motion.** A finished call no longer blinks out: its card
+  "poofs" in place (scale-up and fade, ~350 ms) as a temporary ghost clone, the
+  promoted queue card slides down into Active with a fade, and the remaining
+  queued cards slide up to close the gap (in-section FLIP). The working-state
+  glow is a faster ~2 s breath — brighter ring plus a barely-there scale — and
+  the panel now polls every 750 ms instead of 1500 ms so the animations land
+  while you are still looking at the card that caused them. Everything new is
+  disabled under `prefers-reduced-motion`, in CSS and in the ghost bookkeeping.
+
 ## 0.2.0
 
 ### Added

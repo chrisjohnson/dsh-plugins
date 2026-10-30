@@ -123,11 +123,20 @@ are already interrupted by the restart). No database is used.
   with live enforcing status, KPI cards (active / queued / reserved), and one
   colour-accented card per provider with a capacity bar. Each active or queued
   call is a session card showing title, workspace, model, kind and elapsed/waited
-  time. **Click any session card to open that session**; active cards pulse with a
-  green glow. Subagent reservations render as compact cards. The page uses the
+  time. **Click any session card to open that session**; active cards breathe with
+  a green glow. Subagent reservations render as compact cards. The page uses the
   same card/hover language as `dsh-context`'s Context overview. Session titles come from
   the session log's `title` projection; workspace names come from the workspace
   registry, matched by the session's cwd.
+- The Activity page animates handover, because a list that silently re-shuffles is
+  unreadable. Each poll diffs a provider against the one before it: a lease that
+  left Active is re-rendered in its old position as an inert ghost clone that
+  scales up and fades out (~350 ms); a session that moved from Queue to Active gets
+  a slide-down-and-fade entrance; the cards still queued slide up to close the gap
+  (a small in-section FLIP on `leaseId`/`waiterId` keys, so the motion follows the
+  card, not the row). The panel polls every 750 ms so this lands while you are
+  looking at it. Under `prefers-reduced-motion` none of it runs — no ghost is even
+  mounted, and the lists simply update.
 - `conversation.input.dock` on every session: appears only while that session has
   a queued call.
 - Controls: **Cancel turn** (safe; cancels the session's active turn, which
@@ -149,3 +158,12 @@ force-release, raising limits, queue bound, the `llm/stream` gate (acquire befor
 first chunk, release on abort/error, no reservation consumption by title calls),
 the subagent guard message and free-route suggestions, and host contracts (no
 tools, no credentials, routes under `/api`).
+
+The browser half is not unit-tested and deliberately stays that way: `src/client.mjs`
+is a classic script for `window.__ModuleLoader__` with no module boundary to import
+through, so a test would mean extracting the diff into a second file that only the
+browser loads — a seam for no reviewer's benefit. What it does get is the repository's
+Rules-of-Hooks gate (`node scripts/check-plugin-hooks.mjs`, the only automated check
+that can see this file at all) plus the deployment's lab UI smoke, which mounts the
+panel for real and fails on any `slot entry crashed`. The animation behaviour itself is
+listed above and verified by eye against live traffic.

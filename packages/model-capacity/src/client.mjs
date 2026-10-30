@@ -92,8 +92,15 @@ window.__ModuleLoader__.load({
 			+ ".mc-session-card+.mc-session-card{margin-top:7px}"
 			+ ".mc-session-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--mc-accent) 48%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--mc-accent) 14%,transparent)}"
 			+ ".mc-session-card:focus-visible{outline:2px solid var(--mc-accent);outline-offset:2px}"
-			+ ".mc-session-card.mc-live{border-color:color-mix(in srgb,#22c55e 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#22c55e 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:mc-glow 3.2s ease-in-out infinite}"
+			+ ".mc-session-card.mc-live{border-color:color-mix(in srgb,#22c55e 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#22c55e 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:mc-glow 2s ease-in-out infinite}"
 			+ ".mc-session-card.mc-live::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#22c55e,#06b6d4)}"
+			// A promoted waiter slides down into Active; a finished lease is replaced by
+			// a ghost clone that poofs in place (see diffProvider). The entrance rides
+			// `transform`, the glow breathes on the independent `scale` property, so a
+			// card that is both entering and live runs both animations at once.
+			+ ".mc-session-card.mc-enter{animation:mc-enter .4s ease-out both}"
+			+ ".mc-session-card.mc-live.mc-enter{animation:mc-enter .4s ease-out both,mc-glow 2s ease-in-out infinite}"
+			+ ".mc-session-card.mc-ghost{pointer-events:none;border-color:color-mix(in srgb,#22c55e 30%,var(--dsw-alias-border-l2,#e2e6ea));animation:mc-poof .35s ease-out both}"
 			+ ".mc-sc-top{display:flex;align-items:center;justify-content:space-between;gap:8px}"
 			+ ".mc-sc-state{display:inline-flex;align-items:center;gap:5px;padding:1px 6px;border-radius:999px;font:600 9px/14px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase}"
 			+ ".mc-sc-state i{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}"
@@ -172,9 +179,13 @@ window.__ModuleLoader__.load({
 			+ ".mc-dot.ok{background:#15803d}.mc-dot.full{background:#a16207}.mc-dot.waiting{background:#b91c1c}"
 			+ ".mc-dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex:none}"
 			+ "@keyframes mc-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
-			+ "@keyframes mc-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.08),0 4px 16px rgba(34,197,94,.05)}50%{box-shadow:0 0 0 1.5px rgba(34,197,94,.32),0 8px 28px rgba(34,197,94,.15)}}"
+			// The working-state breath: a wider, brighter ring than the old 3.2 s pulse,
+			// on a 2 s cycle, with a barely-there scale so a running call reads as alive.
+			+ "@keyframes mc-glow{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.10),0 4px 18px rgba(34,197,94,.06);scale:1}50%{box-shadow:0 0 0 2px rgba(34,197,94,.40),0 12px 34px rgba(34,197,94,.22);scale:1.012}}"
+			+ "@keyframes mc-enter{0%{transform:translateY(-10px);opacity:0}100%{transform:translateY(0);opacity:1}}"
+			+ "@keyframes mc-poof{0%{transform:scale(1);opacity:1}100%{transform:scale(1.08);opacity:0}}"
 			+ "@media (prefers-color-scheme:dark){.mc-provider,.mc-session-card,.mc-kpi{background:var(--dsw-alias-bg-layer-1,#16181d)}.mc-session-card.mc-live{background:linear-gradient(135deg,rgba(34,197,94,.08),var(--dsw-alias-bg-layer-1,#16181d))}.mc-tag{background:rgba(255,255,255,.06)}.mc-empty-card{background:rgba(255,255,255,.02)}}"
-			+ "@media (prefers-reduced-motion:reduce){.mc-session-card.mc-live,.mc-sc-state.live i,.mc-status i{animation:none}.mc-capbar>span{transition:none}}"
+			+ "@media (prefers-reduced-motion:reduce){.mc-session-card.mc-live,.mc-session-card.mc-enter,.mc-session-card.mc-live.mc-enter,.mc-sc-state.live i,.mc-status i{animation:none}.mc-session-card.mc-ghost{display:none}.mc-session-card{transition:none}.mc-capbar>span{transition:none}}"
 			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-provider-grid{grid-template-columns:1fr}}";
 
 
@@ -184,6 +195,130 @@ window.__ModuleLoader__.load({
 			tag.id = "model-capacity-styles";
 			tag.textContent = CSS;
 			document.head.appendChild(tag);
+		}
+
+		// ---------------------------------------------------------------------
+		// Activity animations.
+		//
+		// React unmounts a session card the instant it leaves the snapshot, so a
+		// finished call would simply disappear and the queue would teleport. The
+		// provider card therefore diffs each poll against the one before it and
+		// keeps three small pieces of derived, short-lived state:
+		//
+		//   ghosts    entries that left a list, re-rendered in place as a fading
+		//             clone (Active: the call finished; Queue: it was cancelled —
+		//             a waiter that got promoted is not a ghost, it slides in
+		//             upstairs);
+		//   entering  leases that appeared in Active for a session that was
+		//             waiting, so the promoted card can slide down and fade in;
+		//   offsets   last-seen offsetTop per card, for the in-section FLIP that
+		//             slides the remaining queued cards up into the gap.
+		//
+		// Everything here is skipped when the user asks for reduced motion, in JS
+		// as well as in CSS, so no ghost is ever mounted for them to sit on.
+		// ---------------------------------------------------------------------
+
+		var GHOST_TTL_MS = 900;
+		var ENTER_TTL_MS = 700;
+		var NO_ANIM = { ghosts: [], entering: [] };
+
+		function reducedMotion() {
+			try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) { return false; }
+		}
+
+		function byId(list, key) {
+			var seen = {};
+			(list || []).forEach(function (entry) { if (entry && entry[key] !== undefined && entry[key] !== null) seen[entry[key]] = true; });
+			return seen;
+		}
+
+		function bySession(list) {
+			var seen = {};
+			(list || []).forEach(function (entry) { if (entry && entry.sessionId) seen[entry.sessionId] = true; });
+			return seen;
+		}
+
+		// Pure diff of one provider between two polls. Indexes are positions in the
+		// *previous* list, clamped by the caller against the current one.
+		function diffProvider(prev, next) {
+			var out = { ghosts: [], entering: [] };
+			if (!prev || !next) return out;
+			var prevActive = prev.active || [];
+			var prevWaiters = prev.waiters || [];
+			var nowActive = next.active || [];
+			var nowWaiters = next.waiters || [];
+			var nowLeases = byId(nowActive, "leaseId");
+			var nowWaiterIds = byId(nowWaiters, "waiterId");
+			var nowActiveSessions = bySession(nowActive);
+			var wasActiveSessions = bySession(prevActive);
+			var wasWaitingSessions = bySession(prevWaiters);
+			prevActive.forEach(function (lease, index) {
+				if (nowLeases[lease.leaseId]) return;
+				out.ghosts.push({ section: "active", entry: lease, state: "active", index: Math.min(index, nowActive.length) });
+			});
+			prevWaiters.forEach(function (waiter, index) {
+				if (nowWaiterIds[waiter.waiterId]) return;
+				if (nowActiveSessions[waiter.sessionId]) return;
+				out.ghosts.push({ section: "queue", entry: waiter, state: "queued", position: waiter.position, index: Math.min(index, nowWaiters.length) });
+			});
+			nowActive.forEach(function (lease) {
+				if (!lease.sessionId || !wasWaitingSessions[lease.sessionId] || wasActiveSessions[lease.sessionId]) return;
+				out.entering.push(lease.leaseId);
+			});
+			return out;
+		}
+
+		function pruneAnim(cur, now) {
+			var ghosts = cur.ghosts.filter(function (g) { return now - g.at < GHOST_TTL_MS; });
+			var entering = cur.entering.filter(function (x) { return now - x.at < ENTER_TTL_MS; });
+			if (ghosts.length === cur.ghosts.length && entering.length === cur.entering.length) return cur;
+			return { ghosts: ghosts, entering: entering };
+		}
+
+		// Splice ghost rows into a list at the positions they were vacated from,
+		// back-to-front so earlier insertions do not shift later indexes.
+		function withGhosts(items, ghosts) {
+			var rows = items.map(function (item) { return { item: item, ghost: null }; });
+			if (!ghosts.length) return rows;
+			ghosts.slice().sort(function (a, b) { return b.index - a.index; }).forEach(function (ghost) {
+				rows.splice(Math.min(ghost.index, rows.length), 0, { item: null, ghost: ghost });
+			});
+			return rows;
+		}
+
+		// FLIP one list: cards that moved because a sibling left get pushed back to
+		// where they were, then slide into their new place. offsetTop ignores
+		// transforms, so measuring after applying the inverse is safe.
+		function flipSection(el, tops, prefix) {
+			if (!el || reducedMotion()) return;
+			var nodes = el.querySelectorAll("[data-mc-flip]");
+			var seen = {};
+			var moved = [];
+			for (var i = 0; i < nodes.length; i++) {
+				var node = nodes[i];
+				var key = prefix + node.getAttribute("data-mc-flip");
+				var top = node.offsetTop;
+				seen[key] = top;
+				var before = tops[key];
+				if (before !== undefined && before !== top) moved.push([node, before - top]);
+			}
+			Object.keys(tops).forEach(function (key) { if (key.indexOf(prefix) === 0 && seen[key] === undefined) delete tops[key]; });
+			Object.assign(tops, seen);
+			if (!moved.length) return;
+			moved.forEach(function (m) {
+				m[0].style.transition = "none";
+				m[0].style.transform = "translateY(" + m[1] + "px)";
+			});
+			void el.offsetHeight;
+			window.requestAnimationFrame(function () {
+				moved.forEach(function (m) {
+					var card = m[0];
+					if (!card.isConnected) return;
+					card.style.transition = "transform .3s cubic-bezier(.2,.8,.2,1)";
+					card.style.transform = "";
+					window.setTimeout(function () { card.style.transition = ""; card.style.transform = ""; }, 340);
+				});
+			});
 		}
 
 		function badgeDemand(provider) {
@@ -312,20 +447,30 @@ window.__ModuleLoader__.load({
 		function SessionCard(props) {
 			var e = props.entry;
 			var active = props.state === "active";
+			var ghost = props.ghost === true;
 			var busy = props.busy === (active ? e.leaseId : e.waiterId) || props.busy === e.sessionId;
 			function open() {
 				if (props.onOpen) props.onOpen(e.sessionId);
 			}
 			function stop(event) { event.stopPropagation(); }
-			return h("div", {
-				className: "mc-session-card " + (active ? "mc-live" : "mc-queued"),
-				role: "button",
-				tabIndex: 0,
-				"aria-label": "Open session " + sessionLabel(e),
-				title: "Open session " + (e.sessionId || ""),
-				onClick: function (event) { if (!event.target.closest("button")) open(); },
-				onKeyDown: function (event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } },
-			},
+			// A ghost keeps the same body — including the (inert) action row — so it
+			// holds exactly the height of the card it replaces and the list below it
+			// does not jump when the poof starts.
+			var className = ghost ? "mc-session-card mc-ghost"
+				: "mc-session-card " + (active ? "mc-live" : "mc-queued") + (props.entering ? " mc-enter" : "");
+			var attrs = ghost
+				? { className: className, "aria-hidden": "true", onAnimationEnd: props.onGhostEnd }
+				: {
+					className: className,
+					"data-mc-flip": props.flipKey,
+					role: "button",
+					tabIndex: 0,
+					"aria-label": "Open session " + sessionLabel(e),
+					title: "Open session " + (e.sessionId || ""),
+					onClick: function (event) { if (!event.target.closest("button")) open(); },
+					onKeyDown: function (event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } },
+				};
+			return h("div", attrs,
 				h("div", { className: "mc-sc-top" },
 					h("span", { className: "mc-sc-state " + (active ? "live" : "queued") },
 						h("i"), active ? "live" : ("queued #" + props.position)),
@@ -339,12 +484,12 @@ window.__ModuleLoader__.load({
 				),
 				h("div", { className: "mc-sc-actions" },
 					h("button", {
-						className: "mc-btn", disabled: busy,
+						className: "mc-btn", disabled: busy || ghost,
 						onClick: function (event) { stop(event); props.onCancel(e.sessionId); },
 						children: active ? "Cancel turn" : "Cancel"
 					}),
 					active ? h("button", {
-						className: "mc-btn danger", disabled: busy,
+						className: "mc-btn danger", disabled: busy || ghost,
 						onClick: function (event) {
 							stop(event);
 							if (!window.confirm("Force-release this lease? The underlying model call may still be running; this can exceed the provider limit.")) return;
@@ -362,6 +507,64 @@ window.__ModuleLoader__.load({
 			var busy = props.busyId;
 			var demand = p.active.length + p.waiters.length;
 			var pct = p.unlimited ? 100 : Math.min(100, Math.round((demand / Math.max(1, p.limit)) * 100));
+			var a = React.useState(NO_ANIM);
+			var anim = a[0], setAnim = a[1];
+			var prevRef = React.useRef(null);
+			var seqRef = React.useRef(0);
+			var activeRef = React.useRef(null);
+			var queueRef = React.useRef(null);
+			var topsRef = React.useRef({});
+			// Every poll hands us a brand-new provider object, so identity is the
+			// change signal. Adjusting state during render (the React pattern for
+			// "derive state from props") puts the ghost in the SAME commit as the card
+			// that left, so the list never paints a frame already collapsed.
+			if (prevRef.current !== p) {
+				var prevProvider = prevRef.current;
+				prevRef.current = p;
+				var diff = reducedMotion() ? null : diffProvider(prevProvider, p);
+				if (diff && (diff.ghosts.length || diff.entering.length)) {
+					var stamp = Date.now();
+					var freshGhosts = diff.ghosts.map(function (ghost) {
+						seqRef.current += 1;
+						ghost.id = "mcg" + seqRef.current;
+						ghost.at = stamp;
+						return ghost;
+					});
+					var freshEntering = diff.entering.map(function (leaseId) { return { id: leaseId, at: stamp }; });
+					setAnim({
+						ghosts: anim.ghosts.concat(freshGhosts),
+						entering: anim.entering.concat(freshEntering),
+					});
+				}
+			}
+			React.useEffect(function () {
+				if (!anim.ghosts.length && !anim.entering.length) return undefined;
+				var timer = window.setTimeout(function () {
+					setAnim(function (cur) { return pruneAnim(cur, Date.now()); });
+				}, GHOST_TTL_MS);
+				return function () { window.clearTimeout(timer); };
+			}, [anim]);
+			React.useLayoutEffect(function () {
+				flipSection(activeRef.current, topsRef.current, "a:");
+				flipSection(queueRef.current, topsRef.current, "q:");
+			});
+			function dropGhost(id) {
+				setAnim(function (cur) {
+					var kept = cur.ghosts.filter(function (ghost) { return ghost.id !== id; });
+					return kept.length === cur.ghosts.length ? cur : { ghosts: kept, entering: cur.entering };
+				});
+			}
+			function ghostHandler(ghost) {
+				return function (event) {
+					// animationend bubbles; only the poof itself retires the clone.
+					if (event && event.animationName && event.animationName !== "mc-poof") return;
+					dropGhost(ghost.id);
+				};
+			}
+			var entering = {};
+			anim.entering.forEach(function (x) { entering[x.id] = true; });
+			var activeRows = withGhosts(p.active, anim.ghosts.filter(function (g) { return g.section === "active"; }));
+			var queueRows = withGhosts(p.waiters, anim.ghosts.filter(function (g) { return g.section === "queue"; }));
 			return h("section", { className: "mc-provider mc-tone-" + props.tone + (p.waiters.length > 0 ? " is-waiting" : "") },
 				h("div", { className: "mc-provider-head" },
 					h("div", { style: { minWidth: 0 } },
@@ -377,22 +580,36 @@ window.__ModuleLoader__.load({
 				h("div", { className: "mc-capbar" + (p.waiters.length > 0 ? " is-waiting" : "") },
 					h("span", { style: { width: pct + "%" } })
 				),
-				h("div", { className: "mc-section" },
+				h("div", { className: "mc-section", ref: activeRef },
 					h("div", { className: "mc-section-head", children: ["Active", h("span", { className: "mc-count", children: p.active.length })] }),
-					p.active.length === 0 ? h("div", { className: "mc-empty-card", children: "No active calls" }) :
-						p.active.map(function (lease) {
+					activeRows.length === 0 ? h("div", { className: "mc-empty-card", children: "No active calls" }) :
+						activeRows.map(function (row) {
+							if (row.ghost) {
+								return h(SessionCard, {
+									key: row.ghost.id, entry: row.ghost.entry, state: "active", ghost: true,
+									onGhostEnd: ghostHandler(row.ghost)
+								});
+							}
 							return h(SessionCard, {
-								key: lease.leaseId, entry: lease, state: "active", busy: busy,
+								key: row.item.leaseId, entry: row.item, state: "active", busy: busy,
+								flipKey: row.item.leaseId, entering: entering[row.item.leaseId] === true,
 								onCancel: props.onCancelSession, onForce: props.onForceRelease, onOpen: props.onOpen
 							});
 						})
 				),
-				h("div", { className: "mc-section" },
+				h("div", { className: "mc-section", ref: queueRef },
 					h("div", { className: "mc-section-head", children: ["Queue", h("span", { className: "mc-count", children: p.waiters.length })] }),
-					p.waiters.length === 0 ? h("div", { className: "mc-empty-card", children: "Queue empty" }) :
-						p.waiters.map(function (waiter) {
+					queueRows.length === 0 ? h("div", { className: "mc-empty-card", children: "Queue empty" }) :
+						queueRows.map(function (row) {
+							if (row.ghost) {
+								return h(SessionCard, {
+									key: row.ghost.id, entry: row.ghost.entry, state: "queued", position: row.ghost.position,
+									ghost: true, onGhostEnd: ghostHandler(row.ghost)
+								});
+							}
 							return h(SessionCard, {
-								key: waiter.waiterId, entry: waiter, state: "queued", position: waiter.position, busy: busy,
+								key: row.item.waiterId, entry: row.item, state: "queued", position: row.item.position, busy: busy,
+								flipKey: row.item.waiterId,
 								onCancel: props.onCancelSession, onForce: props.onForceRelease, onOpen: props.onOpen
 							});
 						})
@@ -494,7 +711,9 @@ window.__ModuleLoader__.load({
 		}
 
 		function CapacityPanel() {
-			var pair = useSnapshot(1500);
+			// 750 ms, not 1500: the poof and the promotion have to land while you are
+			// still looking at the card that caused them.
+			var pair = useSnapshot(750);
 			var snapshot = pair[0], error = pair[1];
 			var n = React.useState(null);
 			var notice = n[0], setNotice = n[1];
