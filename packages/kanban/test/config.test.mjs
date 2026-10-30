@@ -72,10 +72,13 @@ test('every default prompt, approval included, loads from the package prompts di
     assert.ok(prompts.bodies[name]?.length > 0, `${name} prompt did not load`)
     assert.ok(prompts.hashes[name], `${name} prompt was not hashed`)
   }
-  // The approval prompt is the slim hand-over: it names the three approval
-  // tools and tells the agent not to use them until the human asks.
+  // The approval prompt is the slim hand-over: the user's one-line job
+  // statement, plus the note that the three approval tools exist for the human
+  // to ask for. Nothing else — the session already holds the plan and the review.
   assert.match(prompts.bodies.approval, /kanban_approve/)
   assert.match(prompts.bodies.approval, /kanban_discard/)
   assert.match(prompts.bodies.approval, /kanban_submit_plan/)
-  assert.match(prompts.bodies.approval, /\{\{key\}\}/)
+  assert.match(prompts.bodies.approval, /^Without making any further changes, offer the user a selection of a few options for next steps that would enable you to wrap this work up\./)
+  assert.equal(prompts.bodies.approval.includes('{{plan}}'), false, 'approval prompt still dumps the plan')
+  assert.equal(prompts.bodies.approval.includes('{{review}}'), false, 'approval prompt still dumps the review')
 })

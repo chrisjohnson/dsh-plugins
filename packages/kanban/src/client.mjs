@@ -19,7 +19,6 @@ window.__ModuleLoader__.load({
 
 		var connection = null;
 		var openSessionById = null;
-		var autoOpenedSessions = new Set();
 		var rpcSeq = 0;
 
 		function rpc(method, payload) {
@@ -177,13 +176,13 @@ var CSS =
 		+ ".kb-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 45%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--kb-accent,#3b82f6) 13%,transparent)}"
 		+ ".kb-card.active{border-color:color-mix(in srgb,#2563eb 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#2563eb 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow-blue 3.2s ease-in-out infinite}"
 		+ ".kb-card.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#2563eb,#06b6d4)}"
-		+ ".kb-card.attention{border-color:color-mix(in srgb,#b91c1c 45%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow-red 1.6s ease-in-out infinite}"
+		+ ".kb-card.attention{border-color:color-mix(in srgb,#b91c1c 45%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-1,#fff))}"
 		+ ".kb-card.attention::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:#b91c1c}"
 		+ ".kb-cardtop{display:flex;align-items:center;gap:7px}"
 		+ ".kb-key{font:600 11px/15px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);letter-spacing:.02em}"
 		+ ".kb-statusdot{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}"
 		+ ".kb-statusdot.active{background:#2563eb;animation:kb-pulse 1.8s ease-out infinite}"
-		+ ".kb-statusdot.attention{background:#b91c1c;box-shadow:0 0 0 3px rgba(185,28,28,.16)}"
+		+ ".kb-statusdot.attention{background:#b91c1c}"
 		+ ".kb-phasechip{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--kb-accent,#64748b) 30%,transparent);background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font:600 11px/15px var(--dsw-font-family,sans-serif);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}"
 		+ ".kb-phasechip.plan{--kb-accent:#2563eb}.kb-phasechip.build{--kb-accent:#0d9488}.kb-phasechip.review{--kb-accent:#db2777}.kb-phasechip.approval{--kb-accent:#7c3aed}.kb-phasechip.done{--kb-accent:#15803d}.kb-phasechip.discarded{--kb-accent:#64748b}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
@@ -337,10 +336,20 @@ var CSS =
 		+ ".kb-switch[aria-checked='true'] .kb-switch-thumb{background:var(--dsw-alias-label-primary-foreground,#fff);transform:translateX(16px)}"
 		+ ".kb-switchrow{display:flex;align-items:center;gap:8px}"
 		+ ".kb-worktree-path{font:400 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}"
+		+ ".kb-banner{display:flex;align-items:center;gap:7px;box-sizing:border-box;min-width:0;max-width:640px;margin:2px 0 0;padding:5px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);background:var(--dsw-alias-bg-layer-2,#f7f8fa);font:500 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-secondary,#555)}"
+		+ ".kb-banner::before{content:'';flex:none;width:6px;height:6px;border-radius:50%;background:#94a3b8}"
+		+ ".kb-banner-text{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+		+ ".kb-banner.plan{border-color:color-mix(in srgb,#2563eb 30%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#2563eb 5%,var(--dsw-alias-bg-layer-1,#fff))}"
+		+ ".kb-banner.plan::before{background:#2563eb}"
+		+ ".kb-banner.build{border-color:color-mix(in srgb,#0d9488 30%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#0d9488 5%,var(--dsw-alias-bg-layer-1,#fff))}"
+		+ ".kb-banner.build::before{background:#0d9488}"
+		+ ".kb-banner.ok{border-color:color-mix(in srgb,#15803d 30%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#15803d 5%,var(--dsw-alias-bg-layer-1,#fff))}"
+		+ ".kb-banner.ok::before{background:#15803d}"
+		+ ".kb-banner.warn{border-color:color-mix(in srgb,#b91c1c 30%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 5%,var(--dsw-alias-bg-layer-1,#fff))}"
+		+ ".kb-banner.warn::before{background:#b91c1c}"
 		+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.5)}70%{box-shadow:0 0 0 6px rgba(37,99,235,0)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}}"
 		+ "@keyframes kb-glow-blue{0%,100%{box-shadow:0 0 0 1px rgba(37,99,235,.08),0 4px 16px rgba(37,99,235,.05)}50%{box-shadow:0 0 0 1.5px rgba(37,99,235,.32),0 8px 28px rgba(37,99,235,.15)}}"
-		+ "@keyframes kb-glow-red{0%,100%{box-shadow:0 0 0 1px rgba(185,28,28,.16),0 4px 14px rgba(185,28,28,.08)}50%{box-shadow:0 0 0 2px rgba(185,28,28,.42),0 8px 26px rgba(185,28,28,.22)}}"
-		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-card.attention,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
+		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
 		+ "@media (max-width:900px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 		+ "";
 
@@ -1005,16 +1014,6 @@ var CSS =
 			var tab = tabState[0], setTab = tabState[1];
 			var modalState = React.useState(null);
 			var modal = modalState[0], setModal = modalState[1];
-			React.useEffect(function () {
-				if (!d) return;
-				var ticket = d.ticket;
-				var planSessions = (d.sessions || []).filter(function (session) { return session.purpose === "plan" || session.role === "plan"; });
-				var planSession = planSessions.length > 0 ? planSessions[planSessions.length - 1] : null;
-				if (ticket.phase === "plan" && planSession && !autoOpenedSessions.has(ticket.id)) {
-					autoOpenedSessions.add(ticket.id);
-					if (openSessionById) openSessionById(planSession.sessionId);
-				}
-			}, [d]);
 			if (!d) return h("div", { className: "kb-empty", children: "Loading ticket…" });
 			var t = d.ticket;
 			var detailStatus = d.status || t.status || "idle";
@@ -1411,8 +1410,6 @@ var CSS =
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
 			var poll = React.useRef(0);
-			var knownPlanSessions = React.useRef(new Set());
-			var planSeen = React.useRef(false);
 
 			function loadBoard() {
 				rpc("board", {}).then(function (res) {
@@ -1440,26 +1437,6 @@ var CSS =
 				}, 3000);
 				return function () { clearInterval(timer); clearInterval(routingTimer); };
 			}, [selectedId]);
-			React.useEffect(function () {
-				if (!board) return;
-				var columns = board.columns || {};
-				var tickets = [].concat(columns.working || [], columns.backlog || []);
-				var initial = !planSeen.current;
-				planSeen.current = true;
-				for (var i = 0; i < tickets.length; i += 1) {
-					var ticket = tickets[i];
-					if (ticket.phase !== "plan" || !ticket.planSessionId) continue;
-					var key = ticket.id + ":" + ticket.planSessionId;
-					if (initial) { knownPlanSessions.current.add(key); continue; }
-					if (knownPlanSessions.current.has(key)) continue;
-					knownPlanSessions.current.add(key);
-					if (!autoOpenedSessions.has(ticket.id)) {
-						autoOpenedSessions.add(ticket.id);
-						if (openSessionById) openSessionById(ticket.planSessionId);
-						break;
-					}
-				}
-			}, [board]);
 			React.useEffect(function () {
 				if (view === "analytics" && analyticsData === null) {
 					rpc("analytics", {}).then(function (res) { if (res && res.ok) setAnalyticsData(res.value); });
@@ -1624,6 +1601,168 @@ var CSS =
 			}
 		}
 
+		// ------------------------------------------------- phase-change banner
+		//
+		// A turn that ends on a kanban_* tool call moved the ticket, but the
+		// chat view only showed the call. This entry renders one line at the
+		// turn tail — below the "Completed in …" disclosure, never folded into
+		// it — naming the transition the turn caused.
+		//
+		// The call itself is not proof: a phase-gated call can be refused and a
+		// submission can be rejected by validation, and both look identical in
+		// the transcript. So the banner is validated against the ticket's real
+		// phase through the host's sessionInfo endpoint, and renders nothing
+		// until that phase confirms the transition. The engine settles the
+		// phase a beat after the turn concludes, so an unconfirmed banner
+		// retries on a short backoff and then gives up quietly.
+
+		var PHASE_ORDER = { plan: 0, implement: 1, review: 2, verify: 3, closed: 4 };
+		var BANNER_RETRIES = 5;
+		// Confirmed banners only: a turn that has not been validated yet must
+		// refetch, so failures are deliberately never cached.
+		var bannerCache = new Map();
+
+		function parseToolArgs(raw) {
+			if (typeof raw !== "string" || raw === "") return {};
+			try {
+				var value = JSON.parse(raw);
+				return value !== null && typeof value === "object" ? value : {};
+			} catch (error) {
+				return {};
+			}
+		}
+
+		function kanbanCallsInTurn(turn) {
+			var out = [];
+			var steps = turn && Array.isArray(turn.steps) ? turn.steps : [];
+			for (var i = 0; i < steps.length; i += 1) {
+				var reader = steps[i] ? steps[i].data : null;
+				if (!reader || typeof reader.get !== "function") continue;
+				var assistant = null;
+				try {
+					assistant = reader.get("assistant-step");
+				} catch (error) {
+					assistant = null;
+				}
+				var blocks = assistant && Array.isArray(assistant.blocks) ? assistant.blocks : [];
+				for (var j = 0; j < blocks.length; j += 1) {
+					var block = blocks[j];
+					if (!block || block.kind !== "tool-call") continue;
+					if (typeof block.name !== "string" || block.name.indexOf("kanban_") !== 0) continue;
+					out.push({ name: block.name, args: parseToolArgs(block.argsRaw) });
+				}
+			}
+			return out;
+		}
+
+		// One line, always: the CSS ellipsis does the truncating and the element's
+		// title carries the whole thing, so a long plan summary or review
+		// instruction is shortened for the eye and never for the reader who wants
+		// the rest.
+		function oneLine(value) {
+			return String(value === null || value === undefined ? "" : value).replace(/\s+/g, " ").trim();
+		}
+
+		function conditionIds(info) {
+			var plan = info && info.plan;
+			var list = plan && Array.isArray(plan.conditions) ? plan.conditions : (plan && Array.isArray(plan.done_when) ? plan.done_when : []);
+			var ids = list.map(function (item) { return item && item.id ? String(item.id) : ""; }).filter(Boolean);
+			return ids.join(", ");
+		}
+
+		/**
+		 * Decide the one banner line for a turn, or null when nothing about this
+		 * turn is confirmed yet. Every branch checks the ticket's real state,
+		 * never the tool call's own claim.
+		 */
+		function bannerFor(calls, info) {
+			if (!info || !info.ticket) return null;
+			var ticket = info.ticket;
+			var phase = String(ticket.phase || "");
+			var order = Object.prototype.hasOwnProperty.call(PHASE_ORDER, phase) ? PHASE_ORDER[phase] : -1;
+			var summary = info.plan && typeof info.plan.summary === "string" ? oneLine(info.plan.summary) : "";
+			var ids = conditionIds(info);
+			for (var i = calls.length - 1; i >= 0; i -= 1) {
+				var name = calls[i].name;
+				if (name === "kanban_submit_plan" && info.plan && order >= PHASE_ORDER.implement) {
+					return {
+						tone: "plan",
+						text: "Plan submitted" + (summary ? " — " + summary : "") + (ids ? " · Done when: " + ids : "") + ". Now proceeding to build.",
+					};
+				}
+				if (name === "kanban_submit_implementation" && order >= PHASE_ORDER.review) {
+					return {
+						tone: "build",
+						text: "Implementation submitted — here's the plan: " + (summary || "see the plan") + (ids ? " · done when: " + ids : "") + ". Now proceeding to self-review.",
+					};
+				}
+				if (name === "kanban_submit_review") {
+					if (order >= PHASE_ORDER.verify) {
+						return { tone: "ok", text: "Review passed — all conditions met. Now proceeding to approval." };
+					}
+					if (phase === "implement" && info.review) {
+						var feedback = oneLine(info.reviewFeedback || (info.review && info.review.instruction) || (Array.isArray(info.review.reasons) ? info.review.reasons.join("; ") : ""));
+						return { tone: "warn", text: "Review status: not finished" + (feedback ? " — " + feedback : "") + ". Back to implementation." };
+					}
+				}
+				if (name === "kanban_approve" && ticket.column === "done") {
+					return { tone: "ok", text: "Ticket approved and closed." };
+				}
+				if (name === "kanban_discard" && ticket.column === "discarded") {
+					return { tone: "warn", text: "Ticket discarded." };
+				}
+			}
+			return null;
+		}
+
+		function fetchSessionInfo(sessionId) {
+			return rpc("sessionInfo", { sessionId: sessionId }).then(function (res) {
+				return res && res.ok && res.value ? res.value : null;
+			}, function () {
+				return null;
+			});
+		}
+
+		function PhaseBanner(props) {
+			var turn = props.turn;
+			var sessionId = props.kanbanSessionId;
+			var calls = React.useMemo(function () { return turn ? kanbanCallsInTurn(turn) : []; }, [turn]);
+			var state = React.useState(null);
+			var banner = state[0], setBanner = state[1];
+			var turnKey = turn && typeof turn.turn === "number" ? turn.turn : -1;
+			React.useEffect(function () {
+				if (!sessionId || calls.length === 0) return undefined;
+				var cacheKey = sessionId + ":" + turnKey;
+				if (bannerCache.has(cacheKey)) {
+					setBanner(bannerCache.get(cacheKey));
+					return undefined;
+				}
+				var alive = true;
+				var timer = 0;
+				var tries = 0;
+				function attempt() {
+					tries += 1;
+					fetchSessionInfo(sessionId).then(function (info) {
+						if (!alive) return;
+						var next = bannerFor(calls, info);
+						if (next) {
+							bannerCache.set(cacheKey, next);
+							setBanner(next);
+							return;
+						}
+						if (tries < BANNER_RETRIES) timer = setTimeout(attempt, tries * 1500);
+					});
+				}
+				attempt();
+				return function () {
+					alive = false;
+					if (timer) clearTimeout(timer);
+				};
+			}, [sessionId, turnKey, calls]);
+			if (!banner) return null;
+			return h("div", { className: "kb-banner " + banner.tone, title: banner.text, children: h("span", { className: "kb-banner-text", children: banner.text }) });
+		}
+
 		// ------------------------------------------------------------------ apply
 
 		function apply(ctx) {
@@ -1654,6 +1793,19 @@ var CSS =
 					return slots.register({ name: "main", key: "kanban" }, KanbanPage);
 				});
 			}, "dsh-kanban: board page");
+			ctx.effect(function () {
+				return slots.inject("conversation.chat.turnTail", function () {
+					return slots.register(
+						{
+							name: "conversation.chat.turnTail",
+							id: "kanban-phase-banner",
+							order: 30,
+							inject: function (sessionId) { return { kanbanSessionId: sessionId }; },
+						},
+						PhaseBanner
+					);
+				});
+			}, "dsh-kanban: turn phase banner");
 		}
 
 		exports.apply = apply;

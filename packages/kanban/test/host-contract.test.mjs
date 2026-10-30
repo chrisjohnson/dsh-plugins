@@ -109,3 +109,83 @@ test('a level the row model does not offer is dropped, never sent', async () => 
   // Both the seed and the save go through it, so neither can carry a stale level.
   assert.equal((client.match(/sendableEffort\(routing\.groups/g) || []).length, 2, 'both startRoutingEdit and saveRouting must filter the effort')
 })
+
+// --------------------------------------------------------------- KAN-13
+
+test('sessionInfo is a registered endpoint and answers from the board, not the call', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /'sessionInfo',/, 'sessionInfo must be in ENDPOINTS so the route is registered')
+  const caseBody = host.slice(host.indexOf("case 'sessionInfo'"))
+  assert.match(caseBody, /store\.findSession\(sessionId\)/)
+  // The projection is the ticket's real state: phase, plan, conditions, review.
+  for (const field of ['phase:', 'plan:', 'conditions:', 'review:', 'reviewFeedback:', 'acceptance:']) {
+    assert.match(caseBody, new RegExp(field), `sessionInfo must return ${field}`)
+  }
+  assert.match(caseBody, /not_found/)
+})
+
+test('the needs-attention card is static red, the in-flight card still glows', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.equal(client.includes('kb-glow-red'), false, 'the attention card must not animate')
+  const attention = client.slice(client.indexOf('.kb-card.attention{'), client.indexOf('.kb-card.attention::before'))
+  assert.match(attention, /border-color:color-mix\(in srgb,#b91c1c 45%/)
+  assert.match(attention, /background:color-mix\(in srgb,#b91c1c 6%/)
+  assert.equal(attention.includes('animation'), false, 'the attention rule must carry no animation')
+  const dot = client.slice(client.indexOf('.kb-statusdot.attention{'), client.indexOf('.kb-statusdot.attention{') + 80)
+  assert.match(dot, /background:#b91c1c/)
+  assert.equal(dot.includes('box-shadow'), false, 'the attention status dot must not carry a ring')
+  // The blue in-flight treatment is untouched.
+  assert.match(client, /\.kb-card\.active\{[^}]*animation:kb-glow-blue/)
+  assert.match(client, /@keyframes kb-glow-blue/)
+  assert.match(client, /\.kb-statusdot\.active\{[^}]*animation:kb-pulse/)
+  // Reduced motion still covers what does animate.
+  const motion = client.slice(client.indexOf('@media (prefers-reduced-motion'), client.indexOf('@media (max-width:900px)'))
+  assert.match(motion, /\.kb-card\.active/)
+  assert.equal(motion.includes('.kb-card.attention'), false, 'a static card needs no reduced-motion entry')
+})
+
+test('nothing opens a session on its own', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  // Every remaining caller is a click handler; no effect may navigate.
+  assert.equal(/autoOpenedSessions|knownPlanSessions|planSeen/.test(client), false, 'the auto-open bookkeeping must be gone')
+  // No effect anywhere in the client may navigate: every remaining call sits on
+  // the same line as the click that caused it, or is the definition itself.
+  const callers = client.split('\n').filter((line) => line.includes('openSessionById'))
+  assert.equal(callers.length, 4, 'one definition and three click handlers, nothing else')
+  for (const line of callers) {
+    const allowed = line.includes('var openSessionById = null;')
+      || line.includes('openSessionById = function')
+      || line.includes('onClick')
+      || line.includes('onOpenSession')
+    assert.equal(allowed, true, `not a click handler: ${line.trim()}`)
+  }
+  // The explicit buttons stay.
+  assert.match(client, /props\.onOpenSession\(sessionId\)/)
+  assert.match(client, /openSessionById\(session\.sessionId\)/)
+  assert.match(client, /children: "Recover tools"/)
+})
+
+test('the phase banner is a turn-tail entry validated against the board', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /slots\.inject\("conversation\.chat\.turnTail"/)
+  assert.match(client, /id: "kanban-phase-banner"/)
+  // It reads the turn's own tool calls and asks the host before saying anything.
+  assert.match(client, /function kanbanCallsInTurn\(turn\)/)
+  assert.match(client, /kind !== "tool-call"/)
+  assert.match(client, /indexOf\("kanban_"\)/)
+  assert.match(client, /rpc\("sessionInfo", \{ sessionId: sessionId \}\)/)
+  // All five transitions have wording.
+  for (const text of ['Plan submitted', 'Implementation submitted', 'Review status: not finished', 'Review passed', 'Ticket approved and closed', 'Ticket discarded']) {
+    assert.ok(client.includes(text), `the banner must render "${text}"`)
+  }
+  // A refused call must not claim a transition: every branch checks the phase.
+  const banner = client.slice(client.indexOf('function bannerFor'), client.indexOf('function fetchSessionInfo'))
+  assert.match(banner, /order >= PHASE_ORDER\.implement/)
+  assert.match(banner, /order >= PHASE_ORDER\.review/)
+  assert.match(banner, /order >= PHASE_ORDER\.verify/)
+  assert.match(banner, /ticket\.column === "done"/)
+  assert.match(banner, /ticket\.column === "discarded"/)
+  // The full text is on hover, the line is truncated by CSS.
+  assert.match(client, /title: banner\.text/)
+  assert.match(client, /\.kb-banner-text\{[^}]*text-overflow:ellipsis/)
+})

@@ -33,6 +33,10 @@ build session
   kanban_submit_plan
       ↓ approve
    done
+
+kanban_plan (read-only) is available in every session and returns the plan,
+its conditions and the latest review, so a session can re-read the contract it
+is working against instead of trusting its own summary of it.
 ```
 
 Approval is a **phase**, not a session. The session that wrote the code and
@@ -110,17 +114,26 @@ Prompts are markdown files under `prompts/`: `plan-human.md`, `plan-self.md`,
 `implement.md`, `rework.md`, `review.md`, `approval.md`. Their hashes are recorded
 on runs and spans.
 
+A prompt says the job and nothing the session can already see. Plan and build
+prompts open a fresh session, so they carry the full ticket, plan and conditions.
+Review, rework and approval run inside the build session that wrote the code, so
+they do not repaste the plan, the implementation JSON or the diff: the review
+prompt names the condition ids it must be answered with and the exact shape of
+`kanban_submit_review`, and the approval prompt is one line asking the agent to
+offer the human their next steps.
+
 Config reload is atomic through `configEditor`; an invalid reload keeps the
 previous config.
 
 ## Roles
 
 A role is a model route and a phase — not a tool list. Every role session gets
-the standard preset's tools, and all five Kanban action tools are registered in
-every workflow session, whichever purpose it belongs to. Each action tool
+the standard preset's tools, and all six Kanban action tools are registered in
+every workflow session, whichever purpose it belongs to. Each submitting tool
 enforces its own phase and refuses a call that does not belong to it, so a
 session that changes phase (implement → review) or is reattached after a restart
-never finds the tool it needs missing.
+never finds the tool it needs missing. `kanban_plan` is read-only and gated by
+nothing.
 
 | Role | Purpose | Sandbox mode | Action tools that accept a call |
 |---|---|---|---|
@@ -128,10 +141,13 @@ never finds the tool it needs missing.
 | `implementer` | build | workspace-write | `kanban_submit_implementation` |
 | `reviewer` | build | workspace-write | `kanban_submit_review` |
 | `approver` | build | workspace-write | `kanban_approve`, `kanban_discard`, `kanban_submit_plan` |
+| any | plan or build | — | `kanban_plan` (read-only, every phase) |
 
 A misdirected call is an ordinary tool error the model can read and correct, and
 the engine re-validates the ticket's own phase before it records anything, so a
-call made in the right session but the wrong ticket state still fails cleanly.
+call made in the right session but the wrong ticket state still fails cleanly. A
+`done_when` array whose ids are not the plan's is rejected the same way, at the
+tool boundary, with the expected ids named in the error.
 
 ## Lifecycle
 
@@ -208,6 +224,28 @@ Spans record role, provider/model, attempt, timing, status and prompt hash;
 usage records tokens and cost. Timeline blocks are plugin/phase steps, with
 expandable prompt/result/plan/review artifacts and lifecycle
 events. JSONL/CSV exports and analytics remain available.
+
+## Board and chat surface
+
+A card is **blue and softly glowing** while its ticket has a turn in flight, and
+**static red** when it needs attention — border, tint, left accent bar and a red
+status dot, no pulsing. Attention is a state to read, not a light to chase.
+
+Clicking a card opens the ticket detail. Nothing in the board ever opens a
+session by itself: watching the poll, or clicking through a ticket that is
+planning, building or reviewing, never navigates you out of the board. The
+explicit buttons still do — **Open build session** on the approval panel,
+**Open** in the sessions table, **Recover tools** on an orphaned session.
+
+In a kanban session's chat, a turn that ended on a `kanban_*` call gets one line
+at the turn tail, below the "Completed in …" disclosure, naming the transition
+that turn caused: plan submitted, implementation submitted, review not finished
+(with the reviewer's feedback), review passed, approved or discarded. The line
+is not taken from the tool call — a call refused by its phase gate looks
+identical in the transcript — so it is confirmed against the ticket's real
+phase through the `sessionInfo` endpoint before it appears, and nothing appears
+when the call did not actually move the ticket. Long values are truncated to one
+line and the full text is in the hover tooltip.
 
 ## Auto-recovery of a halted turn
 

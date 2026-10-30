@@ -57,6 +57,33 @@ function doneWhenBlock(conditions) {
   return conditions.map((c) => `- ${c.id}: ${c.statement}\n  verify: ${c.howVerified}`).join('\n');
 }
 
+/**
+ * The compact condition list the review prompt carries: id plus statement, no
+ * how_verified. The reviewer's own session already holds the plan and the diff,
+ * so the ids are all it needs to answer against — and the one thing it must not
+ * invent is an id.
+ */
+function conditionListBlock(conditions) {
+  if (!Array.isArray(conditions) || conditions.length === 0) return '(the plan declared no conditions)';
+  return conditions.map((c) => `- \`${c.id}\` — ${c.statement}`).join('\n');
+}
+
+/**
+ * The one rework line: the reviewer's instruction, but only when it is short
+ * enough to be a reminder. A long instruction is already in the session's own
+ * transcript as the review tool call, so repeating it buys tokens and nothing
+ * else.
+ */
+function reworkLine(review) {
+  if (review === null || review === undefined) return '';
+  const text = typeof review.instruction === 'string' && review.instruction.trim() !== ''
+    ? review.instruction.trim()
+    : (Array.isArray(review.reasons) ? review.reasons.join('; ').trim() : '');
+  if (text === '') return '';
+  if (text.length > 240) return '';
+  return `The reviewer's instruction: ${text}`;
+}
+
 export class Engine {
   constructor({ ctx, store, driver, getConfig, getPrompts, log }) {
     this.ctx = ctx;
@@ -307,6 +334,7 @@ export class Engine {
       plan: planArtifact === undefined ? '(no plan)' : planArtifact.content,
       done_when: doneWhenBlock(conditions),
       review: rework === null ? '' : JSON.stringify(rework, null, 2),
+      review_line: reworkLine(rework),
     });
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
@@ -333,18 +361,19 @@ export class Engine {
     if (!admission.ok) return this.hold(ticket, admission);
     const prompts = this.getPrompts();
     const acceptance = this.store.listAcceptance(ticket.id);
-    const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
-    const implementArtifact = this.store.latestArtifact(ticket.id, 'implement_result');
-    const diff = await this.diff(ticket);
+    const conditions = this.store.listConditions(ticket.id);
+    // The reviewer works in the build session, so the plan, the implementer's
+    // result and the diff are already in its transcript: the prompt carries only
+    // what must not be paraphrased, the condition ids it has to answer against.
+    // The diff is still captured as an artifact, because the board's timeline is
+    // where a human looks to see what a round actually changed.
+    await this.diff(ticket);
     const prompt = render(prompts.bodies.review, {
       key: ticket.key,
       title: ticket.title,
       cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
       acceptance: acceptanceBlock(acceptance),
-      plan: planArtifact === undefined ? '(no plan)' : planArtifact.content,
-      done_when: doneWhenBlock(this.store.listConditions(ticket.id)),
-      implementation: implementArtifact === undefined ? '(none)' : implementArtifact.content,
-      diff,
+      done_when: conditionListBlock(conditions),
     });
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt, spanName: 'review', attempt: ticket.attemptCount, runId });
@@ -405,15 +434,12 @@ export class Engine {
       this.driver.setRoute(sessionId, route);
     }
     const prompts = this.getPrompts();
-    const acceptance = this.store.listAcceptance(current.id);
-    const planArtifact = this.store.latestArtifact(current.id, 'plan');
-    const reviewArtifact = this.store.latestArtifact(current.id, 'review');
+    // The approval turn is a handover, not a fresh analysis: the session that
+    // just passed review already holds the plan, the implementation and the
+    // review verdict, so the prompt says one thing and stops.
     const prompt = render(prompts.bodies.approval, {
       key: current.key,
       title: current.title,
-      acceptance: acceptanceBlock(acceptance),
-      plan: planArtifact === undefined ? '(none)' : planArtifact.content,
-      review: reviewArtifact === undefined ? '(none)' : reviewArtifact.content,
     });
     // A manual review submission concludes the human's turn and asks for the
     // approval turn in the same beat; sending into a session whose turn is still
