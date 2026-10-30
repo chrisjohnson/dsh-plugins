@@ -1774,10 +1774,15 @@ var CSS =
 					if (verdict === "pass" && order >= PHASE_ORDER.verify && isLatest) {
 						return { tone: "ok", text: "Review passed — all conditions met. Now proceeding to approval." };
 					}
-					if (verdict === "pass" && phase === "implement" && isLatest) {
+					if (verdict === "pass" && phase === "implement" && isLatest && info.reviewRejected === true) {
 						// The reviewer claimed a complete pass and the code check sent
 						// it back: the gaps are the engine's, so the ticket's feedback
 						// is the honest text here and the call's own is the fallback.
+						// `reviewRejected` is what proves that reading. Without it a
+						// pass that landed and was later returned to implement by an
+						// approval follow-up plan would be called "not finished" — the
+						// opposite of its own turn, which is the whole bug this banner
+						// exists to avoid.
 						var gaps = oneLine(info.reviewFeedback || "");
 						if (gaps === "") gaps = own;
 						return { tone: "warn", text: "Review status: not finished" + (gaps ? " — " + gaps : "") + ". Back to implementation." };

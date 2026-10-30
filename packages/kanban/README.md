@@ -246,10 +246,12 @@ from one a phase gate refused, so the ticket's real phase is checked through the
 `sessionInfo` endpoint. The phase alone cannot tell a failed review from a later
 passed one in the same session, and would print **Review passed** on the turn
 that failed — so the verdict and feedback the call itself carried decide *which*
-transition to look for, and a pass is only claimed when the ticket's latest
-review is the one that call submitted. When the two do not agree, nothing is
-rendered. Long values are truncated to one line and the full text is in the
-hover tooltip.
+transition to look for, a pass is only claimed when the ticket's latest review is
+the one that call submitted, and a pass is only called unfinished when the host
+reports that the review was actually sent back (`reviewRejected`, derived from
+artifact ordering) rather than that the ticket happens to sit in `implement`
+again. When the two do not agree, nothing is rendered. Long values are truncated
+to one line and the full text is in the hover tooltip.
 
 ## Auto-recovery of a halted turn
 

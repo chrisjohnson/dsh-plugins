@@ -118,9 +118,18 @@ test('sessionInfo is a registered endpoint and answers from the board, not the c
   const caseBody = host.slice(host.indexOf("case 'sessionInfo'"))
   assert.match(caseBody, /store\.findSession\(sessionId\)/)
   // The projection is the ticket's real state: phase, plan, conditions, review.
-  for (const field of ['phase:', 'plan:', 'conditions:', 'review:', 'reviewFeedback:', 'acceptance:']) {
+  for (const field of ['phase:', 'plan:', 'conditions:', 'review:', 'reviewFeedback:', 'reviewRejected:', 'acceptance:']) {
     assert.match(caseBody, new RegExp(field), `sessionInfo must return ${field}`)
   }
+  // The client cannot tell "this pass was bounced by the code check" from "this
+  // pass landed and a follow-up plan moved the ticket back" without artifact
+  // ordering, so the host must derive it. Both rows come from latestArtifact and
+  // the comparison must be on ids, not on content or presence.
+  assert.match(caseBody, /reviewRejected: reviewArtifact !== undefined/, 'reviewRejected must require a review to exist')
+  assert.match(caseBody, /feedbackArtifact !== undefined/, 'reviewRejected must require feedback to exist')
+  assert.match(caseBody, /Number\(feedbackArtifact\.id\) > Number\(reviewArtifact\.id\)/, 'reviewRejected must compare artifact ids, newest feedback wins')
+  assert.match(caseBody, /latestArtifact\(ticket\.id, 'review'\)/)
+  assert.match(caseBody, /latestArtifact\(ticket\.id, 'review_feedback'\)/)
   assert.match(caseBody, /not_found/)
 })
 

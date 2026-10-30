@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+## 0.9.2
+
+### Fixed
+
+- **A review that passed is never called "not finished" by a later phase move.**
+  0.9.1 made the banner read its own call's verdict, but a pass was still judged
+  as bounced whenever the ticket happened to sit back in `implement` — and a
+  ticket gets there by a second route: asking for a follow-up plan during
+  approval moves it `verify → implement`. So a clean pass, followed later by a
+  follow-up round, displayed **Review status: not finished** quoting whatever
+  feedback an older round had left behind. The host now returns `reviewRejected`,
+  derived from artifact ordering (the engine writes the `review` row before the
+  `review_feedback` that rejects it, and ids are AUTOINCREMENT, so a newer
+  feedback row can only mean that review was sent back), and only an explicit
+  rejection may call a pass unfinished. When the evidence is ambiguous the banner
+  says nothing rather than something wrong.
+
 ## 0.9.1
 
 ### Fixed
