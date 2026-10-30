@@ -193,7 +193,10 @@ export default async function kanban(ctx, config = {}) {
           : ticket,
         awaitingQuestion,
         status: statusOf(ticket),
-        approvalSessionId: ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'approval') ?? null) : null,
+        // Approval runs inside the build session, so the session the panel opens
+        // while a ticket waits is that same one. The field name is the client's
+        // contract and stays.
+        approvalSessionId: ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null,
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
         sessions: store.listSessions(ticket.id),
@@ -277,10 +280,6 @@ export default async function kanban(ctx, config = {}) {
               const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
               return { ok: true, value: { ticket: updated } };
             }
-            if (action === 'approvalSession') {
-              const result = await engineRef.current.startApprovalSession(ticket.id);
-              return { ok: true, value: { sessionId: result.sessionId } };
-            }
             if (action === 'recoverSession') {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
               const attached = await driver.attachExistingSession(p.sessionId);
@@ -320,10 +319,6 @@ export default async function kanban(ctx, config = {}) {
             if (action === 'approve') {
               const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
               return { ok: true, value: { ticket: updated } };
-            }
-            if (action === 'approvalSession') {
-              const result = await engineRef.current.startApprovalSession(ticket.id);
-              return { ok: true, value: { sessionId: result.sessionId } };
             }
             if (action === 'recoverSession') {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
@@ -587,6 +582,7 @@ const TIMELINE_LABELS = {
   planner: 'Plan',
   implementer: 'Build',
   reviewer: 'Review',
+  approver: 'Approval',
 };
 
 /**
@@ -654,7 +650,7 @@ function timelineView(spans, artifacts = [], events = [], now = Date.now()) {
       });
     }
   }
-  const rolePhase = { planner: 'plan', implementer: 'implement', reviewer: 'review' };
+  const rolePhase = { planner: 'plan', implementer: 'implement', reviewer: 'review', approver: 'verify' };
   const EVENT_KINDS = new Set([
     'phase_changed', 'conditions_set', 'planned', 'implemented', 'review', 'verification_failed', 'done',
     'retry_scheduled', 'needs_attention_reason', 'stalled', 'recovered',

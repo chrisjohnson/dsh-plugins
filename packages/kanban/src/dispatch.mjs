@@ -2,8 +2,12 @@
 //
 // Sessions are grouped by purpose, not by role:
 //   plan          grill questions + plan submission (one flat session)
-//   build         implement <-> review (one session)
+//   build         implement <-> review, then approval (one session)
 //   verify        mechanical end gate (one session)
+//
+// Approval is a phase of the build session, not a session of its own: the same
+// conversation that built and reviewed the work is what asks the human what to
+// do with it.
 //
 // Every session starts once in the standard preset, so every standard tool a
 // normal session has is available to every role. Kanban registers no tool guard:
@@ -35,8 +39,24 @@ export class DispatchError extends Error {
 /** Session purpose for a phase/role. */
 export function purposeForRole(role) {
   if (role === 'planner') return 'plan';
-  if (role === 'implementer' || role === 'reviewer') return 'build';
+  // Approval is a phase of the build session: the session that built and
+  // reviewed the work is the one that asks the human to approve it.
+  if (role === 'implementer' || role === 'reviewer' || role === 'approver') return 'build';
   throw new DispatchError(`no workflow session purpose for role ${role}`, { code: 'NO_PURPOSE' });
+}
+
+/**
+ * The role a reopened session comes back as. A build session carries three
+ * phases, so the ticket's own phase decides which one it is mid-conversation;
+ * `purpose === 'approval'` is the pre-0.7.0 shape, where approval was a session
+ * of its own, and stays mapped so old rows reattach correctly.
+ */
+export function roleForSession(purpose, ticket) {
+  if (purpose === 'plan') return 'planner';
+  if (purpose === 'approval') return 'approver';
+  if (ticket.phase === 'verify') return 'approver';
+  if (ticket.phase === 'review') return 'reviewer';
+  return 'implementer';
 }
 
 /** Existing sessions can be reused within a purpose, never across purposes. */
@@ -362,7 +382,7 @@ export class SessionDriver {
     const agent = agentOverride ?? this.agents?.get?.(sessionId);
     if (agent === undefined || agent === null) return false;
     const purpose = record.purpose ?? 'build';
-    const role = purpose === 'plan' ? 'planner' : purpose === 'approval' ? 'approver' : purpose === 'build' && ticket.phase === 'review' ? 'reviewer' : 'implementer';
+    const role = roleForSession(purpose, ticket);
     const liveRef = {
       handle: { agent },
       role,

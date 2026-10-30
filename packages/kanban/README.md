@@ -1,9 +1,10 @@
 # dsh-kanban
 
 A ticket-centric workflow plugin for DeepSeek Harness. Tickets live in SQLite;
-code drives them through one flat plan session, an implement/review session, a
-code-gated review result, and a human approval stage. Agents return structured
-data by calling tools, not by printing JSON.
+code drives them through one flat plan session and one build session that
+implements, reviews and then carries approval, with a code-gated review result
+and a human who closes the ticket. Agents return structured data by calling
+tools, not by printing JSON.
 
 ## Install
 
@@ -21,18 +22,24 @@ plan session
   native ask_user_question (interactive) or self-judgement
   kanban_submit_plan
       ↓
-build-review session
+build session
   kanban_submit_implementation
   kanban_submit_review
   fail → implement again in the same session
       ↓ review pass with one done_when row per plan id
       ↓ and acceptance_coverage for every acceptance statement
-approval (attention card)
-  human approves, discards, or opens an interactive approval session
-  approval session tools: kanban_approve, kanban_discard, kanban_submit_plan
+  approval — the same session, flipped to the approver phase (attention card)
+  the agent hands the work over and asks; kanban_approve, kanban_discard,
+  kanban_submit_plan
       ↓ approve
    done
 ```
+
+Approval is a **phase**, not a session. The session that wrote the code and
+reviewed it is the one that asks the human what to do with it: it keeps its
+workspace, its history and its tools, its phase role flips to `approver`, and it
+moves onto the configured approver route. There is no separate approval session
+to launch, and no second conversation to catch up on what was built.
 
 There is no verification session. The review is checked in code against the
 original plan and acceptance: every planned done_when id must be present with
@@ -59,10 +66,11 @@ usual.
 Every session starts once in the **standard preset** and uses its natural system
 prompt, so a workflow session has every tool a normal session has. The plugin
 does not rebind presets, install a custom system prompt, or register a tool
-guard. The sandbox mode follows the session's **purpose**: plan is read-only,
-build (including its review phase) and approval are workspace-write, and a phase
-change inside one session never moves it. Workflow sessions attach to the
-ticket's selected workspace and are titled `KAN-n · purpose`.
+guard. The sandbox mode follows the session's **purpose**: plan is read-only and
+build is workspace-write through all three of its phases — implement, review and
+approval — and a phase change inside one session never moves it. Workflow
+sessions attach to the ticket's selected workspace and are titled
+`KAN-n · purpose`.
 
 Ticket choices:
 
@@ -71,8 +79,9 @@ Ticket choices:
   (self-judgement prompt)
 
 The plan session is one flat session: it asks questions, researches, and calls
-`kanban_submit_plan` when confident. A valid plan ends that session. Implement
-and review share one session; a complete review moves directly to human approval.
+`kanban_submit_plan` when confident. A valid plan ends that session. Implement,
+review and approval share one session; a complete review flips that same session
+to the approver phase and asks the human what to do with the work.
 
 ## Config
 
@@ -98,7 +107,7 @@ Everything below lives on the `kanban` row.
 | `defaultBudgetUsd`, `retentionDays`, `promptsDir` | budget, artifact retention, prompt directory. |
 
 Prompts are markdown files under `prompts/`: `plan-human.md`, `plan-self.md`,
-`implement.md`, `rework.md`, `review.md`. Their hashes are recorded
+`implement.md`, `rework.md`, `review.md`, `approval.md`. Their hashes are recorded
 on runs and spans.
 
 Config reload is atomic through `configEditor`; an invalid reload keeps the
@@ -118,7 +127,7 @@ never finds the tool it needs missing.
 | `planner` | plan | read-only | `kanban_submit_plan` |
 | `implementer` | build | workspace-write | `kanban_submit_implementation` |
 | `reviewer` | build | workspace-write | `kanban_submit_review` |
-| `approver` | approval | workspace-write | `kanban_approve`, `kanban_discard`, `kanban_submit_plan` |
+| `approver` | build | workspace-write | `kanban_approve`, `kanban_discard`, `kanban_submit_plan` |
 
 A misdirected call is an ordinary tool error the model can read and correct, and
 the engine re-validates the ticket's own phase before it records anything, so a
@@ -139,9 +148,11 @@ status: idle | active | attention                  (computed per card, never sto
   `at_pickup`.
 - Review pass is checked against the plan/acceptance by code and then moves to
   `approval`, where the ticket parks with an attention card wherever it stands.
-- Approval offers approve, discard, or an interactive workspace-write session.
-  The approval session can merge/deploy/iterate; its `kanban_submit_plan` starts
-  another implement/review round in the same column.
+- Approval is the build session's third phase. The engine flips that session to
+  the approver phase and route and sends it one slim hand-over prompt; the agent
+  summarizes and asks. You can answer it there, or use **Approve and close** /
+  **Discard** on the card. `kanban_submit_plan` there starts another
+  implement/review round in the same column.
 - Dragging a ticket between Backlog and Working is an unconditional human
   statement of intent: into Working starts (or resumes) the engine and lifts any
   park; back into Backlog stops it. There is no Blocked column and no automatic
@@ -172,9 +183,10 @@ somebody opened it — at which point [dsh-continue-kicker]'s reopen door kicked
 awake *outside* the workflow, so the board said "needs attention" while the
 session was actually still working.
 
-Now the engine recovers it inside the workflow. When a plan, implement or review
-turn fails, kanban asks the `continueKicker` service that plugin provides for
-one explicit kick (`kick(sessionId, { bypassCooldown: true })`), waits for the
+Now the engine recovers it inside the workflow. When a plan, implement, review or
+approval turn fails, kanban asks the `continueKicker` service that plugin
+provides for one explicit kick (`kick(sessionId, { bypassCooldown: true })`),
+waits for the
 turn it starts, and takes the structured submission from that turn exactly as it
 would from one it prompted itself. The ticket keeps its attention card off
 (blue, active) throughout; nothing parks until recovery stops.

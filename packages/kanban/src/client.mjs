@@ -1038,7 +1038,7 @@ var CSS =
 					),
 					h(Lifecycle, { ticket: t })
 				),
-				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); }, onStartSession: function () { props.onApprovalSession(t.id); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
+				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
@@ -1066,19 +1066,15 @@ var CSS =
 			var sessionId = d.approvalSessionId;
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
-			function start() {
-				setBusy(true);
-				props.onStartSession().finally(function () { setBusy(false); });
-			}
 			return h("div", { className: "kb-panel", style: { borderColor: "#f3b3ac", background: "#fffafa" } },
 				h("h3", { children: "Approval" }),
-				h("div", { className: "kb-hint", style: { marginBottom: 8 }, children: "The review is complete and every planned condition is accounted for. Approve to close, discard the work, or open an interactive approval session to merge, deploy, or iterate." }),
+				h("div", { className: "kb-hint", style: { marginBottom: 8 }, children: "The review is complete and every planned condition is accounted for. Approval happens in the build session: the agent wraps up, tells you what it did, and asks what to do next. Approve or discard here, or answer it in that session." }),
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary sm", disabled: busy, onClick: function () { setBusy(true); props.onApprove(props.ticket.id).finally(function () { setBusy(false); }); }, children: "Approve and close" }),
 					h("button", { className: "kb-btn danger sm", disabled: busy, onClick: props.onDiscard, children: "Discard" }),
 					sessionId
-						? h("button", { className: "kb-btn sm", onClick: function () { props.onOpenSession(sessionId); }, children: "Open approval session" })
-						: h("button", { className: "kb-btn sm", disabled: busy, onClick: start, children: busy ? "Starting…" : "Launch approval session" }))
+						? h("button", { className: "kb-btn sm", onClick: function () { props.onOpenSession(sessionId); }, children: "Open build session" })
+						: null)
 			);
 		}
 
@@ -1446,7 +1442,6 @@ var CSS =
 						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
-						onApprovalSession: function (id) { return act("action", { id: id, action: "approvalSession" }).then(function (res) { if (res && res.ok && res.value && res.value.sessionId && openSessionById) openSessionById(res.value.sessionId); }); },
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						h("div", { className: "kb-cols" },

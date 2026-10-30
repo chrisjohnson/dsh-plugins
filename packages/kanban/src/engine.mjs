@@ -1,7 +1,7 @@
 // dsh-kanban: the workflow engine.
 //
 // Code decides. This file owns every transition: flat plan session, the
-// implement <-> review session, code-gated approval, retries,
+// implement <-> review -> approval session, code-gated approval, retries,
 // human attention, and session teardown. Agents return structured data through
 // tools; no phase result is parsed out of assistant prose.
 
@@ -364,8 +364,7 @@ export class Engine {
         this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: feedback });
         return { kind: 'continue' };
       }
-      await this.closeSession(turn.sessionId);
-      await this.enterApproval(ticket);
+      await this.enterApproval(ticket, turn.sessionId);
       return { kind: 'wait' };
     }
     const instruction = typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; ');
@@ -375,15 +374,77 @@ export class Engine {
   }
 
   // --------------------------------------------------------------- approval
+  //
+  // Approval is a phase of the build session, not a session of its own. The
+  // session that just passed review keeps its workspace, its history and its
+  // tools; only its phase role flips to `approver` — which is what arms
+  // kanban_approve / kanban_discard / kanban_submit_plan — and its route flips to
+  // the configured approver route. One slim prompt asks the agent to hand the
+  // work over to the human, and the ticket then parks for them.
 
-  async enterApproval(ticket) {
-    this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed; awaiting approval' });
-    this.store.setNeedsAttention(ticket.id, 'Awaiting human approval');
-    this.appendEvent(ticket.id, 'approval_requested', {
+  async enterApproval(ticket, sessionId) {
+    const current = this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed; awaiting approval' });
+    this.appendEvent(current.id, 'approval_requested', {
       phaseFrom: 'review',
       phaseTo: 'verify',
-      payload: { attempt: ticket.attemptCount },
+      payload: { attempt: current.attemptCount },
     });
+    const route = this.resolveRoute('approver', current.attemptCount);
+    if (route.provider === null || route.model === null) {
+      // Nothing to prompt with: park the ticket the way the pre-0.7.0 flow did and
+      // let the human approve, discard or retry from the board.
+      this.log.warn('ticket %s has no approver route; parking without an approval turn', current.key);
+      this.store.setNeedsAttention(current.id, 'Awaiting human approval');
+      return { kind: 'wait' };
+    }
+    // Flip the session that is about to be prompted before prompting it, so the
+    // approval tools are live for this turn even when the build session was
+    // reopened after a restart and its role is still whatever it last was.
+    if (typeof sessionId === 'string' && this.driver.isLive?.(sessionId) === true) {
+      this.driver.setPhase(sessionId, 'approver');
+      this.driver.setRoute(sessionId, route);
+    }
+    const prompts = this.getPrompts();
+    const acceptance = this.store.listAcceptance(current.id);
+    const planArtifact = this.store.latestArtifact(current.id, 'plan');
+    const reviewArtifact = this.store.latestArtifact(current.id, 'review');
+    const prompt = render(prompts.bodies.approval, {
+      key: current.key,
+      title: current.title,
+      acceptance: acceptanceBlock(acceptance),
+      plan: planArtifact === undefined ? '(none)' : planArtifact.content,
+      review: reviewArtifact === undefined ? '(none)' : reviewArtifact.content,
+    });
+    // A manual review submission concludes the human's turn and asks for the
+    // approval turn in the same beat; sending into a session whose turn is still
+    // finishing is rejected as busy, so let it go quiet first.
+    await this.awaitQuiet(current);
+    const runId = this.ensureRun(current);
+    let turn = await this.roleTurn({ ticket: current, role: 'approver', purpose: 'build', route, prompt, spanName: 'approval', attempt: current.attemptCount, runId });
+    if (turn.kind !== 'ok') turn = (await this.autoRecover(current, turn, 'approval')) ?? turn;
+    if (turn.kind !== 'ok') return this.failedTurn(current, turn, 'approval');
+    // The agent may have closed the ticket or asked for another round from inside
+    // this very turn: `kanban_approve` / `kanban_discard` move the column and
+    // `kanban_submit_plan` lifts the park itself. Once the ticket has moved on its
+    // own, parking it here would only be noise.
+    const after = this.store.getTicket(current.id);
+    if (after === undefined || TERMINAL_COLUMNS.includes(after.column) || after.phase !== 'verify') {
+      return { kind: 'wait' };
+    }
+    this.store.setNeedsAttention(current.id, 'Awaiting human approval');
+    return { kind: 'wait' };
+  }
+
+  /**
+   * Wait until no session of this ticket has a turn in flight. Bounded: a session
+   * that never settles gets the same failed turn any busy dispatch would, rather
+   * than hanging the engine.
+   */
+  async awaitQuiet(ticket, { rounds = 60, delayMs = 50 } = {}) {
+    for (let i = 0; i < rounds && !this.disposed && this.busy(ticket); i++) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    return !this.busy(ticket);
   }
 
   async approve(ticketId, message = '') {
@@ -407,57 +468,6 @@ export class Engine {
     return discarded;
   }
 
-  async startApprovalSession(ticketId) {
-    const ticket = this.store.getTicket(ticketId);
-    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
-    if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
-    const route = this.resolveRoute('approver', ticket.attemptCount);
-    const result = await this.driver.ensureTicketSession({ ticket, role: 'approver', route, purpose: 'approval' });
-    this.driver.setPhase(result.sessionId, 'approver');
-    this.driver.setRoute(result.sessionId, route);
-    this.store.attachSession({
-      ticketId: ticket.id,
-      dshSessionId: result.sessionId,
-      role: 'approver',
-      purpose: 'approval',
-      provider: route.provider,
-      model: route.model,
-    });
-    void this.approvalIntro(ticket, result.sessionId, route);
-    return result;
-  }
-
-  async approvalIntro(ticket, sessionId, route) {
-    const plan = this.store.latestArtifact(ticket.id, 'plan');
-    const review = this.store.latestArtifact(ticket.id, 'review');
-    const acceptance = this.store.listAcceptance(ticket.id);
-    const prompt = [
-      `Approval session for ${ticket.key}: ${ticket.title}`,
-      '',
-      'The implementation passed code-checkable review and is waiting for the human.',
-      'You have workspace-write, shell, browser and repository tools. Inspect, merge, deploy, or iterate only when the human asks.',
-      'Do not call kanban_approve, kanban_discard, or kanban_submit_plan until the human explicitly asks.',
-      '',
-      'Ticket body:',
-      ticket.body || '(empty)',
-      '',
-      'Acceptance:',
-      acceptanceBlock(acceptance),
-      '',
-      'Plan:',
-      plan?.content ?? '(none)',
-      '',
-      'Review:',
-      review?.content ?? '(none)',
-    ].join('\n');
-    try {
-      const runId = this.ensureRun(ticket);
-      await this.roleTurn({ ticket, role: 'approver', purpose: 'approval', route, prompt, spanName: 'approval', attempt: ticket.attemptCount, runId });
-    } catch (error) {
-      this.log.warn('approval session intro failed: %s', String(error?.message ?? error));
-    }
-  }
-
   async submitApprovalPlan(ticketId, value) {
     const ticket = this.store.getTicket(ticketId);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
@@ -469,10 +479,12 @@ export class Engine {
     this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
     this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
     this.appendEvent(ticket.id, 'planned', { phaseFrom: 'verify', phaseTo: 'implement', payload: { planVersion: version, fromApproval: true } });
-    const sessionId = this.driver.liveTicketSession(ticket.id, 'approval');
+    const sessionId = this.driver.liveTicketSession(ticket.id, 'build');
     if (sessionId !== undefined) await this.closeSession(sessionId);
     // The follow-up plan takes over the ticket where it stands: the approval
-    // park is lifted and the engine drives Build again in the same column.
+    // park is lifted and the engine drives Build again in the same column. The
+    // session that carried approval is closed with it, so the next round starts
+    // a fresh build session rather than continuing the approval conversation.
     this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'approval follow-up plan' });
     return this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
   }
@@ -526,8 +538,7 @@ export class Engine {
         this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: feedback });
         return;
       }
-      await this.closeSession(sessionId);
-      await this.enterApproval(ticket);
+      await this.enterApproval(ticket, sessionId);
       return;
     }
     throw new StoreError('invalid_phase', `${action.type} cannot be submitted from ${ticket.phase}/${purpose}`);
