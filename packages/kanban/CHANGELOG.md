@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.9.3
+
+### Fixed
+
+- **A review call whose arguments never parsed no longer claims an outcome.**
+  0.9.1 and 0.9.2 made each banner read its own call's verdict, but left one
+  branch reading the ticket's phase alone: when `argsRaw` did not parse, the
+  banner inferred **Review passed** (ticket at `verify`) or **Review status: not
+  finished** quoting another round's feedback (ticket at `implement`). A
+  non-parsing `argsRaw` means the call may never have run at all — an interrupted
+  turn, or a tool-call block still streaming — and a schema-valid review always
+  carries a verdict, so there was nothing to infer. That branch now renders
+  nothing. Silence is never wrong; a guessed outcome is.
+
 ## 0.9.2
 
 ### Fixed
