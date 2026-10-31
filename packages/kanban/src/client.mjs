@@ -354,6 +354,21 @@ var CSS =
 		+ "@keyframes kb-glow-blue{0%,100%{box-shadow:0 0 0 1px rgba(37,99,235,.08),0 4px 16px rgba(37,99,235,.05)}50%{box-shadow:0 0 0 1.5px rgba(37,99,235,.32),0 8px 28px rgba(37,99,235,.15)}}"
 		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
 		+ "@media (max-width:900px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+		+ ".kb-img-row{display:flex;align-items:center;gap:8px;margin:4px 0 2px}"
+		+ ".kb-img-rail{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}"
+		+ ".kb-img-tile{position:relative;width:56px;height:56px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);border-radius:var(--dsw-radius-sm,8px);overflow:hidden;background:var(--dsw-alias-bg-layer-2,#f2f2f2)}"
+		+ ".kb-img-tile img{width:100%;height:100%;object-fit:cover;display:block}"
+		+ ".kb-img-x{position:absolute;top:2px;right:2px;width:16px;height:16px;line-height:15px;padding:0;border:0;border-radius:999px;background:rgba(17,17,17,.72);color:#fff;font:600 12px/15px var(--dsw-font-family,sans-serif);text-align:center;cursor:pointer}"
+		+ ".kb-md{font:400 13px/20px var(--dsw-font-family,sans-serif);overflow-wrap:anywhere}"
+		+ ".kb-md h1,.kb-md h2,.kb-md h3{font-size:15px;margin:10px 0 4px}"
+		+ ".kb-md h4,.kb-md h5,.kb-md h6{font-size:13px;margin:8px 0 4px}"
+		+ ".kb-md p{margin:0 0 8px}"
+		+ ".kb-md ul,.kb-md ol{margin:0 0 8px;padding-left:20px}"
+		+ ".kb-md code{font:400 12px/18px ui-monospace,SFMono-Regular,monospace;background:var(--dsw-alias-bg-layer-2,#f2f2f2);border-radius:4px;padding:0 4px}"
+		+ ".kb-md pre{margin:0 0 8px;background:var(--dsw-alias-bg-layer-2,#f2f2f2);border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:var(--dsw-radius-sm,8px);padding:8px 10px;overflow:auto}"
+		+ ".kb-md pre code{background:none;padding:0}"
+		+ ".kb-md img{max-width:100%;max-height:360px;border-radius:var(--dsw-radius-sm,8px);border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);display:block;margin:4px 0}"
+		+ ".kb-img-broken{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);background:var(--dsw-alias-bg-layer-2,#eee);color:var(--dsw-alias-label-tertiary,#888);font:500 11px/16px var(--dsw-font-family,sans-serif)}"
 		+ "";
 
 		function ensureStyles() {
@@ -609,6 +624,278 @@ var CSS =
 			});
 		}
 
+		// ---------------------------------------------------------------- images
+		//
+		// A ticket body carries image refs as markdown: ![name](kanban-image:<id>).
+		// While a draft is open the id is a client token — pending-<token> — and
+		// the Host stores the bytes in DSH's content-addressed attachment store
+		// and rewrites the refs before the body is persisted (src/images.mjs).
+		// The browser half cannot import that module, so the small rules below
+		// mirror it; the Host re-checks everything on save regardless.
+
+		var IMG_PREFIX = "kanban-image:";
+		var IMG_MAX = 10;
+		var IMG_MAX_BYTES = 20 * 1024 * 1024;
+		var IMG_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+		var IMG_REF_RE = /!\[([^\]\n]*)\]\(\s*kanban-image:([^\s)]+)\s*\)/g;
+
+		function imgRefText(name, target) {
+			var clean = String(name || "").replace(/[\]\n\r]/g, " ").trim().slice(0, 120);
+			return "![" + (clean === "" ? "image" : clean) + "](" + IMG_PREFIX + target + ")";
+		}
+		function imgCountRefs(body) {
+			var seen = {};
+			var text = String(body || "");
+			var m;
+			IMG_REF_RE.lastIndex = 0;
+			while ((m = IMG_REF_RE.exec(text)) !== null) {
+				if (!Object.prototype.hasOwnProperty.call(seen, m[2])) seen[m[2]] = true;
+			}
+			return Object.keys(seen).length;
+		}
+		function imgInsertRef(body, cursor, token, name) {
+			var text = String(body || "");
+			var at = Math.max(0, Math.min(Number.isFinite(cursor) ? Math.trunc(cursor) : text.length, text.length));
+			var before = text.slice(0, at);
+			var after = text.slice(at);
+			var lead = before === "" ? "" : before.slice(-2) === "\n\n" ? "" : before.slice(-1) === "\n" ? "\n" : "\n\n";
+			var tail = after === "" ? "\n" : after.charAt(0) === "\n" ? "\n" : "\n\n";
+			return before + lead + imgRefText(name, "pending-" + token) + tail + after;
+		}
+		function imgRemoveRef(body, token) {
+			var text = String(body || "");
+			var target = String(token || "");
+			if (target === "") return text;
+			if (target.indexOf("pending-") !== 0 && target.indexOf("sha256:") !== 0) target = "pending-" + target;
+			var esc = function (v) { return v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); };
+			var one = new RegExp("(?:\\n\\n|\\n)?!\\[[^\\]\\n]*\\]\\(\\s*" + esc(IMG_PREFIX) + esc(target) + "\\s*\\)(?:\\n\\n|\\n)?", "g");
+			return text.replace(one, "\n\n").replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n");
+		}
+		function imgToken() {
+			return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+		}
+		function fileToBase64(file) {
+			return new Promise(function (resolve, reject) {
+				var reader = new FileReader();
+				reader.onload = function () { resolve(String(reader.result).split(",")[1] || ""); };
+				reader.onerror = function () { reject(new Error("could not read " + (file && file.name ? file.name : "image"))); };
+				reader.readAsDataURL(file);
+			});
+		}
+
+		// One draft-image manager shared by CreateForm and TicketEditor: it owns
+		// the pending tiles and keeps the body text and the tiles in step — an
+		// ingest inserts the ref at the cursor, an X removes tile and ref alike.
+		// Every hook it calls is unconditional, and both callers call it
+		// unconditionally, so the hook order of either form never varies.
+		function imageDrafts(getBody, setBody, bodyRef) {
+			var st = React.useState([]);
+			var drafts = st[0], setDrafts = st[1];
+			var er = React.useState(null);
+			var error = er[0], setError = er[1];
+			var keep = React.useRef([]);
+			keep.current = drafts;
+			React.useEffect(function () {
+				return function () {
+					keep.current.forEach(function (d) { try { URL.revokeObjectURL(d.url); } catch (e) { /* gone already */ } });
+				};
+			}, []);
+			function ingest(fileList) {
+				var files = Array.prototype.slice.call(fileList || []).filter(function (f) {
+					return f && IMG_TYPES.indexOf(f.type) !== -1;
+				});
+				if (files.length === 0) return false;
+				var body = String(getBody() || "");
+				var cursor = bodyRef && bodyRef.current ? bodyRef.current.selectionStart : body.length;
+				var added = [];
+				var problem = null;
+				files.forEach(function (file) {
+					if (imgCountRefs(body) + added.length >= IMG_MAX) { problem = "A ticket carries at most " + IMG_MAX + " images."; return; }
+					if (file.size > IMG_MAX_BYTES) { problem = (file.name || "That image") + " is over the 20 MB limit."; return; }
+					var token = imgToken();
+					body = imgInsertRef(body, added.length === 0 ? cursor : body.length, token, file.name || "image");
+					added.push({ token: token, name: file.name || "image", mediaType: file.type, file: file, url: URL.createObjectURL(file) });
+				});
+				setBody(body);
+				if (added.length > 0) setDrafts(function (prev) { return prev.concat(added); });
+				setError(problem);
+				return true;
+			}
+			function remove(token) {
+				setDrafts(function (prev) {
+					var hit = null;
+					prev.forEach(function (d) { if (d.token === token) hit = d; });
+					if (hit !== null) { try { URL.revokeObjectURL(hit.url); } catch (e) { /* gone already */ } }
+					return prev.filter(function (d) { return d.token !== token; });
+				});
+				setBody(imgRemoveRef(String(getBody() || ""), "pending-" + token));
+			}
+			function collect() {
+				return Promise.all(drafts.map(function (d) {
+					return fileToBase64(d.file).then(function (data) {
+						return { token: d.token, data: data, mediaType: d.mediaType, name: d.name };
+					});
+				}));
+			}
+			return { drafts: drafts, error: error, ingest: ingest, remove: remove, collect: collect };
+		}
+
+		function ImageRail(props) {
+			if (!props.drafts || props.drafts.length === 0) return null;
+			return h("div", { className: "kb-img-rail" },
+				props.drafts.map(function (d) {
+					return h("div", { className: "kb-img-tile", key: d.token, title: d.name },
+						h("img", { src: d.url, alt: d.name }),
+						h("button", { type: "button", className: "kb-img-x", "aria-label": "Remove " + d.name, title: "Remove " + d.name, onClick: function () { props.onRemove(d.token); }, children: "×" }));
+				}));
+		}
+
+		function ImageControls(props) {
+			// The one ingest surface: the textarea wires onPaste/onDrop to the
+			// same ingest, and this bar adds the file picker and the tiles.
+			return h("div", null,
+				h("div", { className: "kb-img-row" },
+					h("button", { type: "button", className: "kb-btn sm", onClick: function () { if (props.fileRef.current) props.fileRef.current.click(); }, children: "Add image" }),
+					h("input", { ref: props.fileRef, type: "file", accept: IMG_TYPES.join(","), multiple: true, style: { display: "none" }, "aria-hidden": "true", tabIndex: -1, onChange: function (ev) { props.ingest(ev.target.files); ev.target.value = ""; } }),
+					h("span", { className: "kb-hint", children: "Paste, drop or add up to " + IMG_MAX + " images (png, jpeg, webp, gif · 20 MB each)." })),
+				h(ImageRail, { drafts: props.drafts, onRemove: props.onRemove }),
+				props.error ? h("div", { className: "kb-err", children: props.error }) : null);
+		}
+
+		// The body ref handlers, spread onto the body textarea by both forms.
+		function imageTextareaProps(imgs, bodyRef) {
+			return {
+				ref: bodyRef,
+				onPaste: function (ev) {
+					var files = ev.clipboardData ? ev.clipboardData.files : null;
+					if (files && files.length > 0 && imgs.ingest(files)) ev.preventDefault();
+				},
+				onDragOver: function (ev) { ev.preventDefault(); },
+				onDrop: function (ev) {
+					ev.preventDefault();
+					if (ev.dataTransfer && ev.dataTransfer.files) imgs.ingest(ev.dataTransfer.files);
+				},
+			};
+		}
+
+		// ------------------------------------------------- read-only body view
+
+		var imgDataCache = {};
+		function loadImageDataUrl(attachmentId) {
+			if (imgDataCache[attachmentId] !== undefined) return imgDataCache[attachmentId];
+			imgDataCache[attachmentId] = rpc("readImage", { attachmentId: attachmentId }).then(function (res) {
+				if (!res || !res.ok || !res.value || !res.value.base64) throw new Error(res && res.error ? res.error.message : "image unavailable");
+				return "data:" + (res.value.mediaType || "image/png") + ";base64," + res.value.base64;
+			}).catch(function (error) {
+				delete imgDataCache[attachmentId];
+				throw error;
+			});
+			return imgDataCache[attachmentId];
+		}
+
+		function BodyImage(props) {
+			var st = React.useState(null);
+			var state = st[0], setState = st[1];
+			React.useEffect(function () {
+				var alive = true;
+				setState(null);
+				loadImageDataUrl(props.attachmentId).then(function (url) {
+					if (alive) setState({ ok: true, url: url });
+				}, function () { if (alive) setState({ ok: false }); });
+				return function () { alive = false; };
+			}, [props.attachmentId]);
+			if (state === null) return h("span", { className: "kb-img-broken", children: "loading image…" });
+			if (!state.ok) return h("span", { className: "kb-img-broken", children: "image unavailable" + (props.name ? " · " + props.name : "") });
+			return h("img", { src: state.url, alt: props.name || "ticket image", title: props.name || "" });
+		}
+
+		/**
+		 * Light markdown inline pass: image refs, http(s) links, code, bold,
+		 * italic — every piece built as a React element with text children. The
+		 * body is untrusted data and is never interpreted as HTML.
+		 */
+		function mdInline(text, key) {
+			var nodes = [];
+			var re = /!\[([^\]\n]*)\]\(\s*kanban-image:([^\s)]+)\s*\)|\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
+			var last = 0;
+			var m;
+			var i = 0;
+			while ((m = re.exec(text)) !== null) {
+				if (m.index > last) nodes.push(text.slice(last, m.index));
+				if (m[1] !== undefined) nodes.push(h(BodyImage, { key: key + "-" + i, attachmentId: m[2], name: m[1] }));
+				else if (m[3] !== undefined) nodes.push(h("a", { key: key + "-" + i, href: m[4], target: "_blank", rel: "noreferrer", children: m[3] === "" ? m[4] : m[3] }));
+				else if (m[5] !== undefined) nodes.push(h("code", { key: key + "-" + i, children: m[5] }));
+				else if (m[6] !== undefined) nodes.push(h("b", { key: key + "-" + i, children: m[6] }));
+				else if (m[7] !== undefined) nodes.push(h("i", { key: key + "-" + i, children: m[7] }));
+				last = re.lastIndex;
+				i += 1;
+			}
+			if (last < text.length) nodes.push(text.slice(last));
+			return nodes;
+		}
+
+		/**
+		 * The read-only Body panel renderer: fenced code, headings, lists,
+		 * blockquotes and paragraphs, each line run through mdInline. Deliberate
+		 * subset — the body is context, not a document.
+		 */
+		function renderMarkdown(text) {
+			var lines = String(text || "").split(/\r?\n/);
+			var out = [];
+			var i = 0;
+			var key = 0;
+			var BLOCK_START = /^(#{1,6}\s|\s*[-*]\s|\s*\d+\.\s|\s*>|```)/;
+			while (i < lines.length) {
+				var line = lines[i];
+				if (/^\s*$/.test(line)) { i += 1; continue; }
+				if (line.trim().indexOf("```") === 0) {
+					var code = [];
+					i += 1;
+					while (i < lines.length && lines[i].trim().indexOf("```") !== 0) { code.push(lines[i]); i += 1; }
+					i += 1;
+					out.push(h("pre", { key: "k" + key, className: "kb-md-code" }, h("code", { children: code.join("\n") })));
+					key += 1;
+					continue;
+				}
+				var hm = line.match(/^(#{1,6})\s+(.*)$/);
+				if (hm) {
+					var Tag = "h" + Math.min(hm[1].length + 2, 6);
+					out.push(h(Tag, { key: "k" + key }, mdInline(hm[2], "h" + key)));
+					key += 1;
+					i += 1;
+					continue;
+				}
+				if (/^\s*[-*]\s+/.test(line)) {
+					var items = [];
+					while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*]\s+/, "")); i += 1; }
+					out.push(h("ul", { key: "k" + key }, items.map(function (it, n) { return h("li", { key: n }, mdInline(it, "ul" + key + "-" + n)); })));
+					key += 1;
+					continue;
+				}
+				if (/^\s*\d+\.\s+/.test(line)) {
+					var oitems = [];
+					while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { oitems.push(lines[i].replace(/^\s*\d+\.\s+/, "")); i += 1; }
+					out.push(h("ol", { key: "k" + key }, oitems.map(function (it, n) { return h("li", { key: n }, mdInline(it, "ol" + key + "-" + n)); })));
+					key += 1;
+					continue;
+				}
+				if (/^\s*>\s?/.test(line)) {
+					var quote = [];
+					while (i < lines.length && /^\s*>\s?/.test(lines[i])) { quote.push(lines[i].replace(/^\s*>\s?/, "")); i += 1; }
+					out.push(h("blockquote", { key: "k" + key }, quote.map(function (l, n) { return h("div", { key: n }, mdInline(l, "q" + key + "-" + n)); })));
+					key += 1;
+					continue;
+				}
+				var para = [];
+				while (i < lines.length && !/^\s*$/.test(lines[i]) && !BLOCK_START.test(lines[i])) { para.push(lines[i]); i += 1; }
+				out.push(h("p", { key: "k" + key }, para.map(function (l, n) {
+					return h(React.Fragment, { key: n }, n > 0 ? h("br") : null, mdInline(l, "p" + key + "-" + n));
+				})));
+				key += 1;
+			}
+			return out;
+		}
+
 		function CreateForm(props) {
 			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
 			var form = s[0], setForm = s[1];
@@ -624,6 +911,15 @@ var CSS =
 			var worktreeError = we[0], setWorktreeError = we[1];
 			var ws = React.useState(null);
 			var extraWorkspace = ws[0], setExtraWorkspace = ws[1];
+			var br = React.useRef(null);
+			var bodyRef = br;
+			var fr = React.useRef(null);
+			var fileRef = fr;
+			var imgs = imageDrafts(
+				function () { return form.body; },
+				function (next) { setForm(function (prev) { var o = Object.assign({}, prev); o.body = next; return o; }); },
+				bodyRef
+			);
 			var invalid = false;
 			function field(key, value) {
 				var next = Object.assign({}, form);
@@ -647,32 +943,38 @@ var CSS =
 				if (invalid || form.title.trim() === "") return;
 				setBusy(true);
 				setErr(null);
-				rpc("create", {
-					title: form.title,
-					body: form.body,
-					acceptance: form.acceptance.split("\n").map(function (x) { return x.trim(); }).filter(Boolean),
-					planTiming: form.timing,
-					planQuestions: form.questions,
-					priority: Number(form.priority) || 0,
-					allowPaid: !!form.allowPaid,
-					budgetUsd: Number(form.budget) || 0,
-					workspaceCwd: form.workspace || null,
-					column: form.status
-				}).then(function (res) {
-					setBusy(false);
-					if (res && res.ok) {
-						setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
-						props.onCreated(res.value.ticket);
-					} else {
-						setErr(res && res.error ? res.error.message : "Could not create the ticket.");
-					}
-				}, function () { setBusy(false); setErr("Could not reach the Host."); });
+				// The pending tiles ride along as base64 uploads; the Host stores
+				// them and rewrites the pending refs before the body is written.
+				imgs.collect().then(function (images) {
+					rpc("create", {
+						title: form.title,
+						body: form.body,
+						images: images,
+						acceptance: form.acceptance.split("\n").map(function (x) { return x.trim(); }).filter(Boolean),
+						planTiming: form.timing,
+						planQuestions: form.questions,
+						priority: Number(form.priority) || 0,
+						allowPaid: !!form.allowPaid,
+						budgetUsd: Number(form.budget) || 0,
+						workspaceCwd: form.workspace || null,
+						column: form.status
+					}).then(function (res) {
+						setBusy(false);
+						if (res && res.ok) {
+							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
+							props.onCreated(res.value.ticket);
+						} else {
+							setErr(res && res.error ? res.error.message : "Could not create the ticket.");
+						}
+					}, function () { setBusy(false); setErr("Could not reach the Host."); });
+				}, function () { setBusy(false); setErr("An image could not be read; try again."); });
 			}
 			return h("div", { className: "kb-form" },
 				h("div", { className: "kb-label", children: "Title" }),
 				h("input", { className: "kb-input", "aria-label": "Ticket title", value: form.title, placeholder: "What needs to happen?", onChange: function (ev) { field("title", ev.target.value); } }),
 				h("div", { className: "kb-label", children: "Body / context" }),
-				h("textarea", { className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }),
+				h("textarea", Object.assign({ className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }, imageTextareaProps(imgs, bodyRef))),
+				h(ImageControls, { fileRef: fileRef, ingest: imgs.ingest, drafts: imgs.drafts, onRemove: imgs.remove, error: imgs.error }),
 				h("div", { className: "kb-label", children: "Acceptance (one per line, stored verbatim; may be aspirational)" }),
 				h("textarea", { className: "kb-textarea", "aria-label": "Acceptance statements", value: form.acceptance, onChange: function (ev) { field("acceptance", ev.target.value); } }),
 				h("div", { className: "kb-row" },
@@ -825,6 +1127,15 @@ var CSS =
 			var busy = b[0], setBusy = b[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
+			var br = React.useRef(null);
+			var bodyRef = br;
+			var fr = React.useRef(null);
+			var fileRef = fr;
+			var imgs = imageDrafts(
+				function () { return form.body; },
+				function (next) { setForm(function (prev) { var o = Object.assign({}, prev); o.body = next; return o; }); },
+				bodyRef
+			);
 			function field(key, value) {
 				var next = Object.assign({}, form);
 				next[key] = value;
@@ -848,20 +1159,31 @@ var CSS =
 				var lines = form.acceptance.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
 				var acceptanceChanged = lines.length !== prior.length || lines.some(function (line, i) { return line !== prior[i]; });
 				if (acceptanceChanged) patch.acceptance = lines;
-				if (Object.keys(patch).length === 0) { props.onClose(); return; }
-				setBusy(true);
-				setErr(null);
-				Promise.resolve(props.onSave(patch)).then(function (res) {
-					setBusy(false);
-					if (res && res.ok) props.onClose();
-					else setErr(res && res.error ? res.error.message : "The ticket could not be saved.");
-				}, function () { setBusy(false); setErr("Could not reach the Host."); });
+				// Pending tiles ride as base64 uploads beside the patch; the
+				// Host stores them and rewrites the refs before anything is
+				// written, so a failed image save applies no patch at all.
+				imgs.collect().then(function (images) {
+					if (images.length > 0) {
+						patch.images = images;
+						if (patch.body === undefined) patch.body = form.body;
+					}
+					var realChange = Object.keys(patch).some(function (k) { return k !== "images"; });
+					if (!realChange) { props.onClose(); return; }
+					setBusy(true);
+					setErr(null);
+					Promise.resolve(props.onSave(patch)).then(function (res) {
+						setBusy(false);
+						if (res && res.ok) props.onClose();
+						else setErr(res && res.error ? res.error.message : "The ticket could not be saved.");
+					}, function () { setBusy(false); setErr("Could not reach the Host."); });
+				}, function () { setErr("An image could not be read; try again."); });
 			}
 			return h("div", { className: "kb-form" },
 				h("div", { className: "kb-label", children: "Title" }),
 				h("input", { className: "kb-input", "aria-label": "Ticket title", value: form.title, onChange: function (ev) { field("title", ev.target.value); } }),
 				h("div", { className: "kb-label", children: "Body / context" }),
-				h("textarea", { className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }),
+				h("textarea", Object.assign({ className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }, imageTextareaProps(imgs, bodyRef))),
+				h(ImageControls, { fileRef: fileRef, ingest: imgs.ingest, drafts: imgs.drafts, onRemove: imgs.remove, error: imgs.error }),
 				h("div", { className: "kb-label", children: "Acceptance (one per line, stored verbatim; may be aspirational)" }),
 				h("textarea", { className: "kb-textarea", "aria-label": "Acceptance statements", value: form.acceptance, placeholder: "One acceptance statement per line…", onChange: function (ev) { field("acceptance", ev.target.value); } }),
 				h("div", { className: "kb-hint", children: "This list replaces the whole acceptance: edit a line to change it, delete a line to remove it." }),
@@ -1124,7 +1446,15 @@ var CSS =
 						ticket: t,
 						acceptance: d.acceptance,
 						onClose: function () { setModal(null); },
-						onSave: function (patch) { return props.onSave(t.id, patch); }
+						onSave: function (patch) {
+							// images is a sibling of patch on the wire: the Host
+							// stores the uploads, then applies the patch whose
+							// body carries the resolved refs.
+							var images = patch.images;
+							var clean = Object.assign({}, patch);
+							delete clean.images;
+							return props.onSave(t.id, clean, images || []);
+						}
 					}))
 			);
 		}
@@ -1187,6 +1517,10 @@ var CSS =
 						h("b", { children: "Allow paid" }), h("span", { children: t.allowPaid ? "yes" : "no" }),
 						h("b", { children: "Created" }), h("span", { children: fmtTime(t.createdAt) }),
 						h("b", { children: "Updated" }), h("span", { children: ago(t.updatedAt) }))
+				),
+				h("div", { className: "kb-panel kb-md" },
+					h("h3", { children: "Body" }),
+					t.body && String(t.body).trim() !== "" ? renderMarkdown(t.body) : h("div", { className: "kb-hint", children: "Nothing written yet." })
 				),
 				h("div", { className: "kb-panel" },
 					h("div", { className: "kb-panelhead" },
@@ -1548,7 +1882,7 @@ var CSS =
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						onBack: function () { setSelectedId(null); setDetail(null); },
-						onSave: function (id, patch) { return act("update", { id: id, patch: patch }); },
+						onSave: function (id, patch, images) { return act("update", { id: id, patch: patch, images: images || [] }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
