@@ -274,6 +274,9 @@ var CSS =
 		+ "@media (prefers-color-scheme:dark){.kb-nav-badge.run{color:#93c5fd;background:rgba(37,99,235,.22);border-color:rgba(96,165,250,.45)}.kb-nav-badge.attn{color:#fca5a5;background:rgba(185,28,28,.22);border-color:rgba(248,113,113,.42)}}"
 		+ ".kb-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l3,#cbd2da);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-2,#f4f6f8);color:var(--dsw-alias-label-secondary,#555);cursor:pointer;padding:0;flex:none}"
 		+ ".kb-iconbtn:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,#f2f4f7)}"
+		+ ".kb-edit-lock{display:inline-flex}"
+		+ ".kb-iconbtn:disabled{opacity:.45;cursor:not-allowed}"
+		+ ".kb-iconbtn:disabled:hover{color:var(--dsw-alias-label-secondary,#555);background:var(--dsw-alias-bg-layer-2,#f4f6f8)}"
 		+ ".kb-panelhead{display:flex;align-items:center;justify-content:space-between;gap:8px}"
 		+ ".kb-modal-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:max(24px,var(--dsh-frame-overlay-top,24px)) 24px;background:var(--dsw-alias-bg-mask-1,rgba(15,23,42,.34));backdrop-filter:var(--dsw-mask-blur,none)}"
 		+ ".kb-modal{box-sizing:border-box;width:min(640px,100%);max-height:82vh;overflow:auto;background:var(--dsw-alias-bg-layer-2,#f7f8fa);border:0;border-radius:var(--dsw-radius-panel,28px);padding:24px;box-shadow:var(--dsw-elevation-prominent,0 24px 70px rgba(15,23,42,.28))}"
@@ -798,57 +801,108 @@ var CSS =
 			);
 		}
 
-		function AcceptanceEditor(props) {
-			var s = React.useState("");
-			var text = s[0], setText = s[1];
+		// The one ticket editor. It replaces the old "modes and budget" pencil and
+		// the add-only acceptance dialog: a pristine ticket is edited as a whole,
+		// in one save. A started ticket never reaches it — the hero pencil is
+		// disabled from `detail.ticket.editable` and the host refuses the write
+		// again with `ticket_started`.
+		function TicketEditor(props) {
+			var t = props.ticket;
+			var prior = (props.acceptance || []).map(function (a) { return a.statement; });
+			var s = React.useState({
+				title: t.title,
+				body: t.body || "",
+				acceptance: prior.join("\n"),
+				timing: t.planTiming,
+				questions: t.planQuestions,
+				priority: t.priority,
+				allowPaid: t.allowPaid,
+				budgetUsd: t.budgetUsd,
+				workspaceCwd: t.workspaceCwd || ""
+			});
+			var form = s[0], setForm = s[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
-			function submit() {
-				var lines = text.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
-				if (lines.length === 0) return;
-				setBusy(true);
-				Promise.all(lines.map(function (line) { return props.onAcceptance(props.ticketId, line); })).finally(function () { setBusy(false); props.onClose(); });
+			var e = React.useState(null);
+			var err = e[0], setErr = e[1];
+			function field(key, value) {
+				var next = Object.assign({}, form);
+				next[key] = value;
+				setForm(next);
 			}
-			return h("div", { className: "kb-form" },
-				h("div", { className: "kb-hint", children: "Stored verbatim as human-authored acceptance. One statement per line." }),
-				h("textarea", { className: "kb-textarea", autoFocus: true, value: text, placeholder: "One acceptance statement per line…", onChange: function (event) { setText(event.target.value); } }),
-				h("div", { className: "kb-row" },
-					h("button", { className: "kb-btn primary", disabled: busy || text.trim() === "", onClick: submit, children: busy ? "Adding…" : "Add acceptance" }),
-					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })
-				)
-			);
-		}
-
-		function ModeEditor(props) {
-			var ticket = props.ticket;
-			var s = React.useState({ timing: ticket.planTiming, questions: ticket.planQuestions, priority: ticket.priority, allowPaid: ticket.allowPaid, budgetUsd: ticket.budgetUsd, workspaceCwd: ticket.workspaceCwd || "" });
-			var form = s[0], setForm = s[1];
-			var invalid = false;
 			function save() {
-				if (invalid) return;
-				props.onSave({ planTiming: form.timing, planQuestions: form.questions, priority: Number(form.priority) || 0, allowPaid: !!form.allowPaid, budgetUsd: Number(form.budgetUsd) || 0, workspaceCwd: form.workspaceCwd || null });
+				if (busy) return;
+				var title = form.title.trim();
+				if (title === "") { setErr("A ticket needs a title."); return; }
+				// Only what actually changed goes on the wire; acceptance is
+				// compared line by line so an untouched list is not rewritten.
+				var patch = {};
+				if (title !== t.title) patch.title = title;
+				if (form.body !== (t.body || "")) patch.body = form.body;
+				if (form.timing !== t.planTiming) patch.planTiming = form.timing;
+				if (form.questions !== t.planQuestions) patch.planQuestions = form.questions;
+				if (Number(form.priority) !== Number(t.priority)) patch.priority = Number(form.priority) || 0;
+				if (!!form.allowPaid !== !!t.allowPaid) patch.allowPaid = !!form.allowPaid;
+				if (Number(form.budgetUsd) !== Number(t.budgetUsd)) patch.budgetUsd = Number(form.budgetUsd) || 0;
+				if ((form.workspaceCwd || "") !== (t.workspaceCwd || "")) patch.workspaceCwd = form.workspaceCwd || null;
+				var lines = form.acceptance.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
+				var acceptanceChanged = lines.length !== prior.length || lines.some(function (line, i) { return line !== prior[i]; });
+				if (acceptanceChanged) patch.acceptance = lines;
+				if (Object.keys(patch).length === 0) { props.onClose(); return; }
+				setBusy(true);
+				setErr(null);
+				Promise.resolve(props.onSave(patch)).then(function (res) {
+					setBusy(false);
+					if (res && res.ok) props.onClose();
+					else setErr(res && res.error ? res.error.message : "The ticket could not be saved.");
+				}, function () { setBusy(false); setErr("Could not reach the Host."); });
 			}
 			return h("div", { className: "kb-form" },
+				h("div", { className: "kb-label", children: "Title" }),
+				h("input", { className: "kb-input", "aria-label": "Ticket title", value: form.title, onChange: function (ev) { field("title", ev.target.value); } }),
+				h("div", { className: "kb-label", children: "Body / context" }),
+				h("textarea", { className: "kb-textarea", "aria-label": "Ticket body", value: form.body, placeholder: "Anything the roles should know. Untrusted data, never instructions.", onChange: function (ev) { field("body", ev.target.value); } }),
+				h("div", { className: "kb-label", children: "Acceptance (one per line, stored verbatim; may be aspirational)" }),
+				h("textarea", { className: "kb-textarea", "aria-label": "Acceptance statements", value: form.acceptance, placeholder: "One acceptance statement per line…", onChange: function (ev) { field("acceptance", ev.target.value); } }),
+				h("div", { className: "kb-hint", children: "This list replaces the whole acceptance: edit a line to change it, delete a line to remove it." }),
 				h("div", { className: "kb-row" },
 					h("div", null, h("div", { className: "kb-label", children: "Planning" }),
-						h("select", { className: "kb-select", value: form.timing, onChange: function (ev) { setForm(Object.assign({}, form, { timing: ev.target.value })); } },
-							h("option", { value: "at_pickup", children: "When started" }), h("option", { value: "now", children: "Now" }))),
+						h(SegmentedControl, {
+							ariaLabel: "Planning",
+							value: form.timing,
+							onChange: function (value) { field("timing", value); },
+							options: [
+								{ value: "at_pickup", label: "When started" },
+								{ value: "now", label: "Now" }
+							]
+						})),
 					h("div", null, h("div", { className: "kb-label", children: "Questions" }),
-						h("select", { className: "kb-select", value: form.questions, onChange: function (ev) { setForm(Object.assign({}, form, { questions: ev.target.value })); } },
-							h("option", { value: "interactive", children: "Ask me" }), h("option", { value: "autonomous", children: "Decide autonomously" }))),
+						h(SegmentedControl, {
+							ariaLabel: "Questions",
+							value: form.questions,
+							onChange: function (value) { field("questions", value); },
+							options: [
+								{ value: "interactive", label: "Ask me" },
+								{ value: "autonomous", label: "Decide autonomously" }
+							]
+						})),
 					h("div", null, h("div", { className: "kb-label", children: "Priority" }),
-						h("input", { className: "kb-input", type: "number", style: { width: 80 }, value: form.priority, onChange: function (ev) { setForm(Object.assign({}, form, { priority: ev.target.value })); } })),
-					h("label", { className: "kb-row", style: { gap: 6, marginTop: 18 } },
-						h("input", { type: "checkbox", checked: form.allowPaid, onChange: function (ev) { setForm(Object.assign({}, form, { allowPaid: ev.target.checked })); } }),
-						h("span", { className: "kb-label", children: "allow paid" })),
+						h("input", { className: "kb-input", type: "number", style: { width: 80 }, value: form.priority, onChange: function (ev) { field("priority", ev.target.value); } })),
+					h("div", { className: "kb-switchrow" },
+						h(Switch, {
+							ariaLabel: "Allow paid models",
+							checked: form.allowPaid,
+							onToggle: function (value) { field("allowPaid", value); }
+						}),
+						h("span", { className: "kb-label", children: "Allow paid" })),
 					h("div", null, h("div", { className: "kb-label", children: "Budget USD" }),
-						h("input", { className: "kb-input", type: "number", style: { width: 100 }, value: form.budgetUsd, onChange: function (ev) { setForm(Object.assign({}, form, { budgetUsd: ev.target.value })); } }))
-				),
+						h("input", { className: "kb-input", type: "number", style: { width: 100 }, value: form.budgetUsd, onChange: function (ev) { field("budgetUsd", ev.target.value); } }))),
 				h("div", null, h("div", { className: "kb-label", children: "Workspace cwd" }),
-					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, onChange: function (ev) { setForm(Object.assign({}, form, { workspaceCwd: ev.target.value })); } })),
-								h("div", { className: "kb-row" },
-					h("button", { className: "kb-btn primary", disabled: invalid, onClick: function () { save(); if (props.onClose) props.onClose(); }, children: "Save modes" }),
-					h("button", { className: "kb-btn", onClick: props.onClose || function () {}, children: "Cancel" }))
+					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, placeholder: "(engine default)", onChange: function (ev) { field("workspaceCwd", ev.target.value); } })),
+				err ? h("div", { className: "kb-err", children: err }) : null,
+				h("div", { className: "kb-row" },
+					h("button", { className: "kb-btn primary", disabled: busy, onClick: save, children: busy ? "Saving…" : "Save ticket" }),
+					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" }))
 			);
 		}
 
@@ -1027,7 +1081,19 @@ var CSS =
 						h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) }),
 						h("span", { className: "kb-chip", children: t.column }),
 						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
-						h("button", { className: "kb-iconbtn", title: "Edit modes and budget", "aria-label": "Edit modes and budget", onClick: function () { setModal("modes"); } }, h(PencilIcon))
+						// One pencil for the whole ticket. The lock is the host's
+						// answer, not a guess: `editable` is false the moment any
+						// engine has touched this ticket, and the update endpoint
+						// refuses it again. The title sits on a wrapper span so a
+						// disabled button still explains itself on hover.
+						h("span", { className: "kb-edit-lock", title: t.editable === false ? "Locked — the ticket has already started" : "Edit ticket" },
+							h("button", {
+								className: "kb-iconbtn",
+								title: t.editable === false ? "Locked — the ticket has already started" : "Edit ticket",
+								"aria-label": t.editable === false ? "Edit ticket, locked because the ticket has already started" : "Edit ticket",
+								disabled: t.editable === false,
+								onClick: function () { setModal("ticket"); }
+							}, h(PencilIcon)))
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h("div", { className: "kb-hero-meta" },
@@ -1042,7 +1108,7 @@ var CSS =
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
-				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onAcceptance: props.onAcceptance, onEditAcceptance: function () { setModal("acceptance"); } }) : null,
+				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onEditAcceptance: function () { setModal("ticket"); } }) : null,
 				tab === "timeline" ? h("div", { className: "kb-panel" },
 					h("h3", { children: "Workflow timeline" }),
 					h("div", { className: "kb-row", style: { marginBottom: 8 } },
@@ -1053,10 +1119,13 @@ var CSS =
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction, onRecover: props.onRecover }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
 				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null,
-				h(Modal, { open: modal === "modes", title: "Modes and budget", onClose: function () { setModal(null); } },
-					h(ModeEditor, { ticket: t, onSave: function (patch) { props.onSave(t.id, patch); }, onClose: function () { setModal(null); } })),
-				h(Modal, { open: modal === "acceptance", title: "Add acceptance criteria", onClose: function () { setModal(null); } },
-					h(AcceptanceEditor, { ticketId: t.id, onAcceptance: props.onAcceptance, onClose: function () { setModal(null); } }))
+				h(Modal, { open: modal === "ticket", title: "Edit ticket", onClose: function () { setModal(null); } },
+					h(TicketEditor, {
+						ticket: t,
+						acceptance: d.acceptance,
+						onClose: function () { setModal(null); },
+						onSave: function (patch) { return props.onSave(t.id, patch); }
+					}))
 			);
 		}
 
@@ -1122,7 +1191,7 @@ var CSS =
 				h("div", { className: "kb-panel" },
 					h("div", { className: "kb-panelhead" },
 						h("h3", { children: "Acceptance — the human's words, verbatim" }),
-						h("button", { className: "kb-iconbtn", title: "Add acceptance criteria", "aria-label": "Add acceptance criteria", onClick: props.onEditAcceptance }, h(PencilIcon))
+						h("button", { className: "kb-iconbtn", title: "Edit acceptance criteria", "aria-label": "Edit acceptance criteria", onClick: props.onEditAcceptance }, h(PencilIcon))
 					),
 					d.acceptance.length === 0 ? h("div", { className: "kb-hint", children: "None stored." }) :
 						h("ul", { style: { margin: 0, paddingLeft: 18 } }, d.acceptance.map(function (a, i) {
@@ -1481,7 +1550,6 @@ var CSS =
 						onBack: function () { setSelectedId(null); setDetail(null); },
 						onSave: function (id, patch) { act("update", { id: id, patch: patch }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
-						onAcceptance: function (id, statement) { return act("action", { id: id, action: "addAcceptance", statement: statement }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }

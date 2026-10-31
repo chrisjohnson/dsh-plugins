@@ -300,6 +300,43 @@ export class KanbanStore {
     });
   }
 
+  /**
+   * The human edit boundary's only question: has any engine touched this ticket?
+   *
+   * "Started in any way" is deliberately broad, because the thing the lock
+   * protects is a role already working from what is on the card. A ticket is
+   * editable only while it is pristine: still at the plan phase in backlog or
+   * working, no attempt, no spend, not parked, and no child row in sessions,
+   * runs, spans or conditions. The child-row check is what catches the quiet
+   * touches — a plan session that attached and was cancelled leaves a session
+   * row behind and nothing else you could see from the ticket columns.
+   *
+   * `updateTicket` itself stays open on purpose: reorder, worktree creation and
+   * the retry patch are engine-internal writes against a started ticket and
+   * must keep working. The guard lives at the human boundary (src/edit.mjs).
+   */
+  isEditable(idOrKey) {
+    const ticket = this.getTicket(idOrKey);
+    if (ticket === undefined) return false;
+    if (ticket.column !== 'backlog' && ticket.column !== 'working') return false;
+    if (ticket.phase !== 'plan') return false;
+    if (Number(ticket.attemptCount) > 0) return false;
+    if (Number(ticket.spentUsd) > 0) return false;
+    if (ticket.needsAttentionReason !== null && ticket.needsAttentionReason !== undefined) return false;
+    const touched = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM sessions WHERE ticket_id = ?1) AS sessions,
+           (SELECT COUNT(*) FROM runs WHERE ticket_id = ?1) AS runs,
+           (SELECT COUNT(*) FROM spans WHERE ticket_id = ?1) AS spans,
+           (SELECT COUNT(*) FROM conditions WHERE ticket_id = ?1) AS conditions`,
+      )
+      .get(ticket.id);
+    return (
+      Number(touched.sessions) + Number(touched.runs) + Number(touched.spans) + Number(touched.conditions) === 0
+    );
+  }
+
   transitionTicket(idOrKey, to, { actor = 'engine', reason = '' } = {}) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
@@ -397,6 +434,42 @@ export class KanbanStore {
         .run(ticketId, ordinal, statement, source, at);
       this.#event(ticketId, 'acceptance_added', { actor: source === 'human' ? 'human' : 'engine', payload: { source, statement } });
       return this.listAcceptance(ticketId);
+    });
+  }
+
+  /**
+   * Replace the whole acceptance list in one step, so editing and deleting a
+   * statement are the same operation as adding one. The event carries both the
+   * prior and the new statements: acceptance is the human's own words, so what
+   * was removed has to stay readable in the audit trail. An empty array is a
+   * legitimate answer — it says the ticket has no acceptance criteria.
+   */
+  setAcceptance(idOrKey, statements, { reason = '' } = {}) {
+    const ticket = this.getTicket(idOrKey);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
+    if (!Array.isArray(statements)) throw new StoreError('bad_request', 'acceptance must be an array of statements');
+    const next = [];
+    for (const statement of statements) {
+      if (typeof statement !== 'string' || statement.trim() === '') {
+        throw new StoreError('bad_request', 'every acceptance statement must be a non-empty string');
+      }
+      next.push(statement);
+    }
+    const prior = this.listAcceptance(ticket.id).map((row) => row.statement);
+    const unchanged = prior.length === next.length && prior.every((statement, index) => statement === next[index]);
+    if (unchanged) return this.listAcceptance(ticket.id);
+    return this.transact(() => {
+      const at = nowIso();
+      this.db.prepare('DELETE FROM acceptance WHERE ticket_id = ?').run(ticket.id);
+      let ordinal = 0;
+      for (const statement of next) {
+        ordinal += 1;
+        this.db
+          .prepare('INSERT INTO acceptance (ticket_id, ordinal, statement, source, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(ticket.id, ordinal, statement, 'human', at);
+      }
+      this.#event(ticket.id, 'acceptance_set', { actor: 'human', payload: { prior, next, reason } });
+      return this.listAcceptance(ticket.id);
     });
   }
 

@@ -198,3 +198,59 @@ test('the phase banner is a turn-tail entry validated against the board', async 
   assert.match(client, /title: banner\.text/)
   assert.match(client, /\.kb-banner-text\{[^}]*text-overflow:ellipsis/)
 })
+
+// --------------------------------------------------------------- KAN-14
+
+test('the host update path is the guarded edit boundary, not a raw store write', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /import \{ appendAcceptance, editTicket, replaceAcceptance \} from '\.\/edit\.mjs'/)
+  const update = host.slice(host.indexOf("case 'update'"), host.indexOf("case 'move'"))
+  assert.match(update, /editTicket\(store, String\(p\.id\), p\.patch \?\? \{\}/)
+  assert.equal(/store\.updateTicket\(/.test(update), false, 'the update endpoint must not bypass the guard')
+  // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
+  assert.match(host, /store\.updateTicket\(ticket\.id, \{ sortOrder \}, \{ actor: 'human', reason: 'reorder' \}\)/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, p\.patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
+})
+
+test('both acceptance actions go through the guarded boundary', async () => {
+  const host = (await sources())['host.mjs']
+  const actions = host.slice(host.indexOf("case 'action'"), host.indexOf("case 'reorder'"))
+  assert.match(actions, /return appendAcceptance\(store, ticket\.id, p\.statement\)/)
+  assert.match(actions, /action === 'setAcceptance'/)
+  assert.match(actions, /return replaceAcceptance\(store, ticket\.id, p\.statements\)/)
+  assert.equal(/store\.addAcceptance\(/.test(actions), false, 'the unguarded direct add is gone')
+})
+
+test('the board and the detail both carry the editable flag', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /summary\(ticket, store\.isEditable\(ticket\.id\)\)/, 'every board card knows if it is still editable')
+  assert.match(host, /function summary\(ticket, editable = false\)/)
+  assert.match(host, /const editable = store\.isEditable\(ticket\.id\)/, 'the detail computes the same predicate')
+  assert.equal((host.match(/^\s+editable,$/gm) || []).length, 2, 'summary and detail each carry it once')
+})
+
+test('the detail hero has one Edit ticket pencil, disabled once the ticket started', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /"Locked — the ticket has already started"/)
+  assert.match(client, /disabled: t\.editable === false/)
+  assert.equal(client.includes('Edit modes and budget'), false, 'the old pencil is gone')
+  assert.equal(/function ModeEditor\b|function AcceptanceEditor\b/.test(client), false, 'the two old editors are gone')
+  assert.match(client, /function TicketEditor\(props\)/)
+  assert.match(client, /h\(TicketEditor, \{/, 'the hero opens the one editor')
+})
+
+test('the unified editor saves every field in one update call', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  const body = client.slice(client.indexOf('function TicketEditor'), client.indexOf('function Timeline'))
+  assert.ok(body.length > 500, 'TicketEditor must be present and complete')
+  for (const label of ['Ticket title', 'Ticket body', 'Acceptance statements', 'Planning', 'Questions', 'Priority', 'Allow paid models', 'Budget USD', 'Workspace cwd']) {
+    assert.ok(body.includes(label), `the editor must expose ${label}`)
+  }
+  // Acceptance rides on the same save, and only when a line actually changed.
+  assert.match(body, /if \(acceptanceChanged\) patch\.acceptance = lines/)
+  assert.match(body, /props\.onSave\(patch\)/)
+  assert.equal((body.match(/rpc\(/g) || []).length, 0, 'the editor makes exactly one call, through onSave')
+  // The old add-only path is gone from the client: acceptance is edited, not appended.
+  assert.equal(client.includes('addAcceptance'), false)
+})
