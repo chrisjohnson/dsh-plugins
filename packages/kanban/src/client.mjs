@@ -1787,18 +1787,13 @@ var CSS =
 						if (gaps === "") gaps = own;
 						return { tone: "warn", text: "Review status: not finished" + (gaps ? " — " + gaps : "") + ". Back to implementation." };
 					}
-					// No verdict to read — an old transcript, or args that did not
-					// parse. Fall back to the phase-only reading rather than show
-					// nothing at all.
-					if (verdict === "") {
-						if (order >= PHASE_ORDER.verify) {
-							return { tone: "ok", text: "Review passed — all conditions met. Now proceeding to approval." };
-						}
-						if (phase === "implement" && info.review) {
-							var legacy = oneLine(info.reviewFeedback || "");
-							return { tone: "warn", text: "Review status: not finished" + (legacy ? " — " + legacy : "") + ". Back to implementation." };
-						}
-					}
+					// No verdict to read means the call's args never parsed — a turn
+					// interrupted mid-call, or a tool-call block still streaming
+					// (argsRaw is documented as "original argument JSON or incomplete
+					// raw text"). A schema-valid review always carries a verdict, so
+					// there is nothing to infer here: rendering a phase-only reading
+					// would claim an outcome for a call that may never have run, which
+					// is the exact mistake the last two releases removed. Silence.
 				}
 				if (name === "kanban_approve" && ticket.column === "done") {
 					return { tone: "ok", text: "Ticket approved and closed." };

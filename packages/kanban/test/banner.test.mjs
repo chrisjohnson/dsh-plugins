@@ -115,12 +115,16 @@ test('a pass that landed is never called not finished by a later phase move', as
   assert.equal(bannerFor([review(landed)], { ...followUp, reviewRejected: undefined }), null)
 })
 
-test('a review call with no readable verdict keeps the phase-only reading', async () => {
+test('a review call whose args never parsed renders nothing', async () => {
   const { bannerFor } = await bannerModule()
-  // An old transcript, or args that never parsed: better a phase-derived line than silence.
-  assert.match(bannerFor([review({})], VERIFY).text, /^Review passed/)
-  assert.match(bannerFor([review({ verdict: 'PASS' })], VERIFY).text, /^Review passed/, 'the verdict is matched case-insensitively')
-  assert.match(bannerFor([review({})], IMPLEMENT).text, /^Review status: not finished — the newest round text/)
+  // argsRaw that did not parse means the call may never have run — an interrupted
+  // turn, or a block still streaming. There is no verdict to attribute an outcome
+  // to, so the banner stays silent rather than guessing from the phase.
+  assert.equal(bannerFor([review({})], VERIFY), null, 'no claim of a pass at verify')
+  assert.equal(bannerFor([review({})], IMPLEMENT), null, 'no claim of a rejection at implement')
+  assert.equal(bannerFor([review({ verdict: 'maybe' })], VERIFY), null, 'an unrecognised verdict is not a pass either')
+  // A readable verdict is still matched case-insensitively.
+  assert.match(bannerFor([review({ verdict: 'PASS' })], VERIFY).text, /^Review passed/)
   // A pass that an earlier round claimed but the code check rejected must not be
   // shown as this round's pass once a later round gets through.
   const stalePass = { verdict: 'pass', reasons: ['claimed too early'] }
