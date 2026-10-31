@@ -5,6 +5,40 @@
 
 ## Unreleased
 
+## 0.10.0
+
+### Added
+
+- **Edit ticket.** The detail hero's pencil now opens one editor for the whole
+  card — title, body, acceptance, planning, questions, priority, allow-paid,
+  budget and workspace — and saves it in a single `update` call. Acceptance is
+  edited as a list, one statement per line: change a line to edit it, delete a
+  line to remove it, clear the box to drop every criterion. Behind it the store
+  gained `setAcceptance`, which replaces the rows in one transaction and records
+  an `acceptance_set` event carrying both the prior and the new statements, so
+  the words a human removed stay readable in the audit trail. The `update` patch
+  accepts an optional `acceptance` array, and a `setAcceptance` action sits
+  beside the existing `addAcceptance`.
+- **`editable` on every board card and in the detail**, answered by
+  `store.isEditable(id)`: a ticket is still editable only while no engine has
+  touched it — at the plan phase in Backlog or Working, no attempt, no spend, not
+  parked, and no session, run, span or condition row attached. The child-row
+  check is what catches the quiet touches: a plan session that attached and was
+  cancelled leaves rows behind even though the ticket columns look pristine.
+
+### Changed
+
+- **A started ticket is locked to humans.** Once a ticket has started in any
+  way, the pencil is disabled with *Locked — the ticket has already started* and
+  the `update`, `addAcceptance` and `setAcceptance` endpoints answer
+  `ticket_started`. The guard sits at the human edit boundary (`src/edit.mjs`),
+  not in `store.updateTicket`, so the engine's own writes — reorder, worktree
+  creation, the retry patch — keep working on a started ticket. Editing a
+  pristine ticket does not lock it: a person may fix a card as often as they
+  like before anything starts work on it.
+- The separate "Edit modes and budget" dialog and the add-only acceptance dialog
+  are gone, folded into the one editor.
+
 ## 0.9.3
 
 ### Fixed

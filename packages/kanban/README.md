@@ -237,6 +237,21 @@ planning, building or reviewing, never navigates you out of the board. The
 explicit buttons still do — **Open build session** on the approval panel,
 **Open** in the sessions table, **Recover tools** on an orphaned session.
 
+A ticket is edited through the one pencil in the detail hero, which opens a
+single editor for the whole card: title, body, acceptance (one statement per
+line — change a line to edit it, delete a line to remove it), planning,
+questions, priority, allow-paid, budget and workspace, saved in one `update`
+call. That pencil is locked the moment the ticket has started in any way: moved
+off the plan phase or out of Backlog/Working, an attempt or any spend recorded,
+parked for attention, or any session, run, span or condition attached to it. A
+locked ticket answers `ticket_started` from `update`, `addAcceptance` and
+`setAcceptance`; the engine's own writes (reorder, worktree creation, a retry
+patch) go past the lock, because they go straight to the store. Editing a
+pristine ticket never locks it — you can fix a card as often as you like before
+something starts work on it. An acceptance change is recorded as an
+`acceptance_set` event carrying both the prior and the new list, so the words a
+human removed stay readable in the audit trail.
+
 In a kanban session's chat, a turn that ended on a `kanban_*` call gets one line
 at the turn tail, below the "Completed in …" disclosure, naming the transition
 that turn caused: plan submitted, implementation submitted, review not finished

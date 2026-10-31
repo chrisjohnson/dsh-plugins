@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveConfig } from './config.mjs';
 import { applyRoutes, prepareRoutes, staleEffortWarnings } from './routing.mjs';
 import { KanbanStore } from './store.mjs';
+import { appendAcceptance, editTicket, replaceAcceptance } from './edit.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
@@ -164,7 +165,7 @@ export default async function kanban(ctx, config = {}) {
       const tickets = store.listTickets();
       const byColumn = { backlog: [], working: [], done: [], discarded: [] };
       for (const ticket of tickets) {
-        const item = summary(ticket);
+        const item = summary(ticket, store.isEditable(ticket.id));
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
         item.awaitingQuestion = isAwaitingUser(ticket);
         item.status = statusOf(ticket);
@@ -189,10 +190,16 @@ export default async function kanban(ctx, config = {}) {
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
       const awaitingQuestion = isAwaitingUser(ticket);
+      // `editable` is the lock the client renders: the pencil is dead the moment
+      // any engine has touched the ticket (see store.isEditable).
+      const editable = store.isEditable(ticket.id);
       return {
-        ticket: awaitingQuestion && !ticket.needsAttentionReason
-          ? { ...ticket, needsAttentionReason: 'Waiting on your answer' }
-          : ticket,
+        ticket: {
+          ...(awaitingQuestion && !ticket.needsAttentionReason
+            ? { ...ticket, needsAttentionReason: 'Waiting on your answer' }
+            : ticket),
+          editable,
+        },
         awaitingQuestion,
         status: statusOf(ticket),
         // Approval runs inside the build session, so the session the panel opens
@@ -291,9 +298,11 @@ export default async function kanban(ctx, config = {}) {
             return { ok: true, value: { ticket } };
           }
           case 'update': {
-            const updated = store.updateTicket(String(p.id), p.patch ?? {}, { actor: 'human', reason: p.reason ?? 'ticket edit' });
-            void engineRef.current.tick();
-            return { ok: true, value: { ticket: updated } };
+            // The human edit boundary: a ticket any engine has touched is locked
+            // (src/edit.mjs). Engine-internal writes go to the store directly.
+            const result = editTicket(store, String(p.id), p.patch ?? {}, { reason: p.reason ?? 'ticket edit' });
+            if (result.ok) void engineRef.current.tick();
+            return result;
           }
           case 'move': {
             const column = String(p.column);
@@ -378,8 +387,11 @@ export default async function kanban(ctx, config = {}) {
             }
             if (action === 'addAcceptance') {
               if (typeof p.statement !== 'string' || p.statement.trim() === '') return fail('bad_request', 'statement is required');
-              store.addAcceptance(ticket.id, p.statement, 'human');
-              return { ok: true, value: { ticket: requireTicket(ticket.id), acceptance: store.listAcceptance(ticket.id) } };
+              return appendAcceptance(store, ticket.id, p.statement);
+            }
+            if (action === 'setAcceptance') {
+              if (!Array.isArray(p.statements)) return fail('bad_request', 'statements must be an array');
+              return replaceAcceptance(store, ticket.id, p.statements);
             }
             if (action === 'attachSession') {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
@@ -576,13 +588,14 @@ export default async function kanban(ctx, config = {}) {
 
 // ---------------------------------------------------------------------------
 
-function summary(ticket) {
+function summary(ticket, editable = false) {
   return {
     id: ticket.id,
     key: ticket.key,
     title: ticket.title,
     column: ticket.column,
     phase: ticket.phase,
+    editable,
     priority: ticket.priority,
     sortOrder: ticket.sortOrder,
     attemptCount: ticket.attemptCount,
