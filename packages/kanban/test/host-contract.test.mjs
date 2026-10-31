@@ -254,3 +254,10 @@ test('the unified editor saves every field in one update call', async () => {
   // The old add-only path is gone from the client: acceptance is edited, not appended.
   assert.equal(client.includes('addAcceptance'), false)
 })
+
+test('the panel returns the save so the editor can close on success', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  // Without the `return`, the editor resolves undefined, reports a save that
+  // actually landed as an error, and leaves its modal open.
+  assert.match(client, /onSave: function \(id, patch\) \{ return act\("update", \{ id: id, patch: patch \}\); \}/)
+})

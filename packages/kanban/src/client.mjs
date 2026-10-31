@@ -887,7 +887,7 @@ var CSS =
 							]
 						})),
 					h("div", null, h("div", { className: "kb-label", children: "Priority" }),
-						h("input", { className: "kb-input", type: "number", style: { width: 80 }, value: form.priority, onChange: function (ev) { field("priority", ev.target.value); } })),
+						h("input", { className: "kb-input", type: "number", "aria-label": "Ticket priority", style: { width: 80 }, value: form.priority, onChange: function (ev) { field("priority", ev.target.value); } })),
 					h("div", { className: "kb-switchrow" },
 						h(Switch, {
 							ariaLabel: "Allow paid models",
@@ -896,7 +896,7 @@ var CSS =
 						}),
 						h("span", { className: "kb-label", children: "Allow paid" })),
 					h("div", null, h("div", { className: "kb-label", children: "Budget USD" }),
-						h("input", { className: "kb-input", type: "number", style: { width: 100 }, value: form.budgetUsd, onChange: function (ev) { field("budgetUsd", ev.target.value); } }))),
+						h("input", { className: "kb-input", type: "number", "aria-label": "Budget USD", style: { width: 100 }, value: form.budgetUsd, onChange: function (ev) { field("budgetUsd", ev.target.value); } }))),
 				h("div", null, h("div", { className: "kb-label", children: "Workspace cwd" }),
 					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, placeholder: "(engine default)", onChange: function (ev) { field("workspaceCwd", ev.target.value); } })),
 				err ? h("div", { className: "kb-err", children: err }) : null,
@@ -1548,7 +1548,7 @@ var CSS =
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						onBack: function () { setSelectedId(null); setDetail(null); },
-						onSave: function (id, patch) { act("update", { id: id, patch: patch }); },
+						onSave: function (id, patch) { return act("update", { id: id, patch: patch }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
 						onAction: function (id, action, extra) { return act("action", Object.assign({ id: id, action: action }, extra || {})); },
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
