@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { resolveConfig } from '../src/config.mjs'
 import { migrate } from '../src/db.mjs'
 import { KanbanStore } from '../src/store.mjs'
-import { Engine } from '../src/engine.mjs'
+import { Engine, attachedImages, ticketStateBlock } from '../src/engine.mjs'
 
 const CWD = mkdtempSync(join(tmpdir(), 'kanban-engine-'))
 
@@ -778,4 +778,70 @@ test('retrying an archived-session park dispatches the review again once the blo
   assert.equal(driver.turns.length, 2)
   assert.equal(store.getTicket(ticket.id).phase, 'verify')
   assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
+})
+
+// ---------------------------------------------------------------- KAN-7
+
+const IMG_ID = `sha256:${'d'.repeat(64)}`
+const IMG_ID_2 = `sha256:${'e'.repeat(64)}`
+
+test('ticketStateBlock without images is byte-identical to the pre-images block', () => {
+  const ticket = { title: 'T', body: 'the body' }
+  const acceptance = [{ statement: 'a' }]
+  const without = ticketStateBlock(ticket, acceptance)
+  assert.equal(without, ticketStateBlock(ticket, acceptance, []))
+  assert.equal(without.includes('Attached images'), false)
+  assert.match(without, /^Title: T\n\nBody:\nthe body\n\nAcceptance \(starting point, human\):\n- a$/)
+})
+
+test('ticketStateBlock lists attached image host paths for the role session', () => {
+  const ticket = { title: 'T', body: `see ![shot.png](kanban-image:${IMG_ID})` }
+  const block = ticketStateBlock(ticket, [], [{ name: 'shot.png', path: '/var/dsh/attachments/shot.png' }])
+  assert.match(block, /Attached images \(read-only, on this host\):/)
+  assert.match(block, /- shot\.png: \/var\/dsh\/attachments\/shot\.png/)
+  assert.match(block, /read_image/)
+})
+
+test('ticketStateBlock marks an unresolvable ref unavailable instead of hiding it', () => {
+  const ticket = { title: 'T', body: `![gone.png](kanban-image:${IMG_ID})` }
+  const block = ticketStateBlock(ticket, [], [{ name: 'gone.png', path: null }])
+  assert.match(block, /- gone\.png: \(unavailable\)/)
+})
+
+test('attachedImages resolves body refs through the attachment store view', () => {
+  const ctx = {
+    attachments: {
+      imageHostPath: (ref) => (ref.attachmentId === IMG_ID ? `/store/${IMG_ID.slice(7)}` : undefined),
+    },
+  }
+  const body = `![a.png](kanban-image:${IMG_ID}) ![b](kanban-image:${IMG_ID_2}) ![dup](kanban-image:${IMG_ID})`
+  assert.deepEqual(attachedImages(ctx, body), [
+    { name: 'a.png', path: `/store/${IMG_ID.slice(7)}` },
+    { name: 'b', path: null },
+  ])
+  assert.deepEqual(attachedImages(ctx, 'no images'), [])
+  // A store that throws on a bad ref is an unavailable image, not a crash.
+  const angry = { attachments: { imageHostPath: () => { throw new Error('nope') } } }
+  assert.deepEqual(attachedImages(angry, `![x](kanban-image:${IMG_ID})`), [{ name: 'x', path: null }])
+  // No attachments service at all: every ref is unavailable.
+  assert.deepEqual(attachedImages({}, `![x](kanban-image:${IMG_ID})`), [{ name: 'x', path: null }])
+})
+
+test('the plan prompt for a ticket with an image carries its host path', async () => {
+  const { store, engine } = setup()
+  const ticket = pickedUp(store, {
+    title: 'with image',
+    body: `context ![shot.png](kanban-image:${IMG_ID})`,
+  })
+  engine.ctx = {
+    ...engine.ctx,
+    attachments: { imageHostPath: () => `/store/${IMG_ID.slice(7)}` },
+  }
+  await engine.plan(ticket)
+  // The engine records the rendered prompt as an artifact; that is exactly the
+  // text the plan session receives as its first message.
+  const artifact = store.latestArtifact(ticket.id, 'planner_prompt_plan')
+  assert.ok(artifact !== undefined, 'the plan prompt artifact was not written')
+  assert.match(artifact.content, /Attached images \(read-only, on this host\):/)
+  assert.match(artifact.content, new RegExp(`- shot\\.png: /store/${'d'.repeat(64)}`))
 })

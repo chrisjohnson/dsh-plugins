@@ -268,6 +268,40 @@ artifact ordering) rather than that the ticket happens to sit in `implement`
 again. When the two do not agree, nothing is rendered. Long values are truncated
 to one line and the full text is in the hover tooltip.
 
+## Ticket images
+
+A ticket body can carry images. In both the New-ticket dialog and the ticket
+editor, paste a screenshot into the body box, drop image files onto it, or use
+**Add image**: each accepted file gets a thumbnail tile under the box and a
+markdown reference inserted at the cursor. The X on a tile removes the tile and
+its reference together. Limits: png, jpeg, webp or gif, 20 MB each, at most 10
+images per ticket; a rejected paste or drop says why and leaves the text alone.
+
+What is stored is a reference, not the bytes:
+
+```markdown
+![screenshot.png](kanban-image:sha256:4f3a…)
+```
+
+The bytes live in DSH core's content-addressed attachment store
+(`$DSH_HOME/attachments/v1/objects/xx/<sha256>`), so they are validated,
+deduplicated, and survive restarts. The body stays the single source of truth —
+no extra table, no migration, and **no new config keys**. While you are typing,
+the reference carries a temporary `pending-<token>` id; on save the Host stores
+each image and rewrites every pending token to its real id before the body is
+written. If any image fails to store, or a pending token has no upload behind
+it, nothing is written: no ticket is created and no patch is applied.
+
+The ticket detail's **Body** panel renders the body as light markdown —
+headings, lists, code, links — and resolves each reference to a real `<img>`
+through the `readImage` endpoint. A reference whose bytes no longer resolve
+renders as an *image unavailable* chip rather than vanishing.
+
+Role sessions see the images too: a plan session's ticket block ends with an
+**Attached images** section listing each image's host file path, and the
+session's `read_image` tool works on those paths. Editing a started ticket is
+locked by the same rule as any other edit (`ticket_started`).
+
 ## Auto-recovery of a halted turn
 
 A role turn can halt for reasons that have nothing to do with the work: the

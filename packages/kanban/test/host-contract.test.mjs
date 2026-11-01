@@ -203,14 +203,43 @@ test('the phase banner is a turn-tail entry validated against the board', async 
 
 test('the host update path is the guarded edit boundary, not a raw store write', async () => {
   const host = (await sources())['host.mjs']
-  assert.match(host, /import \{ appendAcceptance, editTicket, replaceAcceptance \} from '\.\/edit\.mjs'/)
+  assert.match(host, /import \{[^}]*\beditTicket\b[^}]*\} from '\.\/edit\.mjs'/)
   const update = host.slice(host.indexOf("case 'update'"), host.indexOf("case 'move'"))
-  assert.match(update, /editTicket\(store, String\(p\.id\), p\.patch \?\? \{\}/)
+  // KAN-7: the patch is copied and its body image refs resolved first, but the
+  // write itself is still exactly one guarded editTicket call.
+  assert.match(update, /editTicket\(store, String\(p\.id\), patch/)
+  assert.match(update, /prepareBodyImages\(\{ body: draftBody, images: uploads, attachments: attachments\(\) \}\)/)
   assert.equal(/store\.updateTicket\(/.test(update), false, 'the update endpoint must not bypass the guard')
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ sortOrder \}, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
   assert.match(host, /store\.updateTicket\(ticket\.id, p\.patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
+})
+
+// --------------------------------------------------------------- KAN-7
+
+test('create stores images and resolves refs before the ticket exists', async () => {
+  const host = (await sources())['host.mjs']
+  const create = host.slice(host.indexOf("case 'create'"), host.indexOf("case 'update'"))
+  // The image gate runs before createTicket; a failed save creates nothing.
+  assert.ok(create.indexOf('prepareBodyImages') < create.indexOf('store.createTicket'), 'images must resolve before the ticket row is written')
+  assert.match(create, /if \(!prepared\.ok\) return fail\('bad_request', prepared\.error\)/)
+  assert.match(create, /store\.createTicket\(\{ \.\.\.fields, body: prepared\.body, column \}\)/)
+})
+
+test('readImage is a registered endpoint answering through the store helper', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /'readImage',/, 'readImage must be in ENDPOINTS so the route is registered')
+  const read = host.slice(host.indexOf("case 'readImage'"), host.indexOf("case 'create'"))
+  assert.match(read, /readImageFromStore\(attachments\(\), String\(p\.attachmentId \?\? ''\)\)/)
+  assert.match(read, /if \(!out\.ok\) return fail\(out\.code, out\.error\)/)
+  assert.match(read, /base64: out\.value\.base64/)
+})
+
+test('the detail response carries the body image refs', async () => {
+  const host = (await sources())['host.mjs']
+  const detail = host.slice(host.indexOf('const detail = (id)'), host.indexOf('const handler ='))
+  assert.match(detail, /images: describeBodyImages\(attachments\(\), ticket\.body \?\? ''\)/)
 })
 
 test('both acceptance actions go through the guarded boundary', async () => {
@@ -259,5 +288,41 @@ test('the panel returns the save so the editor can close on success', async () =
   const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
   // Without the `return`, the editor resolves undefined, reports a save that
   // actually landed as an error, and leaves its modal open.
-  assert.match(client, /onSave: function \(id, patch\) \{ return act\("update", \{ id: id, patch: patch \}\); \}/)
+  assert.match(client, /onSave: function \(id, patch, images\) \{ return act\("update", \{ id: id, patch: patch, images: images \|\| \[\] \}\); \}/)
+})
+
+// KAN-7: the browser half mirrors src/images.mjs rules and shares one draft
+// manager between both editing surfaces.
+test('both editing surfaces share the image draft manager', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /function imageDrafts\(getBody, setBody, bodyRef\)/)
+  // Called unconditionally by exactly the two forms — never conditionally, the
+  // hook gate would fail it.
+  assert.equal((client.match(/= imageDrafts\(/g) || []).length, 2, 'CreateForm and TicketEditor each call imageDrafts once')
+  assert.match(client, /imageTextareaProps\(imgs, bodyRef\)\)\)/)
+  assert.equal((client.match(/imageTextareaProps\(imgs, bodyRef\)\)\)/g) || []).length, 2)
+  assert.match(client, /onPaste: function \(ev\) \{/)
+  assert.match(client, /onDrop: function \(ev\) \{/)
+  assert.match(client, /children: "Add image"/)
+  assert.match(client, /pending-" \+ token/)
+})
+
+test('the client enforces the same image limits as the host', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /var IMG_MAX = 10;/)
+  assert.match(client, /var IMG_MAX_BYTES = 20 \* 1024 \* 1024;/)
+  assert.match(client, /"image\/png", "image\/jpeg", "image\/webp", "image\/gif"/)
+  assert.match(client, /A ticket carries at most " \+ IMG_MAX \+ " images\./)
+})
+
+test('the detail renders the body as markdown and reads images through the RPC', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /function renderMarkdown\(text\)/)
+  assert.match(client, /h\(BodyImage, \{ key: key \+ "-" \+ i, attachmentId: m\[2\], name: m\[1\] \}\)/)
+  assert.match(client, /rpc\("readImage", \{ attachmentId: attachmentId \}\)/)
+  assert.match(client, /image unavailable/)
+  // The Body panel sits in the Overview.
+  const overview = client.slice(client.indexOf('function Overview(props)'))
+  assert.match(overview, /children: "Body"/)
+  assert.match(overview, /renderMarkdown\(t\.body\)/)
 })

@@ -5,6 +5,37 @@
 
 ## Unreleased
 
+## 0.11.0
+
+### Added
+
+- **Images in ticket bodies.** Paste a screenshot into the body box of the
+  New-ticket dialog or the ticket editor, drop files onto it, or press
+  **Add image**: each accepted file gets a thumbnail tile and a markdown
+  reference at the cursor, and the tile's X removes both together. Limits:
+  png/jpeg/webp/gif, 20 MB each, ten images per ticket — a refusal says why
+  and leaves the text alone.
+- The bytes go to DSH core's content-addressed attachment store
+  (`$DSH_HOME/attachments/v1/objects/xx/<sha256>`) through `ctx.attachments`
+  — validated, deduped, durable across restarts — and the body keeps only the
+  reference `![name](kanban-image:sha256:…)`. No new table, no migration, no
+  new config keys. While a draft is open the reference carries a
+  `pending-<token>` id; the Host stores every upload and rewrites every token
+  to its real id **before** writing the body, so a failed image means no
+  ticket is created and no patch is applied. All of it lives in a new pure
+  module, `src/images.mjs`, with the host as thin wiring.
+- The ticket detail gained a read-only **Body** panel: light markdown
+  (headings, lists, code, links, built as React elements — the body is
+  untrusted data and is never interpreted as HTML) with each image reference
+  resolved to a real `<img>` through the new `readImage` endpoint, which
+  re-digest-verifies the stored bytes against the id it is read under. A
+  reference whose bytes no longer resolve renders as an *image unavailable*
+  chip instead of vanishing, and the detail response now carries an `images`
+  array derived from the body refs.
+- A plan session's ticket block ends with an **Attached images** section
+  listing each image's host file path, so every role session can `read_image`
+  what the human pasted.
+
 ## 0.10.0
 
 ### Added

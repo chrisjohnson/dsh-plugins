@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
+import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
@@ -37,16 +38,54 @@ const AUTO_RECOVERY_MAX_ROUNDS = 8;
  */
 const AUTO_RECOVERY_KICK_DELAY_MS = 1500;
 
-function ticketStateBlock(ticket, acceptance) {
-  return [
+/**
+ * The durable image refs in a ticket body, resolved to host file paths through
+ * the attachment store. A ref whose bytes the store can no longer locate (or a
+ * backend that exposes no host files) comes back with `path: null` and is
+ * marked unavailable in the prompt rather than silently dropped — the agent
+ * should know the human referenced an image it cannot see.
+ */
+export function attachedImages(ctx, body) {
+  const refs = refsFromBody(typeof body === 'string' ? body : '');
+  const out = [];
+  const seen = new Set();
+  const attachments = resolveAttachments(ctx);
+  for (const ref of refs) {
+    if (ref.attachmentId === null || seen.has(ref.attachmentId)) continue;
+    seen.add(ref.attachmentId);
+    let path = null;
+    try {
+      const found = attachments?.imageHostPath?.({ attachmentId: ref.attachmentId });
+      if (typeof found === 'string' && found !== '') path = found;
+    } catch {
+      path = null;
+    }
+    out.push({ name: ref.name === '' ? ref.attachmentId : ref.name, path });
+  }
+  return out;
+}
+
+/**
+ * The ticket block every role session reads first. `images` is the output of
+ * `attachedImages`; an empty list adds nothing, so a ticket without images
+ * keeps the exact prompt it had before images existed.
+ */
+export function ticketStateBlock(ticket, acceptance, images = []) {
+  const lines = [
     `Title: ${ticket.title}`,
     '',
     'Body:',
     ticket.body?.trim() === '' ? '(empty)' : ticket.body,
-    '',
-    'Acceptance (starting point, human):',
-    acceptanceBlock(acceptance),
-  ].join('\n');
+  ];
+  if (Array.isArray(images) && images.length > 0) {
+    lines.push('', 'Attached images (read-only, on this host):');
+    for (const image of images) {
+      lines.push(image.path ? `- ${image.name}: ${image.path}` : `- ${image.name}: (unavailable)`);
+    }
+    lines.push('Use the read_image tool on these paths to look at them.');
+  }
+  lines.push('', 'Acceptance (starting point, human):', acceptanceBlock(acceptance));
+  return lines.join('\n');
 }
 
 function acceptanceBlock(acceptance) {
@@ -276,7 +315,7 @@ export class Engine {
     if (!admission.ok) return this.hold(ticket, admission);
     const promptFile = ticket.planQuestions === 'autonomous' ? 'plan-self' : 'plan-human';
     const prompt = render(prompts.bodies[promptFile] ?? prompts.bodies['plan-human'], {
-      ticket_state: ticketStateBlock(ticket, acceptance),
+      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
       acceptance: acceptanceBlock(acceptance),
       key: ticket.key,
       title: ticket.title,

@@ -12,13 +12,14 @@ import { fileURLToPath } from 'node:url';
 import { resolveConfig } from './config.mjs';
 import { applyRoutes, prepareRoutes, staleEffortWarnings } from './routing.mjs';
 import { KanbanStore } from './store.mjs';
-import { appendAcceptance, editTicket, replaceAcceptance } from './edit.mjs';
+import { appendAcceptance, editTicket, replaceAcceptance, startedFailure } from './edit.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { cardStatus } from './lifecycle.mjs';
+import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
 const API_BASE = '/api/kanban';
@@ -42,6 +43,7 @@ const ENDPOINTS = [
   'worktree',
   'events',
   'sessionInfo',
+  'readImage',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -80,6 +82,12 @@ export default async function kanban(ctx, config = {}) {
       if (process.env.DSH_KANBAN_DEBUG === '1') log.info('event %s %s', event.kind, event.ticketId ?? '-');
     },
   });
+
+  // The durable image bytes ride in DSH core's content-addressed attachment
+  // store; the ticket body only carries `kanban-image:<id>` refs (src/images.mjs).
+  // Looked up lazily so a profile without the service still boots and only an
+  // actual image write says anything about it.
+  const attachments = () => resolveAttachments(ctx);
 
   const driver = new SessionDriver({
     ctx,
@@ -215,6 +223,10 @@ export default async function kanban(ctx, config = {}) {
         usage: store.rollup(ticket.id),
         events,
         artifacts,
+        // One entry per distinct `kanban-image:` ref in the body, in order;
+        // `available: false` means the bytes no longer resolve and the client
+        // renders the ref broken rather than hiding the human's reference.
+        images: describeBodyImages(attachments(), ticket.body ?? ''),
         plan: plan === undefined ? null : safeJson(plan.content),
         review: review === undefined ? null : safeJson(review.content),
         verification: verification === undefined ? null : safeJson(verification.content),
@@ -240,6 +252,25 @@ export default async function kanban(ctx, config = {}) {
             return { ok: true, value: detail(String(p.id)) };
           case 'events':
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
+          case 'readImage': {
+            // Bytes for one body ref, for the detail view's <img> tags. The id
+            // is content-addressed and re-digest-verified on the way out
+            // (src/images.mjs); `name` is echoed from the request because the
+            // display name lives in the body's alt text, not the object store.
+            const out = await readImageFromStore(attachments(), String(p.attachmentId ?? ''));
+            if (!out.ok) return fail(out.code, out.error);
+            const declared = ALLOWED_MEDIA_TYPES.includes(p.mediaType) ? p.mediaType : 'application/octet-stream';
+            return {
+              ok: true,
+              value: {
+                base64: out.value.base64,
+                mediaType: out.value.mediaType ?? declared,
+                name: typeof p.name === 'string' && p.name !== '' ? p.name : null,
+                width: out.value.width,
+                height: out.value.height,
+              },
+            };
+          }
           case 'sessionInfo': {
             // Read-only projection of the ticket a session belongs to. The chat
             // banner asks "did this turn's kanban_* call actually move the
@@ -292,7 +323,16 @@ export default async function kanban(ctx, config = {}) {
           case 'create': {
             const column = p.column ?? 'backlog';
             if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');
-            const ticket = store.createTicket({ ...p, column });
+            // Images first: every pending ref must resolve to a stored attachment
+            // before a ticket exists. A failed save creates nothing.
+            const { images: uploads, ...fields } = p;
+            const prepared = await prepareBodyImages({
+              body: typeof fields.body === 'string' ? fields.body : '',
+              images: uploads,
+              attachments: attachments(),
+            });
+            if (!prepared.ok) return fail('bad_request', prepared.error);
+            const ticket = store.createTicket({ ...fields, body: prepared.body, column });
             appendConfigFingerprint(store, ticket.id);
             void engineRef.current.tick();
             return { ok: true, value: { ticket } };
@@ -300,7 +340,20 @@ export default async function kanban(ctx, config = {}) {
           case 'update': {
             // The human edit boundary: a ticket any engine has touched is locked
             // (src/edit.mjs). Engine-internal writes go to the store directly.
-            const result = editTicket(store, String(p.id), p.patch ?? {}, { reason: p.reason ?? 'ticket edit' });
+            const patch = p.patch !== null && typeof p.patch === 'object' ? { ...p.patch } : {};
+            const uploads = Array.isArray(p.images) ? p.images : [];
+            const current = store.getTicket(String(p.id));
+            const draftBody = typeof patch.body === 'string' ? patch.body : (current?.body ?? '');
+            // Any body write goes through the ref gate, so a saved body can only
+            // ever hold well-formed `kanban-image:` refs; an unresolvable
+            // pending token applies no patch at all.
+            if (current !== undefined && (uploads.length > 0 || patch.body !== undefined || listTokens(draftBody).length > 0)) {
+              if (!store.isEditable(current.id)) return startedFailure(current);
+              const prepared = await prepareBodyImages({ body: draftBody, images: uploads, attachments: attachments() });
+              if (!prepared.ok) return fail('bad_request', prepared.error);
+              if (patch.body !== undefined || prepared.body !== draftBody) patch.body = prepared.body;
+            }
+            const result = editTicket(store, String(p.id), patch, { reason: p.reason ?? 'ticket edit' });
             if (result.ok) void engineRef.current.tick();
             return result;
           }
