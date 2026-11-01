@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+## 0.11.1
+
+### Fixed
+
+- **Image tiles rendered unstyled after an in-place client swap.**
+  `ensureStyles()` returned early whenever its `<style id="kanban-styles">`
+  tag already existed, so a tab that re-applied the new client half without a
+  full reload (reconnect after a service restart) styled the 0.11.0 markup
+  with the previous release's CSS: pasted screenshots showed at natural size
+  with the × below the image. The tag's content is now refreshed whenever it
+  differs from the running client's stylesheet.
+- **The × now floats over the tile corner and appears on hover**, mirroring
+  the native composer attachment chip: a small dark circle with a light ring
+  overhanging the thumbnail's top-right corner, hidden until the tile is
+  hovered or keyboard-focused (`:focus-within`, so it is reachable by Tab),
+  and still removing the tile and its body reference together.
+
 ## 0.11.0
 
 ### Added

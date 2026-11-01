@@ -355,10 +355,11 @@ var CSS =
 		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
 		+ "@media (max-width:900px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 		+ ".kb-img-row{display:flex;align-items:center;gap:8px;margin:4px 0 2px}"
-		+ ".kb-img-rail{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}"
-		+ ".kb-img-tile{position:relative;width:56px;height:56px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);border-radius:var(--dsw-radius-sm,8px);overflow:hidden;background:var(--dsw-alias-bg-layer-2,#f2f2f2)}"
-		+ ".kb-img-tile img{width:100%;height:100%;object-fit:cover;display:block}"
-		+ ".kb-img-x{position:absolute;top:2px;right:2px;width:16px;height:16px;line-height:15px;padding:0;border:0;border-radius:999px;background:rgba(17,17,17,.72);color:#fff;font:600 12px/15px var(--dsw-font-family,sans-serif);text-align:center;cursor:pointer}"
+		+ ".kb-img-rail{display:flex;flex-wrap:wrap;gap:8px;margin:8px 2px 6px;padding:0 6px}"
+		+ ".kb-img-tile{position:relative;width:56px;height:56px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-2,#f2f2f2)}"
+		+ ".kb-img-tile img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}"
+		+ ".kb-img-x{position:absolute;top:-7px;right:-7px;z-index:1;width:18px;height:18px;padding:0;border:1.5px solid var(--dsw-alias-bg-base,#fff);border-radius:999px;background:rgba(17,17,17,.78);color:#fff;font:600 11px/15px var(--dsw-font-family,sans-serif);text-align:center;cursor:pointer;opacity:0;transition:opacity .12s ease}"
+		+ ".kb-img-tile:hover .kb-img-x,.kb-img-tile:focus-within .kb-img-x{opacity:1}"
 		+ ".kb-md{font:400 13px/20px var(--dsw-font-family,sans-serif);overflow-wrap:anywhere}"
 		+ ".kb-md h1,.kb-md h2,.kb-md h3{font-size:15px;margin:10px 0 4px}"
 		+ ".kb-md h4,.kb-md h5,.kb-md h6{font-size:13px;margin:8px 0 4px}"
@@ -373,7 +374,16 @@ var CSS =
 
 		function ensureStyles() {
 			var id = "kanban-styles";
-			if (document.getElementById(id)) return;
+			var existing = document.getElementById(id);
+			if (existing) {
+				// A client half re-applied inside a live tab (reconnect after a
+				// service restart, slot remount) must bring its own stylesheet up
+				// to date. Returning early on an existing tag left the previous
+				// release's CSS styling the new markup — the image tiles rendered
+				// unstyled, at natural size, with the × below the image.
+				if (existing.textContent !== CSS) existing.textContent = CSS;
+				return;
+			}
 			var tag = document.createElement("style");
 			tag.id = id;
 			tag.textContent = CSS;
