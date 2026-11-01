@@ -710,7 +710,9 @@ var CSS =
 				var added = [];
 				var problem = null;
 				files.forEach(function (file) {
-					if (imgCountRefs(body) + added.length >= IMG_MAX) { problem = "A ticket carries at most " + IMG_MAX + " images."; return; }
+					// imgCountRefs sees the refs already inserted this loop, so the
+					// cap is just the live count — no added.length on top.
+					if (imgCountRefs(body) >= IMG_MAX) { problem = "A ticket carries at most " + IMG_MAX + " images."; return; }
 					if (file.size > IMG_MAX_BYTES) { problem = (file.name || "That image") + " is over the 20 MB limit."; return; }
 					var token = imgToken();
 					body = imgInsertRef(body, added.length === 0 ? cursor : body.length, token, file.name || "image");
