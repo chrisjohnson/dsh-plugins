@@ -5,6 +5,34 @@
 
 ## Unreleased
 
+## 0.12.0
+
+### Added
+
+- **New-ticket options: build preset and write mode.** The New-ticket dialog
+  (and the pristine-ticket editor) gained two choices that apply to the
+  ticket's **build** session only. **Preset** picks the agent preset the build
+  session starts in — the first option is *Harness default*, stored as null so
+  the ticket keeps tracking the deployment's default if it changes later; the
+  rest come from the live preset registry, with broken entries labelled
+  *(unavailable)*. **Write mode** picks the build session's file policy from
+  the closed DSH vocabulary: *Read-only*, *Workspace write* (the default) or
+  *Full access*. Plan and verify sessions are unchanged: standard preset,
+  read-only, whatever the ticket chose.
+- A stored preset that is no longer registered when the session spawns does not
+  strand the ticket: the build session starts in the harness default, the
+  driver logs a warning, and the ticket records a `preset_fallback` event with
+  what was asked and what was used.
+- Schema V5: nullable `preset` and `write_mode` columns on `tickets`
+  (`write_mode` CHECK-constrained to the vocabulary). Existing rows stay NULL,
+  which is exactly the pre-0.12.0 behavior — standard preset, workspace-write
+  build, read-only plan/verify.
+- The `capabilities` endpoint now carries `presets` (`{default, items[]}` from
+  the registry) and `writeModes`, and `create` validates a supplied preset id
+  against the registry (`unknown_preset`) and the write mode against the
+  vocabulary (`bad_request`) before any row is written. The detail Overview
+  shows both choices, and the session rows record the preset actually mounted.
+
 ## 0.11.1
 
 ### Fixed

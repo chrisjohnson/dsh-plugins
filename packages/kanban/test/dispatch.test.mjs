@@ -55,13 +55,16 @@ function makeConfig() {
 /**
  * A stub dsh context: agents that record their prompts, a workspace registry
  * whose archive set the test controls, and the session event stream the driver
- * subscribes to.
+ * subscribes to. `failMount` lists preset ids whose mount throws — the shape
+ * of a preset that was unregistered or no longer activates (KAN-15).
  */
-function makeCtx({ archived = [], store } = {}) {
+function makeCtx({ archived = [], store, failMount = [] } = {}) {
   const listeners = {}
   const agentsById = new Map()
   const created = []
   const attached = []
+  /** every presets.mount call, in order; undefined (harness default) as '<default>' */
+  const mounts = []
   const makeAgent = (sessionId) => {
     const session = {
       id: sessionId,
@@ -121,7 +124,18 @@ function makeCtx({ archived = [], store } = {}) {
   const ctx = {
     get(name) {
       if (name === 'agents') return agents
-      if (name === 'agentPresets') return { mount: async () => {} }
+      if (name === 'agentPresets') {
+        return {
+          defaultId: 'standard',
+          async mount(agentCtx, id) {
+            mounts.push(id === undefined ? '<default>' : id)
+            if (id !== undefined && failMount.includes(id)) {
+              throw Object.assign(new Error(`Unknown agent preset: ${id}`), { code: 'agent-preset/not-found' })
+            }
+            return { id: id ?? 'standard' }
+          },
+        }
+      }
       if (name === 'sessionController') return { selectForNextRequest: () => {} }
       if (name === 'workspaceRegistry') {
         return {
@@ -138,7 +152,7 @@ function makeCtx({ archived = [], store } = {}) {
       return () => { delete listeners[name] }
     },
   }
-  return { ctx, agents, agentsById, archived, created, attached, listeners, store, makeAgent }
+  return { ctx, agents, agentsById, archived, created, attached, listeners, store, makeAgent, mounts }
 }
 
 function makeDriver(options = {}) {
@@ -557,4 +571,94 @@ test('a pre-0.7.0 approval-purpose row still reattaches as the approver', { skip
   store.attachSession({ ticketId: ticket.id, dshSessionId: id, role: 'approval', purpose: 'approval' })
   assert.equal(await driver.attachExistingSession(id, harness.makeAgent(id)), true)
   assert.equal(driver.live.get(id).role, 'approver')
+})
+
+// ------------------------------------------------------- KAN-15 ticket options
+//
+// A ticket chooses its build session's preset and write mode at creation; plan
+// and verify stay fixed on the standard preset and read-only. NULL on either
+// column must reproduce the pre-0.12.0 behavior exactly.
+
+test('a build session mounts the ticket preset while the plan session stays standard', { skip }, async () => {
+  const store = newStore()
+  const ticket = store.createTicket({ title: 't', workspaceCwd: CWD, preset: 'ptc' })
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  const plan = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+  assert.deepEqual(harness.mounts, ['ptc', 'standard'])
+  assert.equal(driver.live.get(build.sessionId).preset, 'ptc')
+  assert.equal(driver.live.get(plan.sessionId).preset, 'standard')
+  assert.equal(build.preset, 'ptc', 'the returned preset is what the engine records on the session row')
+})
+
+test('a default ticket mounts the harness default for build and standard for plan', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  const plan = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+  // undefined = the registry's own default, so the ticket keeps tracking it.
+  assert.deepEqual(harness.mounts, ['<default>', 'standard'])
+  assert.equal(driver.live.get(build.sessionId).preset, 'standard')
+})
+
+test('the build sandbox mode follows the ticket write mode; plan and verify stay read-only', { skip }, async () => {
+  for (const mode of ['read-only', 'workspace-write', 'danger-full-access']) {
+    const store = newStore()
+    const ticket = store.createTicket({ title: 't', workspaceCwd: CWD, writeMode: mode })
+    const harness = makeCtx({ store })
+    const driver = makeDriver({ ...harness, store })
+    const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+    assert.deepEqual(harness.agentsById.get(build.sessionId).sandboxModes(), [mode])
+    const plan = await driver.ensureTicketSession({ ticket, role: 'planner', route: ROUTE, purpose: 'plan' })
+    assert.deepEqual(harness.agentsById.get(plan.sessionId).sandboxModes(), ['read-only'])
+  }
+})
+
+test('a NULL write mode reproduces the legacy workspace-write build default', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  assert.equal(driver.live.get(build.sessionId).writeMode, null)
+  assert.deepEqual(harness.agentsById.get(build.sessionId).sandboxModes(), ['workspace-write'])
+})
+
+test('a vanished preset falls back to the harness default with a warning and an event', { skip }, async () => {
+  const store = newStore()
+  const ticket = store.createTicket({ title: 't', workspaceCwd: CWD, preset: 'gone' })
+  const harness = makeCtx({ store, failMount: ['gone'] })
+  const warnings = []
+  const log = { info() {}, warn(...args) { warnings.push(args.join(' ')) }, error() {}, debug() {} }
+  const driver = new SessionDriver({ ctx: harness.ctx, log, getConfig: makeConfig, store })
+  driver.start()
+  const build = await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  // The requested id failed; the default mount succeeded; the session lives.
+  assert.deepEqual(harness.mounts, ['gone', '<default>'])
+  assert.equal(driver.live.get(build.sessionId).preset, 'standard')
+  assert.ok(
+    warnings.some((w) => /could not be mounted/.test(w) && w.includes('gone')),
+    `expected a fallback warning naming the preset, got: ${warnings.join(' | ')}`,
+  )
+  const events = store.listEvents(ticket.id).filter((e) => e.kind === 'preset_fallback')
+  assert.equal(events.length, 1)
+  assert.equal(events[0].payload.requested, 'gone')
+  assert.equal(events[0].payload.used, 'standard')
+})
+
+test('a reattached build session re-applies the ticket write mode and preset', { skip }, async () => {
+  const store = newStore()
+  const ticket = store.createTicket({ title: 't', workspaceCwd: CWD, preset: 'ptc', writeMode: 'read-only' })
+  const harness = makeCtx({ store })
+  const driver = makeDriver({ ...harness, store })
+  const id = 'session-reattach-options'
+  store.attachSession({ ticketId: ticket.id, dshSessionId: id, role: 'build', purpose: 'build' })
+  const agent = harness.makeAgent(id)
+  assert.equal(await driver.attachExistingSession(id, agent), true)
+  assert.deepEqual(agent.sandboxModes(), ['read-only'])
+  assert.equal(driver.live.get(id).writeMode, 'read-only')
+  assert.equal(driver.live.get(id).preset, 'ptc')
 })

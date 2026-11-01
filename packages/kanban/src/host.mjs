@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './config.mjs';
 import { applyRoutes, prepareRoutes, staleEffortWarnings } from './routing.mjs';
-import { KanbanStore } from './store.mjs';
+import { KanbanStore, WRITE_MODES } from './store.mjs';
 import { appendAcceptance, editTicket, replaceAcceptance, startedFailure } from './edit.mjs';
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
@@ -323,6 +323,21 @@ export default async function kanban(ctx, config = {}) {
           case 'create': {
             const column = p.column ?? 'backlog';
             if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');
+            // KAN-15: the write mode is a closed vocabulary the store also
+            // enforces; the preset id can only be checked against the live
+            // registry, so the host does it here before a row exists.
+            if (p.writeMode !== undefined && p.writeMode !== null && !WRITE_MODES.includes(p.writeMode)) {
+              return fail('bad_request', `writeMode must be one of ${WRITE_MODES.join(', ')}`);
+            }
+            if (p.preset !== undefined && p.preset !== null) {
+              const presets = ctx.get('agentPresets');
+              if (typeof presets?.resolve !== 'function') return fail('unavailable', 'the agent preset registry is not mounted');
+              try {
+                await presets.resolve(String(p.preset));
+              } catch {
+                return fail('unknown_preset', `unknown agent preset: ${p.preset}`);
+              }
+            }
             // Images first: every pending ref must resolve to a stored attachment
             // before a ticket exists. A failed save creates nothing.
             const { images: uploads, ...fields } = p;
@@ -518,6 +533,12 @@ export default async function kanban(ctx, config = {}) {
               value: {
                 worktree: typeof ctx.get('betterGitWorktree')?.createForPath === 'function',
                 continueKicker: typeof ctx.get('continueKicker')?.kick === 'function',
+                // KAN-15: the New-ticket preset picker reads this. `default` is
+                // the harness default id (what a null preset tracks), `items`
+                // every registered preset with its activation diagnostic, so a
+                // broken one can be labelled instead of silently failing.
+                presets: await presetsCapability(ctx, log),
+                writeModes: WRITE_MODES,
               },
             };
           case 'worktree': {
@@ -823,6 +844,27 @@ function appendConfigFingerprint(store, ticketId) {
     );
   } catch {
     // best effort
+  }
+}
+
+/**
+ * The preset roster for the capabilities endpoint: the harness default id plus
+ * every registered preset, with its activation diagnostic kept as a boolean so
+ * the client can label a broken entry without parsing it. Null when the
+ * registry is unavailable — the client then offers only the harness default.
+ */
+async function presetsCapability(ctx, log) {
+  const presets = ctx.get('agentPresets');
+  if (presets === undefined || presets === null || typeof presets.list !== 'function') return null;
+  try {
+    const items = await presets.list();
+    return {
+      default: presets.defaultId ?? null,
+      items: items.map((row) => ({ id: row.id, name: row.name ?? row.id, broken: row.broken !== undefined && row.broken !== null })),
+    };
+  } catch (error) {
+    log.warn('capabilities: preset roster failed: %s', message(error));
+    return null;
   }
 }
 
