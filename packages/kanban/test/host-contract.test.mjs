@@ -326,3 +326,21 @@ test('the detail renders the body as markdown and reads images through the RPC',
   assert.match(overview, /children: "Body"/)
   assert.match(overview, /renderMarkdown\(t\.body\)/)
 })
+
+// --------------------------------------------------------------- KAN-7.1
+test('ensureStyles refreshes a stale style tag instead of skipping it', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  const fn = client.slice(client.indexOf('function ensureStyles'), client.indexOf('// ------------------------------------------------------------------ icon'))
+  // The 0.11.0 early-return left old CSS styling new markup after an
+  // in-place client swap — the tile must re-adopt the running stylesheet.
+  assert.match(fn, /if \(existing\.textContent !== CSS\) existing\.textContent = CSS;/)
+  assert.equal(/if \(document\.getElementById\(id\)\) return;/.test(fn), false, 'the bare early-return is the bug')
+})
+
+test('the tile X floats over the corner and reveals on hover or focus', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /\.kb-img-x\{position:absolute;top:-7px;right:-7px;z-index:1[^}]*opacity:0;transition:opacity \.12s ease\}/)
+  assert.match(client, /\.kb-img-tile:hover \.kb-img-x,\.kb-img-tile:focus-within \.kb-img-x\{opacity:1\}/)
+  // The tile must not clip the overhanging badge.
+  assert.equal(/\.kb-img-tile\{[^}]*overflow:hidden/.test(client), false)
+})
