@@ -67,20 +67,31 @@ without a structured submission the card returns to red with the reason it had
 before; a `kanban_submit_*` call from the same turn advances the ticket as
 usual.
 
-Every session starts once in the **standard preset** and uses its natural system
-prompt, so a workflow session has every tool a normal session has. The plugin
-does not rebind presets, install a custom system prompt, or register a tool
-guard. The sandbox mode follows the session's **purpose**: plan is read-only and
-build is workspace-write through all three of its phases — implement, review and
-approval — and a phase change inside one session never moves it. Workflow
-sessions attach to the ticket's selected workspace and are titled
-`KAN-n · purpose`.
+Plan and verify sessions start once in the **standard preset**; a build session
+starts in the preset the ticket chose, or the harness default when it did not
+choose one. Either way a session uses its preset's natural system prompt and has
+every tool that preset gives a normal session. The plugin does not rebind
+presets mid-session, install a custom system prompt, or register a tool guard.
+The sandbox mode follows the session's **purpose** plus the ticket's write-mode
+choice: plan and verify are always read-only, and a build session runs
+`read-only`, `workspace-write` (the default) or `danger-full-access` as the
+ticket asked — through all three of its phases, implement, review and approval;
+a phase change inside one session never moves it. If a stored preset is no
+longer registered when the session spawns, the session starts in the harness
+default and the ticket records a `preset_fallback` event. Workflow sessions
+attach to the ticket's selected workspace and are titled `KAN-n · purpose`.
 
 Ticket choices:
 
 - **Planning:** `now` or `at_pickup`
 - **Questions:** `interactive` (native `ask_user_question`) or `autonomous`
   (self-judgement prompt)
+- **Preset:** the starting preset of the ticket's build session — the harness
+  default (stored as null, so it keeps tracking future default changes) or any
+  registered preset; plan and verify stay on standard
+- **Write mode:** the build session's file policy — `read-only`,
+  `workspace-write` (default) or `danger-full-access`; plan and verify stay
+  read-only
 
 The plan session is one flat session: it asks questions, researches, and calls
 `kanban_submit_plan` when confident. A valid plan ends that session. Implement,
@@ -128,7 +139,8 @@ previous config.
 ## Roles
 
 A role is a model route and a phase — not a tool list. Every role session gets
-the standard preset's tools, and all six Kanban action tools are registered in
+its preset's tools (standard for plan and verify, the ticket's choice for
+build), and all six Kanban action tools are registered in
 every workflow session, whichever purpose it belongs to. Each submitting tool
 enforces its own phase and refuses a call that does not belong to it, so a
 session that changes phase (implement → review) or is reattached after a restart

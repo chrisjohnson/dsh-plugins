@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -243,6 +243,20 @@ CREATE INDEX IF NOT EXISTS tickets_col ON tickets(col, priority DESC, sort_order
 CREATE INDEX IF NOT EXISTS tickets_updated ON tickets(updated_at);
 `;
 
+const V5 = `
+-- New-ticket options (KAN-15). Both are nullable and NULL means "no opinion":
+-- an existing row keeps exactly the pre-0.12.0 behavior (harness default
+-- preset, purpose-derived sandbox mode).
+--   preset     — agent preset id for the ticket's BUILD session; plan and
+--                verify sessions stay on the standard preset.
+--   write_mode — sandbox mode for the build session, from the closed DSH
+--                vocabulary; plan and verify sessions stay read-only.
+ALTER TABLE tickets ADD COLUMN preset TEXT;
+ALTER TABLE tickets ADD COLUMN write_mode TEXT CHECK (
+  write_mode IS NULL OR write_mode IN ('read-only', 'workspace-write', 'danger-full-access')
+);
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -267,5 +281,10 @@ export const MIGRATIONS = [
     // inside one.
     before: 'PRAGMA foreign_keys = OFF;',
     after: 'PRAGMA foreign_keys = ON;',
+  },
+  {
+    version: 5,
+    name: 'ticket-session-options',
+    sql: V5,
   },
 ];

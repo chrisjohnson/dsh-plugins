@@ -40,9 +40,14 @@ test('the only model-facing tools are scoped phase actions', async () => {
   assert.equal(/kanban_(create|move|update|delete)/.test(files['actions.mjs']), false)
 })
 
-test('the standard preset is mounted once and no preset is recomposed', async () => {
+test('the preset is mounted once from the ticket choice and no preset is recomposed', async () => {
   const dispatch = (await sources())['dispatch.mjs']
-  assert.match(dispatch, /presets\.mount\(agentCtx, 'standard'\)/)
+  // KAN-15: build takes the ticket's preset (undefined = harness default),
+  // plan and verify stay on standard; the mount happens exactly once per session.
+  assert.match(dispatch, /const presetChoice = purpose === 'build' \? \(ticket\.preset \?\? undefined\) : 'standard'/)
+  assert.match(dispatch, /presets\.mount\(agentCtx, presetChoice\)/)
+  assert.match(dispatch, /presets\.mount\(agentCtx, undefined\)/, 'the fallback remounts the harness default')
+  assert.equal((dispatch.match(/presets\.mount\(/g) || []).length, 2, 'one requested mount plus the fallback mount, nothing else')
   assert.equal(/recompose\s*\(/.test(dispatch), false)
   assert.equal(/ensurePresets/.test(dispatch), false)
 })
@@ -343,4 +348,62 @@ test('the tile X floats over the corner and reveals on hover or focus', async ()
   assert.match(client, /\.kb-img-tile:hover \.kb-img-x,\.kb-img-tile:focus-within \.kb-img-x\{opacity:1\}/)
   // The tile must not clip the overhanging badge.
   assert.equal(/\.kb-img-tile\{[^}]*overflow:hidden/.test(client), false)
+})
+
+// --------------------------------------------------------------- KAN-15
+
+test('create validates the write mode and the preset before the row exists', async () => {
+  const host = (await sources())['host.mjs']
+  const create = host.slice(host.indexOf("case 'create'"), host.indexOf("case 'update'"))
+  // The closed vocabulary is imported from the store, not re-declared here.
+  assert.match(host, /import \{ KanbanStore, WRITE_MODES \} from '\.\/store\.mjs'/)
+  assert.match(create, /!WRITE_MODES\.includes\(p\.writeMode\)/)
+  assert.match(create, /return fail\('bad_request', `writeMode must be one of \$\{WRITE_MODES\.join\(', '\)\}`\)/)
+  // A supplied preset is resolved against the live registry; unknown ids answer
+  // unknown_preset, and the check sits before createTicket so nothing is half-written.
+  assert.ok(create.indexOf('presets.resolve') < create.indexOf('store.createTicket'), 'the preset must be checked before the ticket row is written')
+  assert.match(create, /await presets\.resolve\(String\(p\.preset\)\)/)
+  assert.match(create, /return fail\('unknown_preset', `unknown agent preset: \$\{p\.preset\}`\)/)
+  // null/undefined preset means the harness default and is never resolved.
+  assert.match(create, /if \(p\.preset !== undefined \&\& p\.preset !== null\) \{/)
+})
+
+test('capabilities exposes the preset roster with the harness default id', async () => {
+  const host = (await sources())['host.mjs']
+  const capabilities = host.slice(host.indexOf("case 'capabilities'"), host.indexOf("case 'worktree'"))
+  assert.match(capabilities, /presets: await presetsCapability\(ctx, log\)/)
+  assert.match(capabilities, /writeModes: WRITE_MODES/)
+  const helper = host.slice(host.indexOf('async function presetsCapability'))
+  const body = helper.slice(0, helper.indexOf('\n}\n') + 3)
+  assert.match(body, /ctx\.get\('agentPresets'\)/)
+  assert.match(body, /await presets\.list\(\)/)
+  assert.match(body, /default: presets\.defaultId \?\? null/)
+  assert.match(body, /broken: row\.broken !== undefined \&\& row\.broken !== null/)
+  // A missing or failing registry says null, it never takes capabilities down.
+  assert.match(body, /return null/)
+})
+
+test('the client offers both options in create and edit and shows them in the overview', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  // The picker: harness default first (empty value = null), broken ones labelled.
+  assert.match(client, /function presetOptions\(presets\)/)
+  assert.match(client, /"Harness default \(" \+ def \+ "\)"/)
+  assert.match(client, /\(p\.broken \? " \(unavailable\)" : ""\)/)
+  // The write-mode control carries the closed vocabulary with workspace-write default.
+  assert.match(client, /var WRITE_MODE_OPTIONS = \[/)
+  assert.match(client, /\{ value: "workspace-write", label: "Workspace write" \}/)
+  assert.match(client, /\{ value: "danger-full-access", label: "Full access" \}/)
+  // Create sends the empty preset as null; both forms carry the two controls.
+  assert.match(client, /preset: form\.preset \|\| null,/)
+  assert.match(client, /writeMode: form\.writeMode/)
+  assert.equal((client.match(/ariaLabel: "Preset"/g) || []).length, 2, 'CreateForm and TicketEditor each render the picker')
+  assert.equal((client.match(/ariaLabel: "Write mode"/g) || []).length, 2, 'CreateForm and TicketEditor each render the control')
+  // The editor diffs both into the one save patch.
+  const editor = client.slice(client.indexOf('function TicketEditor'), client.indexOf('function Timeline'))
+  assert.match(editor, /if \(nextPreset !== \(t\.preset === undefined \? null : t\.preset\)\) patch\.preset = nextPreset/)
+  assert.match(editor, /if \(form\.writeMode !== \(t\.writeMode \|\| "workspace-write"\)\) patch\.writeMode = form\.writeMode/)
+  // The overview shows the stored choice, naming the default when it is null.
+  const overview = client.slice(client.indexOf('function Overview(props)'))
+  assert.match(overview, /children: t\.preset \|\| "harness default"/)
+  assert.match(overview, /children: t\.writeMode \|\| "workspace write"/)
 })

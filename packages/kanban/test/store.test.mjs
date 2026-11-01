@@ -202,3 +202,48 @@ test('setAcceptance with the same list is a no-op: no rewrite, no event', () => 
   assert.deepEqual(rows.map((r) => r.statement), ['a', 'b'])
   assert.equal(store.listEvents(ticket.id).length, before)
 })
+
+// ------------------------------------------------------------- KAN-15 options
+
+test('createTicket persists preset and writeMode; both default to null', () => {
+  const { store } = setup()
+  const plain = store.createTicket({ title: 'plain' })
+  assert.equal(plain.preset, null, 'no preset means the harness default')
+  assert.equal(plain.writeMode, null, 'no write mode means the purpose default')
+  const chosen = store.createTicket({ title: 'chosen', preset: 'ptc', writeMode: 'read-only' })
+  assert.equal(chosen.preset, 'ptc')
+  assert.equal(chosen.writeMode, 'read-only')
+  const event = store.listEvents(chosen.id).find((e) => e.kind === 'created')
+  assert.equal(event.payload.preset, 'ptc')
+  assert.equal(event.payload.writeMode, 'read-only')
+})
+
+test('createTicket rejects a writeMode outside the closed vocabulary', () => {
+  const { store } = setup()
+  for (const bad of ['full-access', 'WRITE', 42, '']) {
+    assert.throws(() => store.createTicket({ title: 't', writeMode: bad }), /writeMode/, `${String(bad)} must be rejected`)
+  }
+  for (const good of ['read-only', 'workspace-write', 'danger-full-access']) {
+    assert.equal(store.createTicket({ title: 't', writeMode: good }).writeMode, good)
+  }
+})
+
+test('createTicket rejects a blank or non-string preset; null is the harness default', () => {
+  const { store } = setup()
+  assert.throws(() => store.createTicket({ title: 't', preset: '   ' }), /preset/)
+  assert.throws(() => store.createTicket({ title: 't', preset: 7 }), /preset/)
+  assert.equal(store.createTicket({ title: 't', preset: null }).preset, null)
+})
+
+test('updateTicket accepts preset and writeMode on a pristine ticket and can clear them', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 't' })
+  const updated = store.updateTicket(ticket.id, { preset: 'minimal', writeMode: 'danger-full-access' })
+  assert.equal(updated.preset, 'minimal')
+  assert.equal(updated.writeMode, 'danger-full-access')
+  const cleared = store.updateTicket(ticket.id, { preset: null, writeMode: null })
+  assert.equal(cleared.preset, null)
+  assert.equal(cleared.writeMode, null)
+  assert.throws(() => store.updateTicket(ticket.id, { writeMode: 'nope' }), /writeMode/)
+  assert.throws(() => store.updateTicket(ticket.id, { preset: '' }), /preset/)
+})

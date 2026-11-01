@@ -9,15 +9,17 @@
 // conversation that built and reviewed the work is what asks the human what to
 // do with it.
 //
-// Every session starts once in the standard preset, so every standard tool a
-// normal session has is available to every role. Kanban registers no tool guard:
-// the action tools are present in every workflow session and each one refuses a
-// call that does not belong to its phase.
+// Every session starts once in a preset: plan and verify always take the
+// standard one; a build session takes the ticket's chosen preset (KAN-15), or
+// the harness default when the ticket has no opinion. Every standard tool a
+// normal session has is available to every role. Kanban registers no tool
+// guard: the action tools are present in every workflow session and each one
+// refuses a call that does not belong to its phase.
 //
 // Phase changes do not rebind a preset or replace a system prompt: they change
 // the next user prompt and which action tool will accept a submission. The
-// sandbox mode is set by session purpose alone, so a phase change inside one
-// session never moves it.
+// sandbox mode is set by session purpose plus the ticket's write-mode choice,
+// so a phase change inside one session never moves it.
 
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -229,13 +231,18 @@ export class SessionDriver {
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     await mkdir(cwd, { recursive: true }).catch(() => {});
     const sessionId = `session-${randomUUID()}`;
+    // KAN-15: the ticket chooses its build session's preset and write mode.
+    // `undefined` means the harness default, so a NULL column keeps tracking
+    // future default changes; plan and verify stay fixed on standard/read-only.
+    const presetChoice = purpose === 'build' ? (ticket.preset ?? undefined) : 'standard';
     const liveRef = {
       handle: null,
       role,
       purpose,
       phase: { role },
       ticketId: ticket.id,
-      preset: 'standard',
+      preset: presetChoice ?? 'standard',
+      writeMode: purpose === 'build' ? (ticket.writeMode ?? null) : null,
       routeKey: null,
       actionDispose: null,
       sandboxMode: null,
@@ -243,7 +250,7 @@ export class SessionDriver {
     };
     const handle = await this.agents.create({
       sessionId,
-      meta: { cwd, agentPreset: 'standard' },
+      meta: { cwd, ...(presetChoice === undefined ? {} : { agentPreset: presetChoice }) },
       agentOptions: {
         provider: route.provider,
         model: route.model,
@@ -252,8 +259,8 @@ export class SessionDriver {
       setup: async (agentCtx) => {
         const presets = this.ctx.get('agentPresets');
         if (presets === undefined) throw new DispatchError('agentPresets service is missing', { code: 'NO_PRESETS' });
-        await presets.mount(agentCtx, 'standard');
-        // No tool guard of any kind: the standard preset's tools are the role's
+        await this.#mountPreset(presets, agentCtx, presetChoice, liveRef, ticket);
+        // No tool guard of any kind: the preset's tools are the role's
         // tools, and every Kanban action tool enforces its own phase.
         liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this, store: this.store });
       },
@@ -270,7 +277,39 @@ export class SessionDriver {
     }
     this.live.set(sessionId, liveRef);
     this.#addTicketSession(ticket.id, purpose, sessionId);
-    return { sessionId, handle };
+    return { sessionId, handle, preset: liveRef.preset };
+  }
+
+  /**
+   * Mount the ticket's chosen preset into a fresh session (KAN-15). A preset
+   * that no longer exists or no longer activates must not strand the ticket:
+   * the session starts in the harness default instead, with a warning and a
+   * `preset_fallback` event on the ticket so the board can explain the swap.
+   */
+  async #mountPreset(presets, agentCtx, presetChoice, liveRef, ticket) {
+    try {
+      const mounted = await presets.mount(agentCtx, presetChoice);
+      if (mounted !== undefined && mounted !== null && mounted.id) liveRef.preset = mounted.id;
+      return;
+    } catch (error) {
+      if (presetChoice === undefined) throw error; // already the harness default
+      this.log.warn(
+        'kanban: preset %s could not be mounted for %s (%s); starting the session in the harness default',
+        presetChoice,
+        ticket.key,
+        String(error?.message ?? error),
+      );
+      const mounted = await presets.mount(agentCtx, undefined);
+      liveRef.preset = (mounted?.id ?? presets.defaultId ?? 'standard');
+      try {
+        this.store?.appendEvent?.(ticket.id, 'preset_fallback', {
+          actor: 'engine',
+          payload: { requested: presetChoice, used: liveRef.preset, reason: String(error?.message ?? error) },
+        });
+      } catch {
+        // The event is best-effort; the session is what matters.
+      }
+    }
   }
 
   /** Change the role inside one session without changing preset or system prompt. */
@@ -309,13 +348,15 @@ export class SessionDriver {
   }
 
   /**
-   * The sandbox mode follows the session purpose and nothing else: planning and
-   * the mechanical verify gate read, building and approving write. A phase change
-   * inside one session (implementer -> reviewer) deliberately leaves it alone, so
-   * a reviewer can run the checks its own review asks for.
+   * The sandbox mode follows the session purpose and the ticket's write-mode
+   * choice (KAN-15): planning and the mechanical verify gate always read; the
+   * build session writes as much as the ticket asked for, defaulting to
+   * workspace-write when the ticket has no opinion. A phase change inside one
+   * session (implementer -> reviewer) deliberately leaves it alone, so a
+   * reviewer can run the checks its own review asks for.
    */
   #applySandboxMode(live) {
-    const mode = live.purpose === 'plan' || live.purpose === 'verify' ? 'read-only' : 'workspace-write';
+    const mode = live.purpose === 'plan' || live.purpose === 'verify' ? 'read-only' : (live.writeMode ?? 'workspace-write');
     if (live.sandboxMode === mode) return;
     try {
       setSandboxMode(live.handle.agent.session, mode);
@@ -389,7 +430,11 @@ export class SessionDriver {
       purpose,
       phase: { role },
       ticketId: ticket.id,
-      preset: 'standard',
+      // Mirror the ticket's choices (KAN-15) so a reattached build session
+      // re-applies the right sandbox mode. The preset itself was mounted when
+      // the session was created and cannot be remounted on an existing agent.
+      preset: purpose === 'build' ? (ticket.preset ?? 'standard') : 'standard',
+      writeMode: purpose === 'build' ? (ticket.writeMode ?? null) : null,
       routeKey: null,
       actionDispose: null,
       sandboxMode: null,

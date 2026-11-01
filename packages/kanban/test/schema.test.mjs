@@ -69,7 +69,7 @@ test('v4 maps the retired columns and keeps every row and child', () => {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM events').get().n, 1)
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM spans').get().n, 1)
   assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
-  assert.equal(db.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get().version, 4)
+  assert.equal(db.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get().version, SCHEMA_VERSION)
   // the new CHECK constraint rejects the retired columns
   assert.throws(
     () => db.prepare("INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at) VALUES ('x', 'KAN-9', 'x', 'now', 'plan', 'at_pickup', 'interactive', 'a', 'a')").run(),
@@ -79,9 +79,40 @@ test('v4 maps the retired columns and keeps every row and child', () => {
   assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1)
 })
 
-test('a fresh database lands on v4 directly', () => {
+test('a fresh database lands on the current schema version directly', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'kanban-schema-')), 'k.db')
   const db = openDatabase(path)
-  assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 4)
+  assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, SCHEMA_VERSION)
   db.close()
+})
+
+// ---------------------------------------------------------------- KAN-15 v5
+
+test('v5 adds nullable preset and write_mode; migrated rows keep NULL', () => {
+  const db = v3Database()
+  assert.equal(migrate(db), 5)
+  const columns = db.prepare('PRAGMA table_info(tickets)').all().map((row) => row.name)
+  assert.ok(columns.includes('preset'), 'tickets.preset exists')
+  assert.ok(columns.includes('write_mode'), 'tickets.write_mode exists')
+  // Every pre-existing row reads NULL: unchanged behavior, no backfill.
+  for (const row of db.prepare('SELECT preset, write_mode FROM tickets').all()) {
+    assert.equal(row.preset, null)
+    assert.equal(row.write_mode, null)
+  }
+})
+
+test('v5 write_mode CHECK accepts the closed vocabulary and rejects anything else', () => {
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  const at = new Date().toISOString()
+  const insert = (mode) =>
+    db.prepare(
+      `INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at, write_mode)
+       VALUES (?, ?, 't', 'backlog', 'plan', 'at_pickup', 'interactive', ?, ?, ?)`,
+    ).run(`id-${mode ?? 'null'}`, `KAN-W-${mode ?? 'null'}`, at, at, mode)
+  for (const mode of ['read-only', 'workspace-write', 'danger-full-access', null]) {
+    insert(mode)
+  }
+  assert.throws(() => insert('full-access'), /CHECK constraint failed/)
+  assert.throws(() => insert('WRITE'), /CHECK constraint failed/)
 })

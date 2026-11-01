@@ -20,6 +20,27 @@ export class StoreError extends Error {
 
 export const nowIso = () => new Date().toISOString();
 
+/** The closed DSH sandbox vocabulary a ticket may choose as its build write mode. */
+export const WRITE_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
+
+/** Normalize a ticket's optional preset id: a non-empty string or null (harness default). */
+export function normalizePreset(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new StoreError('bad_request', 'preset must be a non-empty string or null');
+  }
+  return value.trim();
+}
+
+/** Normalize a ticket's optional build write mode: a vocabulary member or null (purpose default). */
+export function normalizeWriteMode(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !WRITE_MODES.includes(value)) {
+    throw new StoreError('bad_request', `writeMode must be one of ${WRITE_MODES.join(', ')} or null`, { writeMode: value });
+  }
+  return value;
+}
+
 const TICKET_FIELDS = [
   'title',
   'body',
@@ -31,6 +52,8 @@ const TICKET_FIELDS = [
   'confidenceThreshold',
   'planTiming',
   'planQuestions',
+  'preset',
+  'writeMode',
 ];
 
 function ticketFromRow(row) {
@@ -52,6 +75,8 @@ function ticketFromRow(row) {
     attemptCount: Number(row.attempt_count),
     escalationRung: Number(row.escalation_rung),
     workspaceCwd: row.workspace_cwd,
+    preset: row.preset ?? null,
+    writeMode: row.write_mode ?? null,
     needsAttentionReason: row.needs_attention_reason,
     confidenceThreshold: row.confidence_threshold === null ? null : Number(row.confidence_threshold),
     createdAt: row.created_at,
@@ -186,6 +211,13 @@ export class KanbanStore {
     if (threshold !== undefined && threshold !== null && (typeof threshold !== 'number' || threshold < 0 || threshold > 1)) {
       throw new StoreError('bad_request', 'confidenceThreshold must be in [0,1]');
     }
+    // KAN-15: the two new ticket options. The store only checks shape — a
+    // preset id's existence is the host's job (it owns the preset registry);
+    // the write mode is a closed vocabulary both the store and the column CHECK
+    // enforce. NULL on either means "no opinion", i.e. exactly the pre-0.12.0
+    // behavior.
+    const preset = normalizePreset(input.preset);
+    const writeMode = normalizeWriteMode(input.writeMode);
 
     return this.transact(() => {
       const maxRow = this.db.prepare("SELECT MAX(CAST(SUBSTR(key, 5) AS INTEGER)) AS n FROM tickets WHERE key LIKE 'KAN-%'").get();
@@ -199,8 +231,8 @@ export class KanbanStore {
         .prepare(
           `INSERT INTO tickets (id, key, title, body, col, phase, plan_timing, plan_questions, priority, sort_order,
              allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
-             needs_attention_reason, confidence_threshold, created_at, updated_at, version)
-           VALUES (?, ?, ?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, 1)`,
+             needs_attention_reason, confidence_threshold, preset, write_mode, created_at, updated_at, version)
+           VALUES (?, ?, ?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, 1)`,
         )
         .run(
           id,
@@ -216,6 +248,8 @@ export class KanbanStore {
           budgetUsd,
           typeof input.workspaceCwd === 'string' && input.workspaceCwd !== '' ? input.workspaceCwd : null,
           threshold ?? null,
+          preset,
+          writeMode,
           at,
           at,
         );
@@ -231,7 +265,7 @@ export class KanbanStore {
       }
       this.#event(id, 'created', {
         actor: 'human',
-        payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd },
+        payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd, preset, writeMode },
       });
       return this.getTicket(id);
     });
@@ -265,6 +299,10 @@ export class KanbanStore {
       const modes = validateTicketModes(next.planTiming, next.planQuestions);
       if (!modes.ok) throw new StoreError('invalid_modes', modes.reason);
     }
+    // Same shape checks as createTicket: an explicit null clears the option
+    // back to "no opinion"; anything else must be well-formed.
+    if (patch.preset !== undefined) next.preset = normalizePreset(patch.preset);
+    if (patch.writeMode !== undefined) next.writeMode = normalizeWriteMode(patch.writeMode);
     if (next.allowPaid && !(next.budgetUsd > 0)) {
       throw new StoreError('bad_request', 'paid tickets need a positive budgetUsd');
     }
@@ -275,7 +313,8 @@ export class KanbanStore {
       this.db
         .prepare(
           `UPDATE tickets SET title = ?, body = ?, priority = ?, sort_order = ?, allow_paid = ?, budget_usd = ?,
-             workspace_cwd = ?, confidence_threshold = ?, plan_timing = ?, plan_questions = ?, updated_at = ?, version = version + 1
+             workspace_cwd = ?, confidence_threshold = ?, plan_timing = ?, plan_questions = ?, preset = ?, write_mode = ?,
+             updated_at = ?, version = version + 1
            WHERE id = ?`,
         )
         .run(
@@ -289,6 +328,8 @@ export class KanbanStore {
           next.confidenceThreshold,
           next.planTiming,
           next.planQuestions,
+          next.preset,
+          next.writeMode,
           at,
           ticket.id,
         );

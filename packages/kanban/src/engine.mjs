@@ -825,7 +825,9 @@ export class Engine {
         dshSessionId: session.sessionId,
         role: purpose,
         purpose,
-        preset: 'standard',
+        // The preset the driver actually mounted (KAN-15): the ticket's choice
+        // for a build session, 'standard' for plan and verify.
+        preset: session.preset ?? 'standard',
         provider: route.provider,
         model: route.model,
       });

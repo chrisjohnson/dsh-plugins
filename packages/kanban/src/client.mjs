@@ -634,6 +634,41 @@ var CSS =
 			});
 		}
 
+		// KAN-15: the two new ticket options shared by the create form and the
+		// editor. No hooks here either — plain data over the controls.
+		// A null preset means "harness default" (the empty option), so the
+		// ticket keeps tracking the deployment's default even if it changes.
+		// A null write mode means "purpose default", which for a build session
+		// is workspace-write — the segmented control's default position.
+
+		var WRITE_MODE_OPTIONS = [
+			{ value: "read-only", label: "Read-only" },
+			{ value: "workspace-write", label: "Workspace write" },
+			{ value: "danger-full-access", label: "Full access" }
+		];
+
+		function presetOptions(presets) {
+			var def = presets && presets.default ? presets.default : "standard";
+			var out = [{ value: "", label: "Harness default (" + def + ")" }];
+			var items = presets && Array.isArray(presets.items) ? presets.items : [];
+			items.forEach(function (p) {
+				out.push({ value: p.id, label: (p.name || p.id) + (p.broken ? " (unavailable)" : "") });
+			});
+			return out;
+		}
+
+		function PresetPicker(props) {
+			return h("select", {
+				className: "kb-select",
+				style: { width: "100%" },
+				"aria-label": props.ariaLabel,
+				value: props.value,
+				onChange: function (ev) { props.onChange(ev.target.value); }
+			}, presetOptions(props.presets).map(function (o) {
+				return h("option", { key: o.value, value: o.value, children: o.label });
+			}));
+		}
+
 		// ---------------------------------------------------------------- images
 		//
 		// A ticket body carries image refs as markdown: ![name](kanban-image:<id>).
@@ -909,7 +944,7 @@ var CSS =
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "", preset: "", writeMode: "workspace-write" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
@@ -969,11 +1004,15 @@ var CSS =
 						allowPaid: !!form.allowPaid,
 						budgetUsd: Number(form.budget) || 0,
 						workspaceCwd: form.workspace || null,
-						column: form.status
+						column: form.status,
+						// KAN-15: empty preset means "harness default" and is
+						// stored as null so it keeps tracking future changes.
+						preset: form.preset || null,
+						writeMode: form.writeMode
 					}).then(function (res) {
 						setBusy(false);
 						if (res && res.ok) {
-							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "" });
+							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "", preset: "", writeMode: "workspace-write" });
 							props.onCreated(res.value.ticket);
 						} else {
 							setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -1042,6 +1081,23 @@ var CSS =
 						h("span", { className: "kb-label", children: "Allow paid" })),
 					h("div", null, h("div", { className: "kb-label", children: "Budget USD" }),
 						h("input", { className: "kb-input", type: "number", value: form.budget, style: { width: 100 }, onChange: function (ev) { field("budget", ev.target.value); } }))
+				),
+				h("div", { className: "kb-row" },
+					h("div", { style: { flex: 1, minWidth: 220 } },
+						h("div", { className: "kb-label", children: "Preset" }),
+						h(PresetPicker, { ariaLabel: "Preset", presets: props.presets, value: form.preset, onChange: function (value) { field("preset", value); } }),
+						h("div", { className: "kb-hint", children: "Starting preset for the build session. Planning and verification always run the standard preset, read-only." })
+					),
+					h("div", null,
+						h("div", { className: "kb-label", children: "Write mode" }),
+						h(SegmentedControl, {
+							ariaLabel: "Write mode",
+							value: form.writeMode,
+							onChange: function (value) { field("writeMode", value); },
+							options: WRITE_MODE_OPTIONS
+						}),
+						h("div", { className: "kb-hint", children: "File policy of the build session." })
+					)
 				),
 				props.worktreeAvailable ? h("div", { className: "kb-row" },
 					h("div", { className: "kb-switchrow" },
@@ -1132,7 +1188,9 @@ var CSS =
 				priority: t.priority,
 				allowPaid: t.allowPaid,
 				budgetUsd: t.budgetUsd,
-				workspaceCwd: t.workspaceCwd || ""
+				workspaceCwd: t.workspaceCwd || "",
+				preset: t.preset || "",
+				writeMode: t.writeMode || "workspace-write"
 			});
 			var form = s[0], setForm = s[1];
 			var b = React.useState(false);
@@ -1168,6 +1226,11 @@ var CSS =
 				if (!!form.allowPaid !== !!t.allowPaid) patch.allowPaid = !!form.allowPaid;
 				if (Number(form.budgetUsd) !== Number(t.budgetUsd)) patch.budgetUsd = Number(form.budgetUsd) || 0;
 				if ((form.workspaceCwd || "") !== (t.workspaceCwd || "")) patch.workspaceCwd = form.workspaceCwd || null;
+				// KAN-15: same rules as create — empty preset stores null, and
+				// the write mode is always an explicit choice once edited.
+				var nextPreset = form.preset || null;
+				if (nextPreset !== (t.preset === undefined ? null : t.preset)) patch.preset = nextPreset;
+				if (form.writeMode !== (t.writeMode || "workspace-write")) patch.writeMode = form.writeMode;
 				var lines = form.acceptance.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
 				var acceptanceChanged = lines.length !== prior.length || lines.some(function (line, i) { return line !== prior[i]; });
 				if (acceptanceChanged) patch.acceptance = lines;
@@ -1233,6 +1296,18 @@ var CSS =
 						h("input", { className: "kb-input", type: "number", "aria-label": "Budget USD", style: { width: 100 }, value: form.budgetUsd, onChange: function (ev) { field("budgetUsd", ev.target.value); } }))),
 				h("div", null, h("div", { className: "kb-label", children: "Workspace cwd" }),
 					h("input", { className: "kb-input", style: { width: "100%" }, value: form.workspaceCwd, placeholder: "(engine default)", onChange: function (ev) { field("workspaceCwd", ev.target.value); } })),
+				h("div", { className: "kb-row" },
+					h("div", { style: { flex: 1, minWidth: 220 } },
+						h("div", { className: "kb-label", children: "Preset" }),
+						h(PresetPicker, { ariaLabel: "Preset", presets: props.presets, value: form.preset, onChange: function (value) { field("preset", value); } })),
+					h("div", null,
+						h("div", { className: "kb-label", children: "Write mode" }),
+						h(SegmentedControl, {
+							ariaLabel: "Write mode",
+							value: form.writeMode,
+							onChange: function (value) { field("writeMode", value); },
+							options: WRITE_MODE_OPTIONS
+						}))),
 				err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy, onClick: save, children: busy ? "Saving…" : "Save ticket" }),
@@ -1457,6 +1532,7 @@ var CSS =
 					h(TicketEditor, {
 						ticket: t,
 						acceptance: d.acceptance,
+						presets: props.presets || null,
 						onClose: function () { setModal(null); },
 						onSave: function (patch) {
 							// images is a sibling of patch on the wire: the Host
@@ -1524,6 +1600,8 @@ var CSS =
 						h("b", { children: "Workspace" }), h("span", { children: t.workspaceCwd || "(engine default)" }),
 						h("b", { children: "Planning" }), h("span", { children: t.planTiming === "now" ? "now" : "when started" }),
 						h("b", { children: "Questions" }), h("span", { children: t.planQuestions === "autonomous" ? "decide autonomously" : "ask me" }),
+						h("b", { children: "Preset" }), h("span", { children: t.preset || "harness default" }),
+						h("b", { children: "Write mode" }), h("span", { children: t.writeMode || "workspace write" }),
 						h("b", { children: "Attempts" }), h("span", { children: t.attemptCount + " / " + (props.maxAttempts || 3) }),
 						h("b", { children: "Spend" }), h("span", { children: fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)") }),
 						h("b", { children: "Allow paid" }), h("span", { children: t.allowPaid ? "yes" : "no" }),
@@ -1890,9 +1968,10 @@ var CSS =
 				),
 				h("div", { className: "kb-body" },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
-					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })),
+					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })),
 					selectedId ? h(TicketDetail, {
 						detail: detail,
+						presets: capabilities.presets || null,
 						onBack: function () { setSelectedId(null); setDetail(null); },
 						onSave: function (id, patch, images) { return act("update", { id: id, patch: patch, images: images || [] }); },
 						onResolve: function (id, action, instruction) { return act("resolve", { id: id, action: action, instruction: instruction }); },
