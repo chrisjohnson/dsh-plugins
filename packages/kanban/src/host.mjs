@@ -19,7 +19,7 @@ import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { cardStatus } from './lifecycle.mjs';
-import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore } from './images.mjs';
+import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
 const API_BASE = '/api/kanban';
@@ -87,7 +87,7 @@ export default async function kanban(ctx, config = {}) {
   // store; the ticket body only carries `kanban-image:<id>` refs (src/images.mjs).
   // Looked up lazily so a profile without the service still boots and only an
   // actual image write says anything about it.
-  const attachments = () => ctx.attachments ?? (typeof ctx.get === 'function' ? ctx.get('attachments') : undefined);
+  const attachments = () => resolveAttachments(ctx);
 
   const driver = new SessionDriver({
     ctx,

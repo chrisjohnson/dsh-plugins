@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
-import { refsFromBody } from './images.mjs';
+import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
@@ -49,7 +49,7 @@ export function attachedImages(ctx, body) {
   const refs = refsFromBody(typeof body === 'string' ? body : '');
   const out = [];
   const seen = new Set();
-  const attachments = ctx?.attachments ?? (typeof ctx?.get === 'function' ? ctx.get('attachments') : undefined);
+  const attachments = resolveAttachments(ctx);
   for (const ref of refs) {
     if (ref.attachmentId === null || seen.has(ref.attachmentId)) continue;
     seen.add(ref.attachmentId);

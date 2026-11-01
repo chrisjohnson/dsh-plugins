@@ -325,6 +325,29 @@ export function sniffImage(bytes) {
 }
 
 /**
+ * Find the attachment store on a Cordis context. `ctx.get('attachments')` is
+ * the lookup that works without an inject declaration; the `ctx.attachments`
+ * property sugar throws on a real context that did not inject it, so it is
+ * only tried as a fallback (test stubs hand the service over as a property).
+ */
+export function resolveAttachments(ctx) {
+  if (ctx === undefined || ctx === null) return undefined;
+  if (typeof ctx.get === 'function') {
+    try {
+      const got = ctx.get('attachments');
+      if (got !== undefined && got !== null) return got;
+    } catch {
+      /* service not provided — fall through */
+    }
+  }
+  try {
+    return ctx.attachments ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Read one stored image back for the browser, through the attachment store's
  * host-file view: `imageHostPath` locates the content-addressed object, the
  * bytes are re-digested and must match the id they are read under — the same
