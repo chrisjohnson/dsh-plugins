@@ -5,6 +5,21 @@
 
 ## Unreleased
 
+## 0.12.1
+
+### Fixed
+
+- **Clicking the sidebar Kanban row now always lands on the board.** The row
+  selects the panel, so when the kanban panel was already active the click
+  re-wrote the same store value, nothing re-rendered, and the page stayed
+  exactly where it was — an open ticket stayed open, the Analytics view stayed
+  up, and the row looked dead. The click is now caught before the panel
+  selection runs: when it lands on this plugin's own sidebar row (wide sidebar
+  or collapsed rail) while kanban is already the active panel, the page does
+  what the top **Board** button does — switch to the board, close the ticket
+  detail, and leave the Analytics view. Clicks that merely open the panel are
+  untouched, and the row keeps its normal selection behaviour everywhere else.
+
 ## 0.12.0
 
 ### Added

@@ -19,6 +19,11 @@ window.__ModuleLoader__.load({
 
 		var connection = null;
 		var openSessionById = null;
+		// kanban-goBoardRequest: set by the mounted KanbanPage to its own "back to
+		// the Board" reset — exactly what the top Board button does. The sidebar
+		// panel row lives outside this component, so the click bridge in apply()
+		// reaches the live state through this module-scope callback, not a prop.
+		var goBoardRequest = null;
 		var rpcSeq = 0;
 
 		function rpc(method, payload) {
@@ -1904,6 +1909,18 @@ var CSS =
 			var dropTarget = dp[0], setDropTarget = dp[1];
 			var poll = React.useRef(0);
 
+			// kanban-goBoardRequest: the sidebar panel row's bridge to this page's
+			// state. Clicking the row while the kanban panel is already active
+			// re-selects the same main key, so the store writes nothing and this
+			// component stays mounted with whatever view/detail it had. The row's
+			// click handler (registered in apply()) calls this to do exactly what
+			// the top Board button does: show the board, close the detail.
+			goBoardRequest = function () {
+				setView("board");
+				setSelectedId(null);
+				setDetail(null);
+			};
+
 			function loadBoard() {
 				rpc("board", {}).then(function (res) {
 					if (res && res.ok) setBoard(res.value);
@@ -2363,6 +2380,39 @@ var CSS =
 				return;
 			}
 			ensureStyles();
+			// Clicking this plugin's own sidebar row while the kanban panel is
+			// already active would otherwise do nothing: the row's selectPanel
+			// writes the same store value, no subscriber notification fires, and
+			// KanbanPage stays mounted on whatever view or ticket detail it had.
+			// Capture the click before React's own handler and reset the page to
+			// the Board, exactly what the top Board button does. The row is
+			// identified by the plugin-unique icon wrapper it renders — present in
+			// both the wide sidebar and the collapsed rail — and the layout guard
+			// means the reset only happens when kanban is already the active
+			// panel; a click that first opens the panel needs no reset, the page
+			// mounts on the board. If the layout service is unavailable the guard
+			// degrades to always resetting: harmless, since goBoardRequest only
+			// exists while KanbanPage is mounted.
+			var layout = null;
+			try {
+				layout = ctx.layout !== undefined ? ctx.layout : ctx.get ? ctx.get("layout") : null;
+			} catch (error) { layout = null; }
+			ctx.effect(function () {
+				function onDocumentClick(event) {
+					if (event.button) return;
+					var target = event.target;
+					if (!target || typeof target.closest !== "function") return;
+					var row = target.closest("button");
+					if (!row || !row.querySelector(".kb-nav-icon-wrap")) return;
+					if (layout && layout.panelInfo && typeof layout.panelInfo.getSnapshot === "function") {
+						var info = layout.panelInfo.getSnapshot();
+						if (!info || info.activePanelId !== "kanban") return;
+					}
+					if (goBoardRequest) goBoardRequest();
+				}
+				document.addEventListener("click", onDocumentClick, true);
+				return function () { document.removeEventListener("click", onDocumentClick, true); };
+			}, "dsh-kanban: sidebar row click resets to board");
 			ctx.effect(function () {
 				return slots.inject("sidebar.panellist", function () {
 					return slots.register(
@@ -2392,7 +2442,7 @@ var CSS =
 		}
 
 		exports.apply = apply;
-		exports.inject = ["connection", "slots"];
+		exports.inject = ["connection", "slots", "layout"];
 		return module.exports;
 	}
 });
