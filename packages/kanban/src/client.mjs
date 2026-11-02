@@ -201,6 +201,9 @@ var CSS =
 		+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.err{--kb-accent:#b91c1c}.kb-next.idle{--kb-accent:#64748b}"
 		+ ".kb-total{color:var(--dsw-alias-label-secondary,#555);font-variant-numeric:tabular-nums;white-space:nowrap}"
 		+ ".kb-age{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary,#999)}"
+		+ ".kb-cardfoot{display:flex;align-items:center;gap:6px;margin-top:1px}"
+		+ ".kb-planbtn{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 10px;border:.5px solid color-mix(in srgb,#2563eb 38%,transparent);border-radius:999px;background:color-mix(in srgb,#2563eb 8%,var(--dsw-alias-bg-base,#fff));color:#2563eb;font:600 11px/16px var(--dsw-font-family,sans-serif);cursor:pointer;white-space:nowrap}"
+		+ ".kb-planbtn:hover{background:color-mix(in srgb,#2563eb 16%,var(--dsw-alias-bg-base,#fff));border-color:#2563eb}"
 		+ ".kb-empty{padding:20px 10px;border:1px dashed color-mix(in srgb,var(--kb-accent,#888) 22%,transparent);border-radius:var(--dsw-radius-md,12px);background:transparent;font-size:11px;line-height:16px}"
 		+ ".kb-detail{gap:12px;max-width:1180px}"
 		+ ".kb-hero{--kb-accent:#2563eb;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 7%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:14px 16px;box-shadow:0 10px 30px rgba(15,23,42,.04)}"
@@ -487,6 +490,18 @@ var CSS =
 			if (t.column === "working") return "Queued";
 			return "Ready";
 		}
+		// KAN-16: offer "Start planning" exactly where the host would accept it.
+		// This mirrors the host rule in src/planning.mjs — this half is a classic
+		// browser script and cannot import it, so the rule is written twice on
+		// purpose and host-contract.test.mjs checks the two agree.
+		// A parked ticket keeps its button: pressing it again is the retry.
+		function canStartPlanning(t) {
+			if (!t) return false;
+			if (t.column !== "backlog" || t.phase !== "plan") return false;
+			if (t.planTiming === "now") return false;
+			if ((t.status || "idle") === "active" || t.awaitingQuestion) return false;
+			return true;
+		}
 
 		function DropGhost(props) {
 			var t = props.ticket;
@@ -549,7 +564,22 @@ var CSS =
 					h("span", { className: "kb-total", title: "Total time on ticket", children: fmtDur(t.totalMs !== undefined ? t.totalMs : Date.now() - new Date(t.createdAt).getTime()) }),
 					h("span", { className: "kb-spacer" }),
 					h("span", { className: "kb-age", children: ago(t.updatedAt) })
-				)
+				),
+				// A conditional element, never a conditional hook: Card calls no
+				// hooks, so the button appearing cannot change a hook count.
+				// stopPropagation keeps the click off the card's own onClick,
+				// which would open the detail instead of starting the plan.
+				canStartPlanning(t) ? h("div", { className: "kb-cardfoot" },
+					h("button", {
+						type: "button",
+						className: "kb-planbtn",
+						title: "Plan this ticket now, in Backlog, without moving it to Working",
+						onClick: function (ev) {
+							ev.stopPropagation();
+							if (props.onStartPlanning) props.onStartPlanning(t.id);
+						}
+					}, "Start planning")
+				) : null
 			);
 		}
 
@@ -558,7 +588,7 @@ var CSS =
 			var dragging = props.dragId !== null && props.dragId !== undefined;
 			var active = dragging && props.dropTarget && props.dropTarget.column === props.column;
 			var ghost = active && props.dragTicket ? h(DropGhost, { key: "drop-ghost", ticket: props.dragTicket, column: props.column }) : null;
-			var rendered = items.map(function (t) { return h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onReorder: props.onReorder, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd, onDragOverCard: props.onDragOverCard, onDropCard: props.onDropCard }); });
+			var rendered = items.map(function (t) { return h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onReorder: props.onReorder, onStartPlanning: props.onStartPlanning, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd, onDragOverCard: props.onDragOverCard, onDropCard: props.onDropCard }); });
 			if (ghost) {
 				var beforeId = props.dropTarget.beforeId;
 				var index = beforeId === null || beforeId === undefined ? -1 : items.findIndex(function (t) { return t.id === beforeId; });
@@ -1507,7 +1537,17 @@ var CSS =
 								"aria-label": t.editable === false ? "Edit ticket, locked because the ticket has already started" : "Edit ticket",
 								disabled: t.editable === false,
 								onClick: function () { setModal("ticket"); }
-							}, h(PencilIcon)))
+							}, h(PencilIcon))),
+						// KAN-16: the same button as on the card, same rule. The
+						// detail keeps status and awaitingQuestion on `d` rather
+						// than on the ticket, so the rule is handed a merged view
+						// instead of a second copy of the condition.
+						canStartPlanning({ column: t.column, phase: t.phase, planTiming: t.planTiming, status: detailStatus, awaitingQuestion: d.awaitingQuestion }) ? h("button", {
+							type: "button",
+							className: "kb-btn sm",
+							title: "Plan this ticket now, in Backlog, without moving it to Working",
+							onClick: function () { props.onAction(t.id, "startPlanning", {}); }
+						}, "Start planning") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h("div", { className: "kb-hero-meta" },
@@ -1997,9 +2037,9 @@ var CSS =
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						h("div", { className: "kb-cols" },
-							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
-							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard }),
-							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard })
+							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow }),
+							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow }),
+							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow })
 						)
 					)
 				),
@@ -2079,6 +2119,11 @@ var CSS =
 			function reorder(id, beforeId) {
 				if (id === beforeId) return;
 				act("reorder", { id: id, beforeId: beforeId });
+			}
+			// KAN-16: through `act` so a failure lands in the page notice and a
+			// success refreshes the board (and the detail, if one is open).
+			function startPlanningNow(id) {
+				return act("action", { id: id, action: "startPlanning" });
 			}
 			function startDrag(id) {
 				setDragId(id);

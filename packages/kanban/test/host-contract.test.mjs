@@ -407,3 +407,66 @@ test('the client offers both options in create and edit and shows them in the ov
   assert.match(overview, /children: t\.preset \|\| "harness default"/)
   assert.match(overview, /children: t\.writeMode \|\| "workspace write"/)
 })
+
+// --------------------------------------------------------------- KAN-16
+
+test('startPlanning is a host action that delegates to the planning module', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /import \{ startPlanning \} from '\.\/planning\.mjs'/)
+  const action = host.slice(host.indexOf("case 'action':"))
+  assert.match(action, /if \(action === 'startPlanning'\) \{/)
+  // The decision is not re-inlined in the wiring: one call, its result mapped
+  // onto the existing envelope, and the same engineRef the other actions use.
+  assert.match(action, /const result = startPlanning\(\{ store, driver, engine: engineRef\.current, ticket \}\);/)
+  assert.match(action, /if \(!result\.ok\) return fail\(result\.code, result\.message\);/)
+  assert.match(action, /return \{ ok: true, value: \{ ticket: result\.ticket \} \};/)
+})
+
+test('the planning module owns the guards and never moves the ticket', async () => {
+  const planning = (await sources())['planning.mjs']
+  // Column and phase are checked, never written: the only store calls are the
+  // park lift and the planTiming flip.
+  assert.match(planning, /ticket\.column !== 'backlog' \|\| ticket\.phase !== 'plan'/)
+  assert.equal(/store\.(transitionTicket|setColumn|setPhase)/.test(planning), false, 'start planning must not move the ticket')
+  assert.match(planning, /store\.clearNeedsAttention\(ticket\.id, \{ actor: 'human', reason: 'start planning' \}\)/)
+  assert.match(planning, /store\.updateTicket\(ticket\.id, \{ planTiming: 'now' \}, \{ actor: 'human', reason: 'start planning' \}\)/)
+  assert.match(planning, /if \(typeof engine\?\.tick === 'function'\) void engine\.tick\(\);/)
+})
+
+test('the client offers Start planning on the card and in the detail hero', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  // One rule, used by both seats.
+  assert.match(client, /function canStartPlanning\(t\) \{/)
+  assert.equal((client.match(/canStartPlanning\(/g) || []).length, 3, 'the definition plus the card and the hero')
+  // The card button stops the click so it does not also open the detail.
+  const card = client.slice(client.indexOf('function Card(props)'), client.indexOf('function Column(props)'))
+  assert.match(card, /canStartPlanning\(t\) \? h\("div", \{ className: "kb-cardfoot" \}/)
+  assert.match(card, /ev\.stopPropagation\(\);\s*\n\s*if \(props\.onStartPlanning\) props\.onStartPlanning\(t\.id\);/)
+  // Column passes the handler down; the board sends it as an action and lets act()
+  // refresh the board and surface a refusal as a notice.
+  assert.match(client, /onStartPlanning: props\.onStartPlanning/)
+  assert.match(client, /onStartPlanning: startPlanningNow/)
+  assert.match(client, /function startPlanningNow\(id\) \{\s*\n\s*return act\("action", \{ id: id, action: "startPlanning" \}\);/)
+  // The detail hero sits next to the pencil and uses the detail's own action prop.
+  const hero = client.slice(client.indexOf('function TicketDetail(props)'), client.indexOf('function ApprovalPanel'))
+  assert.match(hero, /canStartPlanning\(\{ column: t\.column, phase: t\.phase, planTiming: t\.planTiming, status: detailStatus, awaitingQuestion: d\.awaitingQuestion \}\)/)
+  assert.match(hero, /props\.onAction\(t\.id, "startPlanning", \{\}\)/)
+})
+
+test('the client rule and the host rule say the same thing', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  const planning = (await sources())['planning.mjs']
+  const rule = (text, name) => {
+    const body = text.slice(text.indexOf(`function ${name}`))
+    const lines = body.split('\n').slice(0, 10).join('\n')
+    return [
+      /column !== ["']backlog["'] \|\| .*phase !== ["']plan["']/.test(lines),
+      /planTiming === ["']now["']/.test(lines),
+      /status.*=== ["']active["']/.test(lines),
+      /awaitingQuestion/.test(lines),
+    ]
+  }
+  const [host, browser] = [rule(planning, 'canStartPlanning'), rule(client, 'canStartPlanning')]
+  assert.deepEqual(browser, host, 'the client hides a button the host would accept, or offers one it would refuse')
+  assert.deepEqual(host, [true, true, true, true], 'the host rule lost one of its four conditions')
+})

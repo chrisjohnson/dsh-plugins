@@ -348,3 +348,39 @@ Consequences, and how they are handled:
   it is a hand-over, not a work round. With no `approver` route configured the
   engine skips the turn and parks the ticket the way it used to, so a deployment
   that never configured one loses the prompt and nothing else.
+
+## 2026-11-02 — planning on demand, in place (0.13.0)
+
+Backlog has always meant *not yet*, and the only way to make a ticket think was
+to drag it into Working, which also meant "build it". KAN-16 splits those two
+statements: **Start planning** says *think now, build later*, and says it from
+the card.
+
+- **No engine change.** `tick` already launches Backlog tickets at the plan
+  phase whose `planTiming` is `now`, and `advance` already stops such a ticket
+  at Build until a human drags it over. So the button is not a new path through
+  the workflow; it is a one-field write that puts a ticket onto a path the
+  engine has had since 0.5.0, plus a tick. That is why the release is a minor
+  one with no migration and no new state.
+- **It writes `planTiming` and nothing else.** No column move, no phase move. A
+  human move is a statement about where the ticket lives; this is a statement
+  about when it thinks, and the two must stay distinguishable in the audit
+  trail. `startPlanning` therefore refuses anything that is not
+  `backlog`/`plan` rather than quietly relocating it.
+- **It doubles as the retry on a parked plan.** A plan that ended without
+  submitting parks the ticket and leaves its session open on purpose, so the
+  human can talk it through. The obvious guard — "refuse while a plan session is
+  live" — would then refuse the exact case the button is also for. The rule is
+  instead: refuse while a turn of this ticket is in flight, and refuse while a
+  plan session is open *on a ticket nobody has parked*. A parked ticket is by
+  definition not running, so its open session is the thing being retried, not a
+  second launch. An unanswered grilling question is not parked, its session is
+  live, and so it is refused — the answer there is to reply, not to re-launch.
+- **The visibility rule is written twice, on purpose.** `src/planning.mjs` owns
+  it for the host; `client.mjs` is a classic browser script with no imports and
+  carries its own copy. `host-contract.test.mjs` compares the two so a change
+  on one side fails the suite rather than stranding a button the host refuses.
+- **The decision lives outside `host.mjs`.** The host half is wiring and cannot
+  be imported without the dsh peer packages, so an action defined inline there
+  is an action no test can reach. `startPlanning` takes its store, driver and
+  engine as arguments and is tested against a real store and a real `Engine`.

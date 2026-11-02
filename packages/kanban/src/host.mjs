@@ -19,6 +19,7 @@ import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { cardStatus } from './lifecycle.mjs';
+import { startPlanning } from './planning.mjs';
 import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
@@ -452,6 +453,14 @@ export default async function kanban(ctx, config = {}) {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
               const attached = await driver.attachExistingSession(p.sessionId);
               return { ok: true, value: { attached } };
+            }
+            if (action === 'startPlanning') {
+              // KAN-16: plan this Backlog ticket in place. The decision, and
+              // every guard on it, lives in src/planning.mjs so it is testable
+              // without the HTTP surface.
+              const result = startPlanning({ store, driver, engine: engineRef.current, ticket });
+              if (!result.ok) return fail(result.code, result.message);
+              return { ok: true, value: { ticket: result.ticket } };
             }
             if (action === 'addAcceptance') {
               if (typeof p.statement !== 'string' || p.statement.trim() === '') return fail('bad_request', 'statement is required');
