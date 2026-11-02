@@ -3,6 +3,28 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Removed
+
+- **The subagent preflight.** `subagent`, `subagent_fork` and `spawn_teammate` no
+  longer take a slot reservation or fail at dispatch with a capacity error. Gone
+  with it: the tool guard and its route inference, the reservation lifecycle in
+  the semaphore (reserve / bind / consume / cancel / expire) and its TTL timer,
+  the **Reservations** KPI and reservation cards in the Activity panel, the
+  `dismissReservation` endpoint, and the `reservationTtlMs` and `subagentTools`
+  config keys.
+
+### Changed
+
+- A subagent child's model calls queue FIFO behind everything else waiting for
+  their provider, exactly like an interactive call. Nothing holds a capacity slot
+  unless a stream is live on it, so a dispatch can no longer fail for capacity and
+  a child that never starts costs nothing.
+- A deployment that still sets `reservationTtlMs` or `subagentTools` boots with
+  one `unknown config key "…" (ignored)` warning per key instead of refusing the
+  config.
+
 ## 0.3.0
 
 ### Added

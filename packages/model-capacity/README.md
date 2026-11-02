@@ -4,10 +4,9 @@
 
 One host plugin gates every `ctx.llm.stream()` call — interactive turns, subagent
 children, judges, titles and compaction — with a per-provider counting semaphore.
-Interactive calls wait in a strict FIFO queue; agent-spawning tools (`subagent`,
-`subagent_fork`, `spawn_teammate`) preflight synchronously and get an immediate,
-actionable capacity error instead of a silent wait. The Host exposes a Capacity
-panel with active leases, queued calls and reservations.
+Every call waits in the same strict FIFO queue for its provider, in arrival
+order, whoever started it. The Host exposes a Capacity panel with active leases
+and queued calls.
 
 Nothing here is per-session or per-browser. It is one service in the DSH host
 process, shared by all sessions.
@@ -38,18 +37,18 @@ in your own profile patch (a patch layer replaces a row's whole `config`).
       - provider: cloud-proxy
         unlimited: true
     queueLimitPerProvider: 1000
-    reservationTtlMs: 300000
-    subagentTools: [subagent, subagent_fork, spawn_teammate]
 ```
 
 | Key | Meaning |
 |---|---|
-| `enabled` | `false` makes the gate and guard inert while keeping the panel available. |
+| `enabled` | `false` makes the gate inert while keeping the panel available. |
 | `defaultMaxConcurrent` | Limit for a provider with no `limits` entry. Unknown providers therefore admit one call at a time. |
 | `limits[]` | `{provider, maxConcurrent}` or `{provider, unlimited: true}`. Capacity is **per provider**, because a provider is the physical backend a deployment split its GPUs into. Every model id behind one provider shares its slots. `unlimited: true` means no queue and no rejection for that route (intended for a cloud proxy). |
 | `queueLimitPerProvider` | Bound on queued calls per provider; exceeding it rejects new calls with `CAPACITY_QUEUE_FULL` instead of growing memory forever. |
-| `reservationTtlMs` | Cleanup only: a subagent reservation whose child never starts is released after this long. This is **not** a queue timeout. |
-| `subagentTools` | Tools that preflight and fail immediately. `workflow` is deliberately excluded: its fan-out is not declared in the call, so there is no honest capacity statement; its children start sessions normally and queue. |
+
+`reservationTtlMs` and `subagentTools` were config keys up to and including 0.3.0.
+They are gone: a deployment that still carries them boots with one
+`unknown config key "…" (ignored)` warning per key.
 
 Every provider named in `limits` has a visible queue even at `0/limit`, and the
 deployment's default model provider is seeded the same way; other providers
@@ -71,16 +70,29 @@ new manager limits immediately, and persists the change in the profile YAML.
 | Caller | Behavior |
 |---|---|
 | Ordinary prompt / any session model call | `llm/stream` waits for a slot before the adapter sees the request. The session stays `running`; the composer dock shows position, provider/model and elapsed time, with **Cancel turn**. There is no plugin-level timeout. |
-| `subagent` / `subagent_fork` / `spawn_teammate` | The tool guard resolves the child route (explicit `provider`/`model`, else the parent request header), takes a hard reservation, or returns `Error: capacity: …` with the active/reserved/waiting counts and currently free routes. |
-| Subagent child first call | Consumes its reservation instead of acquiring again; a title/compaction call for the child does not consume it. |
-| `workflow` | Not preflighted. Children go through the normal per-call queue once their sessions start. |
+| `subagent` / `subagent_fork` / `spawn_teammate` / `workflow` | No special path. A dispatch is never refused for capacity: the child's own calls go through the same global gate and queue FIFO behind whatever is already waiting for that provider. The parent sees the tool as running for the child's whole wait-plus-run time. |
 | Kanban | Uses the same global gate per call. It no longer owns a semaphore, leases or capacity checks; `wipCap` only bounds how many tickets are in `Now`. |
 
-`unlimited: true` providers never enter the FIFO and never reject a reservation;
-the panel labels them `unlimited`.
+`unlimited: true` providers never enter the FIFO; the panel labels them
+`unlimited`.
 
 Because the wait happens **before** `next()` reaches the provider adapter, the
 provider's `streamIdleTimeoutMs` does not start until a slot exists.
+
+### Why the subagent preflight was removed
+
+Up to 0.3.0 an agent-spawning tool asked for a slot before its child existed,
+returned a model-visible capacity error when the provider was full, and handed
+that reservation to the child's first call. It cost a synchronous guess at the
+child's route, a TTL timer for reservations whose child never arrived, and a
+second admission path that could jump the queue this gate exists to enforce.
+
+A dispatch is not an inference call. What is being protected is the hardware
+behind a provider route, and every request that reaches it already passes
+through this gate — a subagent child's included. So the gate is the whole
+mechanism: nothing holds a slot unless a stream is live, and one queue orders
+everything. The trade is that a busy provider no longer tells the model "do not
+bother dispatching"; the child simply waits, visibly, in the same queue.
 
 ### Session-log wait history
 
@@ -120,11 +132,11 @@ are already interrupted by the restart). No database is used.
   (`local-ai-machine (apu): 3/2 · 2 active · 1 queued`). The collapsed rail hides
   the pills because the 36 px rail cannot fit them without overlapping the icon.
 - `sidebar.panellist` entry **Activity** → a Context-tab-like full page: header
-  with live enforcing status, KPI cards (active / queued / reserved), and one
+  with live enforcing status, KPI cards (active / queued), and one
   colour-accented card per provider with a capacity bar. Each active or queued
   call is a session card showing title, workspace, model, kind and elapsed/waited
   time. **Click any session card to open that session**; active cards breathe with
-  a green glow. Subagent reservations render as compact cards. The page uses the
+  a green glow. The page uses the
   same card/hover language as `dsh-context`'s Context overview. Session titles come from
   the session log's `title` projection; workspace names come from the workspace
   registry, matched by the session's cwd.
@@ -140,12 +152,12 @@ are already interrupted by the restart). No database is used.
 - `conversation.input.dock` on every session: appears only while that session has
   a queued call.
 - Controls: **Cancel turn** (safe; cancels the session's active turn, which
-  aborts the waiter), **Cancel** a queued call, **Dismiss** a reservation, and
+  aborts the waiter), **Cancel** a queued call, and
   **Force release** a lease behind a confirmation (the underlying stream may
   still run; this can exceed the limit — use it only for a stuck lease).
 
 Routes are under the authenticated `/api` fence:
-`/api/modelCapacity/{snapshot,cancelSession,cancelWaiter,dismissReservation,forceRelease}`.
+`/api/modelCapacity/{snapshot,cancelSession,cancelWaiter,forceRelease}`.
 
 ## Tests
 
@@ -153,11 +165,12 @@ Routes are under the authenticated `/api` fence:
 node --test test/*.test.mjs
 ```
 
-Covers FIFO admission, abort/cancel, reservation consume/mismatch/expiry,
-force-release, raising limits, queue bound, the `llm/stream` gate (acquire before
-first chunk, release on abort/error, no reservation consumption by title calls),
-the subagent guard message and free-route suggestions, and host contracts (no
-tools, no credentials, routes under `/api`).
+Covers FIFO admission, abort/cancel, force-release, raising limits, the queue
+bound, the `llm/stream` gate (acquire before the first chunk, release on
+abort/error, and a subagent child queued strictly in arrival order behind an
+interactive call), config resolution including the removed 0.3.0 keys, and host
+contracts (no tool registration, no tool guard, no credentials, routes under
+`/api`).
 
 The browser half is not unit-tested and deliberately stays that way: `src/client.mjs`
 is a classic script for `window.__ModuleLoader__` with no module boundary to import

@@ -3,7 +3,7 @@
 // 1. `conversation.input.dock` — a session-scoped banner that appears the moment
 //    this session's model call is queued, with its position and a cancel action.
 // 2. `sidebar.panellist` + `main` — a global Capacity panel showing active
-//    leases, FIFO waiters and subagent reservations, with controls.
+//    leases and FIFO waiters, with controls.
 //
 // Classic script, React from the module loader, same slot rules as every other
 // client half: seats are called unconditionally over a module-scope fallback.
@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
 			+ ".mc-status{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;border:1px solid color-mix(in srgb,#22c55e 35%,var(--dsw-alias-border-l2,#ddd));background:color-mix(in srgb,#22c55e 10%,transparent);color:#15803d;font:600 10px/16px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}"
 			+ ".mc-status i{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.5);animation:mc-pulse 1.9s ease-out infinite}"
 			+ ".mc-status.off{color:#6b7280;border-color:var(--dsw-alias-border-l2,#ddd);background:var(--dsw-alias-bg-layer-2,#f3f4f6)}.mc-status.off i{background:#9ca3af;animation:none;box-shadow:none}"
-			+ ".mc-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:18px}"
+			+ ".mc-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:18px}"
 			+ ".mc-kpi{position:relative;overflow:hidden;padding:12px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--mc-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));background:linear-gradient(135deg,color-mix(in srgb,var(--mc-accent) 9%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
 			+ ".mc-kpi::after{content:'';position:absolute;right:-18px;top:-24px;width:76px;height:76px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--mc-accent) 18%,transparent),transparent 68%)}"
 			+ ".mc-kpi-value{font:650 24px/28px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--mc-accent)}"
@@ -114,11 +114,6 @@ window.__ModuleLoader__.load({
 			+ ".mc-sc-actions{display:flex;align-items:center;gap:6px;margin-top:2px}"
 			+ ".mc-sc-open{margin-left:auto;font:600 9px/14px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--mc-accent);opacity:0;transition:opacity .15s ease;white-space:nowrap}"
 			+ ".mc-session-card:hover .mc-sc-open,.mc-session-card:focus-visible .mc-sc-open{opacity:1}"
-			+ ".mc-res-card{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#f8f9fb);font-size:11px}"
-			+ ".mc-res-card+.mc-res-card{margin-top:6px}"
-			+ ".mc-res-tool{font:600 10px/14px ui-monospace,monospace;color:#7c3aed;white-space:nowrap}"
-			+ ".mc-res-route{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary,#555)}"
-			+ ".mc-res-age{font:600 10px/14px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap}"
 			+ ".mc-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:.5px solid var(--dsw-alias-border-l1,#f0f0f0);font-size:12px}"
 			+ ".mc-row:first-of-type{border-top:none}"
 			+ ".mc-key{font:600 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);min-width:64px}"
@@ -613,20 +608,7 @@ window.__ModuleLoader__.load({
 								onCancel: props.onCancelSession, onForce: props.onForceRelease, onOpen: props.onOpen
 							});
 						})
-				),
-				p.reservations.length > 0 ? h("div", { className: "mc-section" },
-					h("div", { className: "mc-section-head", children: ["Reservations", h("span", { className: "mc-count", children: p.reservations.length })] }),
-					p.reservations.map(function (reservation) {
-						var parentTitle = (reservation.parent && reservation.parent.sessionTitle) || shortId(reservation.parentSession);
-						var childTitle = reservation.childSession ? ((reservation.child && reservation.child.sessionTitle) || shortId(reservation.childSession)) : null;
-						return h("div", { className: "mc-res-card", key: reservation.reservationId },
-							h("span", { className: "mc-res-tool", children: reservation.tool || "reservation" }),
-							h("span", { className: "mc-res-route", title: reservation.parentSession || "", children: parentTitle + (childTitle ? " → " + childTitle : "") + " · " + (reservation.state || "pending") }),
-							h("span", { className: "mc-res-age", children: fmtMs(reservation.ageMs) }),
-							h("button", { className: "mc-btn danger", disabled: busy === reservation.reservationId, onClick: function () { props.onDismissReservation(reservation.reservationId); }, children: "Dismiss" })
-						);
-					})
-				) : null
+				)
 			);
 		}
 
@@ -721,7 +703,7 @@ window.__ModuleLoader__.load({
 			var busy = b[0], setBusy = b[1];
 			var o = React.useState(false);
 			var limitsOpen = o[0], setLimitsOpen = o[1];
-			var totals = snapshot ? snapshot.totals : { active: 0, waiting: 0, reservations: 0 };
+			var totals = snapshot ? snapshot.totals : { active: 0, waiting: 0 };
 			function run(method, payload, key) {
 				setBusy(key);
 				act(method, payload).then(function (message) {
@@ -748,8 +730,7 @@ window.__ModuleLoader__.load({
 							h(React.Fragment, null,
 								h("div", { className: "mc-kpis" },
 									h(CapacityKpi, { tone: "mc-tone-blue", value: totals.active, label: "Active leases", hint: "model calls holding a slot" }),
-									h(CapacityKpi, { tone: "mc-tone-amber", value: totals.waiting, label: "Queued calls", hint: "FIFO waiting for capacity" }),
-									h(CapacityKpi, { tone: "mc-tone-violet", value: totals.reservations, label: "Reservations", hint: "subagent dispatches held" })
+									h(CapacityKpi, { tone: "mc-tone-amber", value: totals.waiting, label: "Queued calls", hint: "FIFO waiting for capacity" })
 								),
 								h("div", { className: "mc-provider-grid" }, snapshot.providers.map(function (provider, index) {
 									return h(ProviderCard, {
@@ -758,7 +739,6 @@ window.__ModuleLoader__.load({
 											if (openSessionById !== null && sessionId) openSessionById(sessionId);
 										},
 										onCancelSession: function (sessionId) { if (sessionId) run("cancelSession", { sessionId: sessionId }, sessionId); },
-										onDismissReservation: function (id) { run("dismissReservation", { reservationId: id }, id); },
 										onForceRelease: function (id) { run("forceRelease", { leaseId: id }, id); }
 									});
 								}))

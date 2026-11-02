@@ -1,12 +1,12 @@
 // dsh-model-capacity: the in-memory, process-wide capacity manager.
 //
-// One bucket per provider route. A bucket holds active leases, FIFO waiters and
-// pending subagent reservations. `used = active + reserved`; a call may start
-// only while `used < limit`. Interactive calls wait in the queue; subagent
-// dispatch reserves synchronously and fails loudly when the bucket is full.
+// One bucket per provider route. A bucket holds active leases and FIFO waiters.
+// `used = active`; a call may start only while `used < limit`. Every model call
+// — an interactive turn or a subagent child's request — waits in the same queue
+// for its provider, in the order it arrived.
 //
-// There is no queue timeout. The only timer is reservation cleanup, so a child
-// that never materialises cannot hold a slot forever.
+// There is no queue timeout and no timer of any kind. The only bound on waiting
+// work is queueLimitPerProvider.
 
 import { randomUUID } from 'node:crypto';
 
@@ -27,20 +27,17 @@ export class CapacityManager {
    * @param {number} options.defaultLimit fallback for an undeclared provider
    * @param {Array<{provider:string,maxConcurrent:number}>} options.limits
    * @param {number} options.queueLimitPerProvider
-   * @param {number} options.reservationTtlMs
    * @param {(type:string, payload:object)=>void} [options.onEvent]
    * @param {()=>number} [options.now]
    */
-  constructor({ defaultLimit = 1, limits = [], queueLimitPerProvider = 1000, reservationTtlMs = 300000, onEvent = () => {}, now = nowMs } = {}) {
+  constructor({ defaultLimit = 1, limits = [], queueLimitPerProvider = 1000, onEvent = () => {}, now = nowMs } = {}) {
     this.defaultLimit = defaultLimit;
     this.queueLimitPerProvider = queueLimitPerProvider;
-    this.reservationTtlMs = reservationTtlMs;
     this.onEvent = onEvent;
     this.now = now;
     this.buckets = new Map();
     this.leases = new Map();
     this.waiters = new Map();
-    this.reservations = new Map();
     this.configure(limits);
   }
 
@@ -64,7 +61,6 @@ export class CapacityManager {
         limit: this.limits.get(provider) ?? this.defaultLimit,
         active: new Set(),
         waiters: [],
-        reservations: new Set(),
       };
       this.buckets.set(provider, bucket);
     }
@@ -72,13 +68,12 @@ export class CapacityManager {
   }
 
   used(provider) {
-    const bucket = this.bucket(provider);
-    return bucket.active.size + bucket.reservations.size;
+    return this.bucket(provider).active.size;
   }
 
   freeSlots(provider) {
     const bucket = this.bucket(provider);
-    return Math.max(0, bucket.limit - bucket.active.size - bucket.reservations.size);
+    return Math.max(0, bucket.limit - bucket.active.size);
   }
 
   limit(provider) {
@@ -245,128 +240,6 @@ export class CapacityManager {
     }
   }
 
-  /**
-   * Reserve one slot for a subagent dispatch. Synchronous: the tool guard needs
-   * an immediate yes/no. Throws a CapacityError whose message is shown to the
-   * model when the provider is full.
-   */
-  reserve({ provider, parentSession, tool = 'subagent', callId = null }) {
-    const bucket = this.bucket(provider);
-    if (bucket.limit !== Infinity && this.used(provider) >= bucket.limit) {
-      const details = {
-        provider,
-        limit: bucket.limit,
-        active: bucket.active.size,
-        reserved: bucket.reservations.size,
-        waiting: bucket.waiters.length,
-      };
-      this.onEvent('rejected', { provider, parentSession, tool, ...details });
-      throw new CapacityError(
-        'CAPACITY_EXCEEDED',
-        `provider "${provider}" is at its limit (${bucket.active.size + bucket.reservations.size}/${bucket.limit} in use, ${bucket.waiters.length} waiting)`,
-        details,
-      );
-    }
-    const reservation = {
-      id: randomUUID(),
-      provider,
-      parentSession,
-      tool,
-      callId,
-      childSession: null,
-      state: 'pending',
-      createdAt: this.now(),
-    };
-    this.reservations.set(reservation.id, reservation);
-    bucket.reservations.add(reservation.id);
-    this.onEvent('reserved', { reservationId: reservation.id, provider, parentSession, tool });
-    return reservation;
-  }
-
-  /** Map the child session a reservation was made for (first `session/created` after a reservation). */
-  bindChild(parentSession, childSession) {
-    if (typeof parentSession !== 'string' || parentSession === '') return undefined;
-    for (const reservation of this.reservations.values()) {
-      if (reservation.parentSession === parentSession && reservation.childSession === null) {
-        reservation.childSession = childSession;
-        reservation.state = 'mapped';
-        this.onEvent('reservation_mapped', { reservationId: reservation.id, parentSession, childSession, provider: reservation.provider });
-        return reservation;
-      }
-    }
-    return undefined;
-  }
-
-  /**
-   * Convert a mapped reservation to the active lease for the child's first call.
-   * A mismatched provider cancels the reservation and returns null so the call
-   * takes the normal queue.
-   */
-  consumeReservation(sessionId, provider) {
-    if (typeof sessionId !== 'string' || sessionId === '') return null;
-    for (const reservation of this.reservations.values()) {
-      if (reservation.childSession !== sessionId) continue;
-      if (reservation.provider !== provider) {
-        this.cancelReservation(reservation.id, 'provider_mismatch');
-        return null;
-      }
-      this.reservations.delete(reservation.id);
-      this.bucket(reservation.provider).reservations.delete(reservation.id);
-      this.onEvent('reservation_consumed', { reservationId: reservation.id, provider, childSession: sessionId });
-      return this.#lease(provider, null, sessionId, 'call', { reservationId: reservation.id });
-    }
-    return null;
-  }
-
-  cancelReservation(id, reason = 'cancelled') {
-    const reservation = this.reservations.get(id);
-    if (reservation === undefined) return false;
-    this.reservations.delete(id);
-    this.bucket(reservation.provider).reservations.delete(id);
-    this.onEvent('reservation_cancelled', {
-      reservationId: id,
-      provider: reservation.provider,
-      parentSession: reservation.parentSession,
-      childSession: reservation.childSession,
-      reason,
-    });
-    this.drain(reservation.provider);
-    return true;
-  }
-
-  /** Cancel a reservation whose tool call failed before a child consumed it. */
-  cancelReservationByCallId(callId, reason = 'tool_error') {
-    if (typeof callId !== 'string' || callId === '') return false;
-    for (const reservation of [...this.reservations.values()]) {
-      if (reservation.callId === callId) return this.cancelReservation(reservation.id, reason);
-    }
-    return false;
-  }
-
-  /** Drop expired reservations; called by the host timer. */
-  expireReservations(now = this.now()) {
-    let count = 0;
-    for (const reservation of [...this.reservations.values()]) {
-      if (now - reservation.createdAt >= this.reservationTtlMs) {
-        this.cancelReservation(reservation.id, 'ttl');
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  /** Release a reservation that belongs to a disposed child, if it was never consumed. */
-  releaseForSession(sessionId) {
-    let count = 0;
-    for (const reservation of [...this.reservations.values()]) {
-      if (reservation.childSession === sessionId) {
-        this.cancelReservation(reservation.id, 'session_disposed');
-        count += 1;
-      }
-    }
-    return count;
-  }
-
   waitersForSession(sessionId) {
     return [...this.waiters.values()].filter((waiter) => waiter.sessionId === sessionId);
   }
@@ -376,7 +249,6 @@ export class CapacityManager {
     const providers = [];
     let totalActive = 0;
     let totalWaiting = 0;
-    let totalReservations = 0;
     for (const bucket of this.buckets.values()) {
       const active = [...bucket.active].map((id) => {
         const lease = this.leases.get(id);
@@ -398,32 +270,18 @@ export class CapacityManager {
         enqueuedAt: waiter.enqueuedAt,
         waitedMs: Math.max(0, now - waiter.enqueuedAt),
       }));
-      const reservations = [...bucket.reservations].map((id) => {
-        const reservation = this.reservations.get(id);
-        return {
-          reservationId: id,
-          parentSession: reservation?.parentSession ?? null,
-          childSession: reservation?.childSession ?? null,
-          tool: reservation?.tool ?? null,
-          state: reservation?.state ?? 'pending',
-          createdAt: reservation?.createdAt ?? null,
-          ageMs: reservation === undefined ? null : Math.max(0, now - reservation.createdAt),
-        };
-      });
       totalActive += active.length;
       totalWaiting += waiters.length;
-      totalReservations += reservations.length;
       providers.push({
         name: bucket.provider,
         limit: bucket.limit === Infinity ? null : bucket.limit,
         unlimited: bucket.limit === Infinity,
         active,
         waiters,
-        reservations,
-        used: active.length + reservations.length,
+        used: active.length,
       });
     }
     providers.sort((a, b) => a.name.localeCompare(b.name));
-    return { asOf: now, totals: { active: totalActive, waiting: totalWaiting, reservations: totalReservations }, providers };
+    return { asOf: now, totals: { active: totalActive, waiting: totalWaiting }, providers };
   }
 }

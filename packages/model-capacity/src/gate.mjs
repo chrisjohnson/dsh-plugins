@@ -1,9 +1,11 @@
 // dsh-model-capacity: the `llm/stream` gate.
 //
 // Every model call — user turns, subagents, judges, titles, compaction — passes
-// through here. The wait happens before `next()` reaches the adapter, so the
-// provider's own stream-idle timer does not start until a slot exists. The lease
-// is released when the stream ends, fails, or is aborted.
+// through here, and every one of them waits in the same per-provider FIFO queue.
+// There is no special path for a call because of who started it. The wait
+// happens before `next()` reaches the adapter, so the provider's own
+// stream-idle timer does not start until a slot exists. The lease is released
+// when the stream ends, fails, or is aborted.
 
 /**
  * Wrap one model-call stream.
@@ -19,20 +21,13 @@ export async function* gatedStream(manager, options, next, enabled = true) {
     yield* next();
     return;
   }
-  const provider = options.provider;
-  // Auxiliary calls (title, compaction) must not consume a subagent reservation:
-  // the reservation belongs to the child's first main request.
-  const auxiliary = options.purpose === 'session-title' || options.purpose === 'compaction';
-  let lease = auxiliary ? null : manager.consumeReservation(options.sessionId, provider);
-  if (lease === null) {
-    lease = await manager.acquire({
-      provider,
-      model: options.model,
-      sessionId: options.sessionId,
-      kind: options.purpose ?? 'call',
-      signal: options.signal,
-    });
-  }
+  const lease = await manager.acquire({
+    provider: options.provider,
+    model: options.model,
+    sessionId: options.sessionId,
+    kind: options.purpose ?? 'call',
+    signal: options.signal,
+  });
   try {
     yield* next();
   } finally {

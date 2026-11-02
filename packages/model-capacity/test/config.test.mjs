@@ -9,7 +9,9 @@ test('defaults are inert-safe and per-provider', () => {
   assert.equal(config.enabled, true)
   assert.equal(config.defaultMaxConcurrent, 1)
   assert.equal(limitFor(config, 'anything'), 1)
-  assert.deepEqual(config.subagentTools, ['subagent', 'subagent_fork', 'spawn_teammate'])
+  // Exactly the keys the plugin still has: no reservation TTL, no tool list.
+  assert.deepEqual(Object.keys(config).sort(), ['defaultMaxConcurrent', 'enabled', 'limits', 'queueLimitPerProvider'])
+  assert.deepEqual(Object.keys(DEFAULT_CONFIG).sort(), Object.keys(config).sort())
 })
 
 test('provider limits are strict', () => {
@@ -25,8 +27,18 @@ test('unknown keys warn, wrong types refuse', () => {
   const { warnings } = resolveConfig({ mystery: true })
   assert.equal(warnings.length, 1)
   assert.throws(() => resolveConfig({ enabled: 'yes' }), ConfigError)
-  assert.throws(() => resolveConfig({ reservationTtlMs: 10 }), ConfigError)
-  assert.throws(() => resolveConfig({ subagentTools: ['ok', 3] }), ConfigError)
+  assert.throws(() => resolveConfig({ queueLimitPerProvider: 0 }), ConfigError)
+})
+
+test('the removed subagent keys only warn as unknown', () => {
+  // 0.3.0 validated `reservationTtlMs` and `subagentTools` and refused a bad
+  // value. Both are gone, and a deployment that still carries them must boot:
+  // each lands in the unknown-key warning list, which is logged once at startup.
+  const { warnings } = resolveConfig({ reservationTtlMs: 300000, subagentTools: ['subagent', 3] })
+  assert.deepEqual(warnings, [
+    'unknown config key "reservationTtlMs" (ignored)',
+    'unknown config key "subagentTools" (ignored)',
+  ])
 })
 
 test('unlimited providers are explicit and mutually exclusive with a limit', () => {
