@@ -477,7 +477,7 @@ config write. KAN-30 moves that decision to where the human actually is.
   dsh`; 0.16.2 read every word but on exact spelling, so `git push && \systemctl
   restart dsh` — the shell's own alias-bypass idiom — still got through. A
   token-prefix grant means the denylist has to see the word anywhere, in any
-  natural shell spelling. The cost is false positives (`grep -r rm -n .` now asks
+  natural shell form. The cost is false positives (`grep -r rm -n .` now asks
   the human), which is the only acceptable direction to err in.
 - **The denylist is text, not a sandbox, and the docs say so.** Three routes stay
   open by construction and are named in the README rather than pretended away: an
