@@ -26,7 +26,7 @@ const PLAN_PARAMETERS = {
   done_when: {
     type: 'array',
     required: true,
-    description: 'Non-empty, individually checkable completion conditions.',
+    description: 'Non-empty, individually checkable completion conditions. Each condition must be verifiable by an agent without human input — no human action, visual confirmation, or production restart; human approval is a separate implicit step.',
     items: {
       type: 'object',
       additionalProperties: true,
