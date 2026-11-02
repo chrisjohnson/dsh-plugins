@@ -247,3 +247,31 @@ test('updateTicket accepts preset and writeMode on a pristine ticket and can cle
   assert.throws(() => store.updateTicket(ticket.id, { writeMode: 'nope' }), /writeMode/)
   assert.throws(() => store.updateTicket(ticket.id, { preset: '' }), /preset/)
 })
+
+// ---------------------------------------------------------------- KAN-18 worktree intent
+
+test('the worktree flag round-trips through create and update', () => {
+  const { store } = setup()
+  const asked = store.createTicket({ title: 'lazy', worktree: true })
+  assert.equal(asked.worktree, true)
+  assert.equal(store.getTicket(asked.id).worktree, true)
+  // A ticket nobody switched on records the intent as false, not "unset".
+  const plain = store.createTicket({ title: 'plain' })
+  assert.equal(plain.worktree, false)
+  assert.equal(store.listTickets().find((t) => t.id === plain.id).worktree, false)
+  // Flipping it later is an ordinary ticket update, and it is auditable.
+  store.updateTicket(plain.id, { worktree: true }, { actor: 'human', reason: 'changed my mind' })
+  assert.equal(store.getTicket(plain.id).worktree, true)
+  store.updateTicket(plain.id, { worktree: false }, { actor: 'human', reason: 'never mind' })
+  assert.equal(store.getTicket(plain.id).worktree, false)
+  const events = store.listEvents(plain.id).filter((event) => event.kind === 'ticket_updated')
+  assert.ok(events.some((event) => event.payload.fields.includes('worktree')))
+})
+
+test('creating a ticket with the worktree intent stores no workspace', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 'intent only', worktree: true })
+  assert.equal(ticket.workspaceCwd, null, 'the switch records intent; the copy is made at plan start')
+  const created = store.listEvents(ticket.id).find((event) => event.kind === 'created')
+  assert.equal(created.payload.worktree, true)
+})

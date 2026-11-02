@@ -504,3 +504,32 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
   assert.match(client, /openSessionById\(d\.approvalSessionId\)/)
   assert.match(client, /"Open session"/)
 })
+
+// ---------------------------------------------------------------- KAN-18 lazy worktree
+
+test('the new-ticket worktree switch records intent and creates nothing', async () => {
+  const files = await sources()
+  const client = files['client.mjs']
+  // The eager path is gone from the form: no rpc call, and none of the state that
+  // only existed to show a copy that had already been made.
+  assert.equal(/rpc\("worktree"/.test(client), false, 'the create form must not create a working copy any more')
+  assert.equal(/worktreeCreated|worktreePath|createWorktree\b/.test(client), false, 'the eager-create form state is gone')
+  assert.match(client, /worktree: !!form\.worktree/, 'the create payload carries the intent flag')
+  assert.match(client, /A worktree from the latest main is created when planning starts\./)
+  // The host endpoint stays as the manual escape hatch; the form just no longer calls it.
+  assert.match(files['host.mjs'], /case 'worktree':/)
+})
+
+test('planning settles the working copy through the betterGitWorktree seam', async () => {
+  const files = await sources()
+  assert.match(files['dispatch.mjs'], /async preparePlanWorktree\(ticket\)/)
+  assert.match(files['dispatch.mjs'], /refreshManagedCopy\(\{ path: ticket\.workspaceCwd, fetchFirst: true \}\)/)
+  assert.match(files['dispatch.mjs'], /fetchFirst: true,/)
+  assert.match(files['dispatch.mjs'], /baseOnRemote: true,/)
+  assert.match(files['dispatch.mjs'], /worktree created at plan start/)
+  // The engine asks before it renders the prompt, and passes the answer down.
+  const plan = files['engine.mjs'].slice(files['engine.mjs'].indexOf('async plan(ticket)'))
+  assert.ok(plan.indexOf('preparePlanWorktree') < plan.indexOf('render('), 'the copy is settled before the prompt is rendered')
+  assert.match(plan, /preparedCwd: prep\.cwd/)
+  assert.match(files['engine.mjs'], /ensureTicketSession\(\{ ticket, role, route, purpose, preparedCwd \}\)/)
+})

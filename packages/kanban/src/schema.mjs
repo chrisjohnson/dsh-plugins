@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -257,6 +257,16 @@ ALTER TABLE tickets ADD COLUMN write_mode TEXT CHECK (
 );
 `;
 
+const V6 = `
+-- Lazy worktrees (KAN-18). The new-ticket switch no longer creates a working
+-- copy when the ticket is made; it records the intent here, and the copy is cut
+-- from the latest default branch when planning starts. Existing rows keep their
+-- behavior exactly: 0 means nothing was ever asked for, and a row that already
+-- has a workspace_cwd keeps it — a pre-created copy is refreshed at plan start,
+-- never replaced and never deleted.
+ALTER TABLE tickets ADD COLUMN worktree INTEGER NOT NULL DEFAULT 0 CHECK (worktree IN (0, 1));
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -286,5 +296,10 @@ export const MIGRATIONS = [
     version: 5,
     name: 'ticket-session-options',
     sql: V5,
+  },
+  {
+    version: 6,
+    name: 'lazy-worktree-intent',
+    sql: V6,
   },
 ];
