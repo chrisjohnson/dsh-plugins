@@ -11,8 +11,9 @@
 //
 //   createWorktree      `git init -b <branch>` in a new directory, an alternates
 //                       file pointing at the source objects, the branch set to the
-//                       session's *current* HEAD, then `reset --hard` to populate
-//                       the files, so the copy starts exactly where the session was.
+//                       session's *current* HEAD (or an explicit `baseOid` the
+//                       caller resolved itself), then `reset --hard` to populate
+//                       the files, so the copy starts exactly where it was told to.
 //
 //   moveWorkingTreeChanges
 //                       `git stash push --include-untracked` in the source
@@ -136,11 +137,19 @@ export function branchFor(petName) {
 
 /**
  * Create one managed working copy for a session.
+ *
+ * `baseOid` may be passed in to start the copy at a commit other than the
+ * source's current HEAD — that is how a caller bases a copy on a freshly
+ * fetched `origin/<default>` instead of wherever the checkout happens to sit.
+ * Without it the copy starts at the source's HEAD, exactly as before.
+ *
  * @returns `{ repoRoot, managedRoot, branch, petName, baseOid, origin }`
  */
 export async function createWorktree(options) {
   const { repoRoot, home } = options
-  const baseOid = await headOid(repoRoot)
+  const baseOid = typeof options.baseOid === 'string' && options.baseOid !== ''
+    ? options.baseOid
+    : await headOid(repoRoot)
   if (baseOid === undefined) {
     throw new Error(
       `${repoRoot} has no commit yet (unborn HEAD); commit once before creating a worktree session`,

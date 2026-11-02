@@ -30,10 +30,15 @@ function mount({ agents = [], config = {}, services = {} } = {}) {
   const listeners = {}
   const agentMap = new Map(agents.map((agent) => [agent.id, agent]))
   const created = []
+  /** what the plugin handed to other plugins through `ctx.provide`. */
+  const provided = {}
   const root = {
     logger: () => log,
     on: (name, fn) => (listeners[name] = fn),
     effect: () => {},
+    provide: (name, value) => {
+      provided[name] = value
+    },
     get: (name) => {
       if (name === 'agents') return { get: (id) => agentMap.get(id), list: () => [...agentMap.values()] }
       if (name === 'agentLoop') return { createAgent: async (_ctx, options) => created.push(options) }
@@ -50,7 +55,7 @@ function mount({ agents = [], config = {}, services = {} } = {}) {
     },
   }
   host(root, config)
-  return { registered, listeners, created, agentMap, tool: () => registered.tools.find((t) => t.name === 'worktree_convert'), route: () => registered.routes[0] }
+  return { registered, listeners, created, agentMap, provided, tool: () => registered.tools.find((t) => t.name === 'worktree_convert'), route: () => registered.routes[0] }
 }
 
 function makeAgent(id, cwd) {
@@ -277,7 +282,7 @@ test('an unreadable registry is reported at boot and never rewritten', { skip },
     const file = join(dir, 'state', REGISTRY_FILE)
     writeFileSync(file, '{"version": 2, "worktrees": {}}')
     const { log, calls } = quietLog()
-    const ctx = { logger: () => log, on: () => {}, effect: () => {}, get: () => undefined, inject: () => {} }
+    const ctx = { logger: () => log, on: () => {}, effect: () => {}, provide: () => {}, get: () => undefined, inject: () => {} }
     host(ctx, { stateDir: join(dir, 'state') })
     assert.ok(calls.warn.some((line) => /registry version 2/.test(line)), calls.warn.join('\n'))
     assert.equal(readFileSync(file, 'utf8'), '{"version": 2, "worktrees": {}}')
@@ -298,4 +303,21 @@ test('prompt and report texts are accurate for a self-contained copy', { skip },
   assert.equal(report.conversationCarried, false)
   assert.equal(report.status, 'progressing')
   assert.match(report.detail, /session handoff failed: no loop/)
+})
+
+// ---------------------------------------------------------------- KAN-18 plugin seam
+
+test('the seam other plugins use carries both halves of the lazy worktree contract', { skip }, () => {
+  const { dir, cleanup } = tempDir()
+  try {
+    const m = mount({ config: { stateDir: join(dir, 'state') } })
+    const seam = m.provided.betterGitWorktree
+    assert.ok(seam, 'the plugin provides betterGitWorktree')
+    // Kanban creates a copy when planning starts, and refreshes one that already
+    // exists. Both halves have to be there, or a ticket plans in the wrong place.
+    assert.equal(typeof seam.createForPath, 'function', 'createForPath is part of the seam')
+    assert.equal(typeof seam.refreshManagedCopy, 'function', 'refreshManagedCopy is part of the seam')
+  } finally {
+    cleanup()
+  }
 })

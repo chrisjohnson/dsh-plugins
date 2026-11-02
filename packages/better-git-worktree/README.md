@@ -102,6 +102,21 @@ Verified against `@deepseek-ai/dsh-client-ui-workspace` 0.2.0-rc.2 (`lib/types/c
 
 A shadow reuses the official component and locale and the official inject result unchanged except for the `archiveSession` callback, which is wrapped so the dialog can run first. If the shadow ever crashes the renderer retires it and the official entry shows again.
 
+### The service other plugins use
+
+The host provides a `betterGitWorktree` service so another plugin can own working
+copies without owning any git:
+
+| Call | What it does |
+| --- | --- |
+| `createForPath({ path, title, fetchFirst, baseOnRemote })` | cut a copy for a repository path, registered as pending. `fetchFirst` awaits `git fetch origin` first (a repo with no origin is skipped) and a failed fetch **throws**; `baseOnRemote` bases the copy on the just-fetched `origin/<default branch>` instead of local HEAD, falling back to HEAD when that ref cannot be resolved. |
+| `refreshManagedCopy({ path, fetchFirst })` | bring one registered copy to the latest default branch, or report why it was left alone. `{ managed: false }` for a path this plugin does not own. Otherwise `{ managed: true, updated: true, alreadyCurrent }` when it moved (or was already current) — the registry's `baseOid` follows — and `{ managed: true, updated: false, reason }` when it did not: `dirty`, `has-own-commits`, `diverged`, `missing`, `unverified`, `unknown-base`, `no-remote-base` or `no-repository`. A non-pristine copy is never touched, and a requested fetch that fails throws. |
+
+Pristine means: nothing in the working tree (staged, unstaged **or** untracked),
+and no commit that the commit the copy was cut from does not already have. That
+is the whole safety story — a copy with work in it is somebody's work, so the
+answer is a reason, not a mutation.
+
 `dsh-better-sidebar` is an optional integration: with it the header menu's *Review branch* opens a right-sidebar tab (and *Git Changes* opens its git lens); without it the review opens in a modal and *Git Changes* does the same.
 
 ## Known limits

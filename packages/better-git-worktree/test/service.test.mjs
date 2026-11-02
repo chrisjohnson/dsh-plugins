@@ -6,8 +6,9 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { git, makeRepo, quietLog, tempDir } from './helpers.mjs'
+import { commitFile, git, makeRepo, quietLog, tempDir } from './helpers.mjs'
 import { REGISTRY_FILE, WorktreeRegistry } from '../src/registry.mjs'
+import { gitFetch } from '../src/git-runner.mjs'
 import { createService } from '../src/service.mjs'
 
 function setup({ remote = true, registryContent } = {}) {
@@ -326,6 +327,234 @@ test('open hands the checkout to the folder opener and reports its failure', asy
       overrides: { openFolder: async () => { throw new Error('no folder opener is installed on this host') } },
     })
     assert.equal((await broken.handleRpc('open', { sessionId: 'session-plain' })).error.code, 'no-folder-opener')
+  } finally {
+    t.cleanup()
+  }
+})
+
+// ------------------------------------------------------- KAN-18 the lazy worktree seam
+//
+// Kanban asks two questions of this plugin when a plan session starts: "cut a
+// copy from the current upstream" and "is the copy this ticket already points at
+// still just an empty shell of the base it came from?". Both need a repository
+// whose origin has moved past it, because that is the only arrangement that can
+// tell the fetched upstream apart from wherever the checkout happens to sit.
+
+function lazySetup({ fetchFails = false } = {}) {
+  const { dir, cleanup } = tempDir('bgw-lazy-')
+  const { repo, origin } = makeRepo(dir, { remote: true })
+  const base = git(repo, 'rev-parse', 'HEAD')
+  const tip = commitFile(repo, 'upstream.txt', 'newer\n', 'upstream work')
+  git(repo, 'push', '-q', 'origin', 'main')
+  // Put the checkout back: now origin/main is `tip` and local HEAD is `base`.
+  git(repo, 'reset', '-q', '--hard', base)
+  mkdirSync(join(dir, 'state'), { recursive: true })
+  const registry = new WorktreeRegistry(join(dir, 'state', REGISTRY_FILE))
+  const { log, calls } = quietLog()
+  const fetches = []
+  const service = createService({
+    registry,
+    log,
+    home: join(dir, 'home'),
+    getAgent: () => undefined,
+    workspaceRegistry: () => undefined,
+    createSession: async () => ({}),
+    overrides: {
+      gitFetch: async (root) => {
+        fetches.push(root)
+        if (fetchFails) {
+          return { ok: false, code: 128, stdout: '', stderr: 'fatal: could not read from remote repository\n', timedOut: false }
+        }
+        return gitFetch(root)
+      },
+    },
+  })
+  /**
+   * Move the remote forward without moving this checkout: commit on top of what
+   * origin already has, push that, and leave `main` sitting where it was.
+   */
+  const advance = (file = 'more.txt', text = 'more\n') => {
+    git(repo, 'fetch', '-q', 'origin')
+    git(repo, 'checkout', '-q', '-B', 'upstream', 'origin/main')
+    const oid = commitFile(repo, file, text, `upstream: ${file}`)
+    git(repo, 'push', '-q', 'origin', 'upstream:main')
+    git(repo, 'checkout', '-q', 'main')
+    git(repo, 'branch', '-q', '-D', 'upstream')
+    return oid
+  }
+  return { dir, repo, origin, base, tip, registry, service, calls, fetches, advance, cleanup }
+}
+
+test('createForPath with fetchFirst + baseOnRemote cuts the copy at the fetched upstream head', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'lazy', fetchFirst: true, baseOnRemote: true })
+    assert.deepEqual(t.fetches, [t.repo], 'the fetch is awaited before the copy is cut')
+    assert.equal(created.baseOid, t.tip, 'the base is the remote head, not local HEAD')
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), t.tip)
+    assert.equal(readFileSync(join(created.managedRoot, 'upstream.txt'), 'utf8'), 'newer\n')
+    assert.equal(t.registry.findByRoot(created.managedRoot).baseOid, t.tip)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('createForPath without the options keeps the old behavior: local HEAD, no fetch', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'plain' })
+    assert.equal(t.fetches.length, 0)
+    assert.equal(created.baseOid, t.base)
+    assert.equal(existsSync(join(created.managedRoot, 'upstream.txt')), false)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a failed fetch throws out of createForPath instead of cutting a stale copy', async () => {
+  const t = lazySetup({ fetchFails: true })
+  try {
+    await assert.rejects(
+      () => t.service.createForPath(t.repo, { title: 'lazy', fetchFirst: true, baseOnRemote: true }),
+      /git fetch failed .*could not read from remote repository/,
+    )
+    assert.equal(t.registry.list().length, 0, 'nothing was created or recorded')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('baseOnRemote falls back to local HEAD when the remote ref cannot be resolved', async () => {
+  const t = lazySetup()
+  try {
+    // No origin at all: `fetchFirst` has nothing to fetch and skips it, and the
+    // copy is based on HEAD because there is no upstream to base it on instead.
+    const { repo } = makeRepo(t.dir, { remote: false, name: 'no-origin' })
+    const head = git(repo, 'rev-parse', 'HEAD')
+    const created = await t.service.createForPath(repo, { title: 'local only', fetchFirst: true, baseOnRemote: true })
+    assert.equal(created.baseOid, head)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('refreshManagedCopy says nothing about a path it does not own', async () => {
+  const t = lazySetup()
+  try {
+    assert.deepEqual(await t.service.refreshManagedCopy(t.repo), { managed: false, path: t.repo })
+    assert.equal(t.fetches.length, 0, 'an unmanaged path is not fetched for')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a pristine managed copy is fast-forwarded to the fetched default branch and the record follows', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'pristine' })
+    assert.equal(created.baseOid, t.base)
+    const newer = t.advance('later.txt', 'later\n')
+    const result = await t.service.refreshManagedCopy(created.managedRoot, { fetchFirst: true })
+    assert.equal(result.managed, true)
+    assert.equal(result.updated, true)
+    assert.equal(result.alreadyCurrent, false)
+    assert.equal(result.baseOid, newer)
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), newer, 'the copy moved')
+    assert.equal(t.registry.findByRoot(created.managedRoot).baseOid, newer, 'the record moved with it')
+    assert.equal(git(t.repo, 'rev-parse', 'HEAD'), t.base, 'the source checkout was never touched')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('refreshing a copy that is already current says so and changes nothing', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'current', fetchFirst: true, baseOnRemote: true })
+    const before = git(created.managedRoot, 'rev-parse', 'HEAD')
+    const result = await t.service.refreshManagedCopy(created.managedRoot, { fetchFirst: true })
+    assert.equal(result.updated, true)
+    assert.equal(result.alreadyCurrent, true)
+    assert.equal(result.baseOid, before)
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), before)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('an untracked file is enough to leave a copy alone', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'dirty' })
+    t.advance('later.txt', 'later\n')
+    writeFileSync(join(created.managedRoot, 'scratch.txt'), 'someone is working here\n')
+    const result = await t.service.refreshManagedCopy(created.managedRoot, { fetchFirst: true })
+    assert.equal(result.updated, false)
+    assert.equal(result.reason, 'dirty')
+    assert.equal(result.dirty, 1)
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), t.base, 'the copy did not move under the work')
+    assert.equal(t.registry.findByRoot(created.managedRoot).baseOid, t.base, 'and the record still says where it is')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a copy with commits of its own is left alone', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'work in progress' })
+    t.advance('later.txt', 'later\n')
+    writeFileSync(join(created.managedRoot, 'feature.txt'), 'work\n')
+    git(created.managedRoot, 'add', 'feature.txt')
+    git(created.managedRoot, 'commit', '-q', '-m', 'my own commit')
+    const result = await t.service.refreshManagedCopy(created.managedRoot, { fetchFirst: true })
+    assert.equal(result.updated, false)
+    assert.equal(result.reason, 'has-own-commits')
+    assert.equal(result.ownCommits, 1)
+    assert.match(git(created.managedRoot, 'log', '-1', '--format=%s'), /my own commit/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a copy whose base is not on the default branch cannot be fast-forwarded, and is reported', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'diverged' })
+    // Give the remote a history the copy is not standing on: an orphan root.
+    git(t.repo, 'checkout', '-q', '--orphan', 'elsewhere')
+    const orphan = commitFile(t.repo, 'elsewhere.txt', 'a history of its own\n', 'unrelated')
+    git(t.repo, 'push', '-q', '-f', 'origin', 'elsewhere:main')
+    git(t.repo, 'checkout', '-q', 'main')
+    const result = await t.service.refreshManagedCopy(created.managedRoot, { fetchFirst: true })
+    assert.equal(result.updated, false)
+    assert.equal(result.reason, 'diverged')
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), t.base, 'nothing moved')
+    assert.notEqual(orphan, t.base)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a fetch failure inside refreshManagedCopy throws with git reason', async () => {
+  const t = lazySetup()
+  try {
+    const created = await t.service.createForPath(t.repo, { title: 'pristine' })
+    const broken = createService({
+      registry: t.registry,
+      log: quietLog().log,
+      home: join(t.dir, 'home'),
+      getAgent: () => undefined,
+      createSession: async () => ({}),
+      overrides: {
+        gitFetch: async () => ({ ok: false, code: 128, stdout: '', stderr: 'fatal: unable to access origin: Connection refused\n', timedOut: false }),
+      },
+    })
+    await assert.rejects(
+      () => broken.refreshManagedCopy(created.managedRoot, { fetchFirst: true }),
+      /git fetch failed .*Connection refused/,
+    )
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), t.base, 'a failed fetch mutates nothing')
   } finally {
     t.cleanup()
   }
