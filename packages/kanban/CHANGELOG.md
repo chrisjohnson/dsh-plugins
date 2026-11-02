@@ -5,6 +5,45 @@
 
 ## Unreleased
 
+## 0.16.0
+
+### Added
+
+- **Plans can front-load their sandbox permissions** (KAN-30). A build session
+  that needs to write outside its workspace root, or run a command the standing
+  sandbox would deny, used to stop mid-turn and ask a human every single time —
+  the KAN-17 `~/dsh-lab` and KAN-29 `/tmp` classes of surprise. Now the plan
+  protocol grows an optional `sandbox` section: `grants.paths` (absolute paths
+  the build may write) and `grants.commands` (token-prefix bash commands), plus
+  `checks` — the read-only `test -w` probes the planner ran for each declared
+  path, so the human approves against observed evidence instead of an
+  assumption.
+- **A plan that declares grants parks as *Plan ready*** and the board grows an
+  **Approve plan** action (`approvePlan` on the resolve and action endpoints).
+  Approving is the one-time grant: it lifts the park, records `plan_approved`,
+  and the build starts with exactly those escalations pre-approved. A plan
+  without grants behaves exactly as before — no park, no new step. Grants live
+  in the plan artifact, so a new plan version supersedes them, and a follow-up
+  plan that re-declares grants re-parks the ticket.
+- **The grant approver is an agent-scoped `approval/request` waterfall
+  listener**, registered only on build sessions (plan and verify stay
+  read-only). It claims only asks whose reason starts with `escalate sandbox
+  to `, reads the exact `tool/call` arguments by `callId` from the session's
+  own durable log, matches paths at segment boundaries and commands at token
+  prefixes, and answers `allowed-once` on a match — recording a `grant_applied`
+  audit event (`toolName`, `callId`, `grant`, `mode`, `target`) first. Every
+  miss, malformed input, terminal ticket or exception falls through to the
+  human: the grant path fails open, never closed.
+- **A hard denylist is never claimable.** `systemctl`, `service`, `launchctl`,
+  `sudo`, `kill`, `pkill`, `rm`, `dd` as first tokens (seen through `sh -c` /
+  `bash -c` / `env` / `nohup` / `timeout` wrappers) and `rm -rf /` / `rm -fr /`
+  substrings can never be auto-approved, even by an approved grant — and a plan
+  declaring one is rejected at submission with a *can never be granted* error.
+  The mechanism therefore cannot restart a service.
+- The plan prompt now tells the planner the build session's write mode
+  (`{{write_mode}}`) and workspace root (`{{cwd}}`), and `kanban_plan` returns
+  the plan's `sandbox` section so a build session can re-read its grants.
+
 ## 0.15.0
 
 ### Changed

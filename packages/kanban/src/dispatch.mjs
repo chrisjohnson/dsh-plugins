@@ -29,6 +29,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
 
 import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
+import { makeGrantApprover } from './grants.mjs';
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -523,6 +524,9 @@ export class SessionDriver {
         // No tool guard of any kind: the preset's tools are the role's
         // tools, and every Kanban action tool enforces its own phase.
         liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this, store: this.store });
+        // KAN-30: only a build session carries approved grants; plan and
+        // verify sessions stay read-only and never answer an escalation ask.
+        if (purpose === 'build') this.#registerGrantApprover(agentCtx);
       },
     });
     liveRef.handle = handle;
@@ -569,6 +573,27 @@ export class SessionDriver {
       } catch {
         // The event is best-effort; the session is what matters.
       }
+    }
+  }
+
+  /**
+   * KAN-30: register the ticket's approved sandbox grants as an agent-scoped
+   * `approval/request` waterfall listener on one build session.
+   *
+   * The listener is scoped to this agent (core dispatches the waterfall on the
+   * requesting agent's scope, and an agent-scoped listener only ever sees its
+   * own agent), and it is prepended so a covered ask is answered before the
+   * human bridge is reached — an uncovered ask calls `next()` and the human is
+   * prompted exactly as before. Plan and verify sessions never get one: they
+   * run read-only and have nothing to grant.
+   */
+  #registerGrantApprover(agentCtx) {
+    try {
+      agentCtx.on('approval/request', makeGrantApprover({ store: this.store, log: this.log }), { prepend: true });
+    } catch (error) {
+      // A session without the listener behaves like every pre-0.16 session:
+      // each escalation asks the human. Losing grants is never losing work.
+      this.log.warn('kanban grants: approver could not be registered: %s', String(error?.message ?? error));
     }
   }
 
@@ -707,6 +732,9 @@ export class SessionDriver {
     // approval ask or question; the board must show that, not blue "running".
     this.#seedHumanWait(sessionId, agent);
     await this.#registerExistingTools(agent.ctx, liveRef, sessionId);
+    // KAN-30: a reattached build session gets its grant approver too — the
+    // approved plan outlives the restart, the in-memory listener does not.
+    if (purpose === 'build') this.#registerGrantApprover(agent.ctx);
     this.#applySandboxMode(liveRef);
     void this.#attachWorkspace(sessionId, ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd(), 0);
     this.log.info('kanban: reattached session %s to %s/%s', sessionId, ticket.key, purpose);

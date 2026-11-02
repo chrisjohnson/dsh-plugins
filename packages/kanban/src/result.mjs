@@ -5,6 +5,8 @@
 // order, and returns a decision the engine acts on. An LLM is only consulted
 // when this table cannot decide.
 
+import { validateSandbox } from './grants.mjs';
+
 const STATUSES = new Set(['complete', 'partial', 'blocked']);
 
 /**
@@ -212,13 +214,20 @@ export function validatePlan(value) {
     });
   }
   if (value.summary !== undefined && typeof value.summary !== 'string') errors.push('summary must be a string');
+  // KAN-30: the optional sandbox section. Every rejection here is the plan
+  // session being told, before a human ever sees it, that a grant it declared
+  // is unusable — a relative path cannot contain anything, and a denylisted
+  // command can never be auto-approved no matter who approves the plan.
+  if (value.sandbox !== undefined && value.sandbox !== null) {
+    errors.push(...validateSandbox(value.sandbox).errors);
+  }
   return errors;
 }
 
 /** Normalize a validated plan to the engine's flat shape. */
 export function normalizePlan(value) {
   const conditions = value.done_when ?? value.conditions;
-  return {
+  const plan = {
     summary: typeof value.summary === 'string' ? value.summary : '',
     steps: Array.isArray(value.steps) ? value.steps.filter((s) => typeof s === 'string') : [],
     conditions: conditions.map((c, index) => ({
@@ -228,6 +237,14 @@ export function normalizePlan(value) {
       ordinal: index,
     })),
   };
+  // The validated sandbox rides along in the plan artifact, so the grant
+  // approver reads the exact shape the human approved — and a plan without one
+  // keeps the byte-identical artifact it had before KAN-30.
+  if (value.sandbox !== undefined && value.sandbox !== null) {
+    const { sandbox } = validateSandbox(value.sandbox);
+    if (sandbox !== null) plan.sandbox = sandbox;
+  }
+  return plan;
 }
 
 /** Validate the intent-coverage judgement. */

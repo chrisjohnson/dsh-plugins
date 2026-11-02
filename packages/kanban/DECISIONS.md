@@ -431,3 +431,55 @@ person".
   inside the turn. The approval case therefore rides on the new
   `awaitingApproval` flag: chip, badge and the hero's **Open session** button,
   no fake park.
+
+## 2026-11-02 — plan-time sandbox grants (0.16.0, KAN-30)
+
+A build session confined to its workspace asks a human for every out-of-tree
+write and every denied command, one prompt at a time, mid-turn. The ticket
+already knows — at planning time — that it will need `~/dsh-lab` or a `gh`
+config write. KAN-30 moves that decision to where the human actually is.
+
+- **Plugin-only, through the `approval/request` waterfall.** The harness already
+  dispatches every approval ask as an agent-scoped waterfall
+  (`scopeTarget(req.agent, req.agent)`), and an agent-scoped listener only ever
+  sees its own agent's asks. That is the whole seam: no core change, no new
+  service, no schema migration. The listener is registered `prepend` so a
+  covered ask is answered before the human bridge is reached; an uncovered ask
+  calls `next()` and the human is prompted exactly as before.
+- **Grants live in the plan artifact.** The `sandbox` section rides inside the
+  plan JSON the engine already stores per version, so a new plan version
+  supersedes the old grants for free, `kanban_plan` returns them with the rest
+  of the contract, and an old board replays unchanged (no `sandbox` key, no
+  park, no listener).
+- **The gate only fires when grants are declared.** A plan without a `sandbox`
+  section transitions to Build exactly as it always did — the overwhelming
+  majority of tickets never see the new state. Only a plan that asks for
+  something outside the standing sandbox parks as *Plan ready*, because that is
+  the one case where a human decision genuinely precedes the build.
+- **Approving the plan is the one-time grant.** `approvePlan` is a human action
+  on the board (resolve and action endpoints), not a tool the model can call.
+  While a ticket is parked on *Plan ready* the grants are inert — the listener
+  checks the park before matching — so declaring a grant never pre-empts the
+  human who has not approved it yet.
+- **The denylist scope is the human's decision, and it is absolute.** First
+  tokens `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`,
+  `dd` (seen through `sh -c`/`bash -c`/`env`/`nohup`/`timeout` wrappers) plus
+  the `rm -rf /` and `rm -fr /` substrings are never claimable, even by an
+  approved grant, and a plan declaring one is rejected at submission. A restart
+  of the service the board itself runs on must stay a planned human act; the
+  grant mechanism must be unable to express it.
+- **Fail open, never silent.** Every miss, malformed input, terminal ticket or
+  exception calls `next()` and reaches the human. Even a matched grant is not
+  applied unless its `grant_applied` audit event was written first — an
+  auto-approval nobody can see is the failure mode this whole feature must not
+  have.
+- **Matching reads the durable log, not the model's prose.** The approval
+  request carries only tool name, call id and the escalation reason; the exact
+  `file_path` / `command` are read from the session's own `tool/call` event by
+  `callId`. A justification string written by the model can therefore never
+  talk a grant into covering a different call.
+- **Checks are the planner's evidence, not the engine's input.** `test -w` runs
+  read-only in the plan session (the KAN-17 lesson: a grant to a path that
+  does not exist or is not writable is a mid-build failure wearing a
+  permission's clothes). The engine records the `{path, check, observed}` rows
+  and shows them to the human; it does not re-run them.

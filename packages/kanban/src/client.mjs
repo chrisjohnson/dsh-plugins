@@ -1538,7 +1538,18 @@ var CSS =
 							className: "kb-btn sm",
 							title: "Open the session that is waiting on you",
 							onClick: function () { if (openSessionById) openSessionById(d.approvalSessionId); }
-						}, "Open session") : null
+						}, "Open session") : null,
+						// KAN-30: a plan that declared sandbox grants parks for
+						// one decision — this button. Approving the plan is the
+						// one-time grant: the build starts with exactly these
+						// escalations pre-approved, and everything else still
+						// asks. A conditional element only, never a hook.
+						t.phase === "plan" && String(t.needsAttentionReason || "").indexOf("Plan ready:") === 0 ? h("button", {
+							type: "button",
+							className: "kb-btn primary sm",
+							title: "Approve the plan and its sandbox grants, and start the build",
+							onClick: function () { props.onResolve(t.id, "approvePlan"); }
+						}, "Approve plan") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h("div", { className: "kb-hero-meta" },
@@ -1667,6 +1678,29 @@ var CSS =
 								return h("tr", { key: c.id }, h("td", null, h("code", { children: c.id })), h("td", { children: c.statement }), h("td", { children: c.howVerified }), h("td", { children: c.source }));
 							})))
 				),
+				// KAN-30: what the plan asked to be allowed outside the sandbox,
+				// and the read-only evidence the planner gathered for it. The
+				// grants ride in the plan artifact, so this is exactly the set
+				// the Approve-plan action makes live — and a plan without any
+				// renders nothing, the way it did before grants existed.
+				d.plan && d.plan.sandbox ? h("div", { className: "kb-panel" },
+					h("h3", { children: "Sandbox grants — what the build may do without asking" }),
+					d.plan.sandbox.grants && (d.plan.sandbox.grants.paths || []).length > 0 ? h("div", { style: { marginBottom: 6 } },
+						h("div", { className: "kb-hint", children: "write paths" }),
+						h("ul", { style: { margin: "2px 0 0", paddingLeft: 18 } }, d.plan.sandbox.grants.paths.map(function (p, i) {
+							return h("li", { key: i }, h("code", { children: p }));
+						}))) : null,
+					d.plan.sandbox.grants && (d.plan.sandbox.grants.commands || []).length > 0 ? h("div", { style: { marginBottom: 6 } },
+						h("div", { className: "kb-hint", children: "command prefixes" }),
+						h("ul", { style: { margin: "2px 0 0", paddingLeft: 18 } }, d.plan.sandbox.grants.commands.map(function (c, i) {
+							return h("li", { key: i }, h("code", { children: c }));
+						}))) : null,
+					(d.plan.sandbox.checks || []).length > 0 ? h("table", { className: "kb-table", style: { marginTop: 8 } },
+						h("thead", null, h("tr", null, h("th", { children: "path" }), h("th", { children: "check" }), h("th", { children: "observed" }))),
+						h("tbody", null, d.plan.sandbox.checks.map(function (row, i) {
+							return h("tr", { key: i }, h("td", null, h("code", { children: row.path })), h("td", null, h("code", { children: row.check })), h("td", { children: row.observed }));
+						}))) : null
+				) : null,
 				d.review ? h("div", { className: "kb-panel" },
 					h("h3", { children: "Review" }),
 					h("div", { className: "kb-row" }, h("span", { className: "kb-chip" + (d.review.verdict === "pass" ? " ok" : " err"), children: d.review.verdict }), h("span", { className: "kb-hint", children: "scope: " + (d.review.scope_drift || "—") })),
