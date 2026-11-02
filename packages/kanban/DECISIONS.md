@@ -465,9 +465,14 @@ config write. KAN-30 moves that decision to where the human actually is.
   tokens `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`,
   `dd` (seen through `sh -c`/`bash -c`/`env`/`nohup`/`timeout` wrappers) plus
   the `rm -rf /` and `rm -fr /` substrings are never claimable, even by an
-  approved grant, and a plan declaring one is rejected at submission. A restart
-  of the service the board itself runs on must stay a planned human act; the
-  grant mechanism must be unable to express it.
+  approved grant, and a plan declaring one is rejected at submission. The check
+  runs per **shell segment**: the command is split on `&&`, `||`, `;`, `|`, `&`
+  and newlines before the first-token walk, because a token-prefix grant that
+  only looked at the line's first token lets a granted command carry a
+  denylisted one behind it (`git push && systemctl restart dsh`) — the review
+  caught exactly that, and 0.16.1 closed it. A restart of the service the board
+  itself runs on must stay a planned human act; the grant mechanism must be
+  unable to express it.
 - **Fail open, never silent.** Every miss, malformed input, terminal ticket or
   exception calls `next()` and reaches the human. Even a matched grant is not
   applied unless its `grant_applied` audit event was written first — an

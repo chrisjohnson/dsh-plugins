@@ -16,8 +16,11 @@
 //
 // - The denylist is never claimable. A service restart, a `sudo`, an `rm` can
 //   never be auto-approved by a grant, even one a human approved — those asks
-//   always reach the human. The grant mechanism can therefore never restart a
-//   service or delete outside the sandbox's own rules.
+//   always reach the human. The check runs on every shell segment of the
+//   command, so a granted prefix cannot chain into a denylisted command
+//   (`git push && systemctl restart dsh` is denied, not granted). The grant
+//   mechanism can therefore never restart a service or delete outside the
+//   sandbox's own rules.
 // - Every miss, malformed input, or exception calls `next()`: the human stays
 //   the answerer of last resort. A broken grant path fails open to a prompt,
 //   never closed to a silent denial.
@@ -65,9 +68,18 @@ function baseToken(token) {
 }
 
 /**
- * Whether a command line is denylisted: a denylisted first token (looking
- * through common wrappers like `sudo`, `env`, `timeout`, `bash -c`), or a
- * denylisted substring anywhere in it.
+ * Whether a command line is denylisted. Two rules, each applied to the WHOLE
+ * line:
+ *
+ * - a denylisted substring (`rm -rf /`, `rm -fr /`) anywhere in it;
+ * - a denylisted first token in ANY shell segment of it — the line is split on
+ *   `&&`, `||`, `;`, `|`, `&` and newlines first, and each segment's first
+ *   token is checked through the wrapper chain.
+ *
+ * The segment split is what makes the denylist mean anything next to a
+ * token-prefix grant: `git push && systemctl restart dsh` starts with a
+ * perfectly grantable token, and a first-token-only check would let a granted
+ * prefix carry a denylisted command in the same call.
  *
  * @param {unknown} command
  * @returns {boolean}
@@ -77,7 +89,15 @@ export function isDenylisted(command) {
   const text = command.trim();
   const lower = text.toLowerCase();
   for (const pattern of GRANT_DENYLIST_SUBSTRINGS) if (lower.includes(pattern)) return true;
-  const tokens = tokenize(text);
+  for (const segment of text.split(/&&|\|\||[;|&\n\r]/)) {
+    if (segmentDenylisted(segment)) return true;
+  }
+  return false;
+}
+
+/** The first-token check of one command segment, seen through wrappers. */
+function segmentDenylisted(segment) {
+  const tokens = tokenize(segment);
   let i = 0;
   // Walk the wrapper chain: `sudo env FOO=1 systemctl ...`, `timeout 10 bash -c "..."`.
   for (let hop = 0; hop < 8 && i < tokens.length; hop += 1) {

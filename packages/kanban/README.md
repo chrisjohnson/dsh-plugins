@@ -138,14 +138,18 @@ A plan may declare those needs up front, in an optional `sandbox` section:
   `git push origin main`, never `git pushfoo`). The matcher reads the exact
   arguments from the session's own `tool/call` event, never from the model's
   justification text.
-- **The denylist is never claimable.** Commands whose first token (seen through
-  wrappers like `sudo`, `env`, `nohup`, `timeout`, and `sh -c`/`bash -c` script
-  bodies) is `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`
-  or `dd`, and any line containing `rm -rf /` or `rm -fr /`, can never be
-  auto-approved — not even by a grant a human approved. A plan that declares
-  one is rejected at submission with a *can never be granted* error. The
-  grant mechanism therefore cannot restart a service or delete outside the
-  sandbox's own rules.
+- **The denylist is never claimable.** The check runs on **every shell segment**
+  of the command — the line is split on `&&`, `||`, `;`, `|`, `&` and newlines —
+  and a segment whose first token (seen through wrappers like `sudo`, `env`,
+  `nohup`, `timeout`, and `sh -c`/`bash -c` script bodies) is `systemctl`,
+  `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm` or `dd` denies the whole
+  call; so does any line containing `rm -rf /` or `rm -fr /`. None of it can
+  ever be auto-approved, not even by a grant a human approved, and a plan
+  declaring one is rejected at submission with a *can never be granted* error.
+  Because the segment split happens before the prefix match, a granted prefix
+  cannot be used to chain a denylisted command: a `git push` grant does not
+  cover `git push && systemctl restart dsh`. The grant mechanism therefore
+  cannot restart a service or delete outside the sandbox's own rules.
 - **Everything else still asks.** The grant approver is an agent-scoped
   `approval/request` waterfall listener registered only on build sessions
   (plan and verify sessions stay read-only and receive none). It claims only
