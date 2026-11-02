@@ -461,18 +461,29 @@ config write. KAN-30 moves that decision to where the human actually is.
   While a ticket is parked on *Plan ready* the grants are inert — the listener
   checks the park before matching — so declaring a grant never pre-empts the
   human who has not approved it yet.
-- **The denylist scope is the human's decision, and it is absolute.** First
-  tokens `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`,
-  `dd` (seen through `sh -c`/`bash -c`/`env`/`nohup`/`timeout` wrappers) plus
-  the `rm -rf /` and `rm -fr /` substrings are never claimable, even by an
-  approved grant, and a plan declaring one is rejected at submission. The check
-  runs per **shell segment**: the command is split on `&&`, `||`, `;`, `|`, `&`
-  and newlines before the first-token walk, because a token-prefix grant that
-  only looked at the line's first token lets a granted command carry a
-  denylisted one behind it (`git push && systemctl restart dsh`) — the review
-  caught exactly that, and 0.16.1 closed it. A restart of the service the board
-  itself runs on must stay a planned human act; the grant mechanism must be
-  unable to express it.
+- **The denylist scope is the human's decision, and it is absolute.** The words
+  `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`, `dd` (seen
+  through `sh -c`/`bash -c`/`env`/`nohup`/`timeout` wrappers) plus the `rm -rf /`
+  and `rm -fr /` substrings are never claimable, even by an approved grant, and a
+  plan declaring one is rejected at submission. The check is **word-based, not
+  position-based**: the command is split on whitespace and on `(`, `)`, `{`, `}`,
+  `$`, backtick, `;`, `|`, `&` and newlines, and any word whose basename is a
+  denylisted token denies the whole call. Two review rounds were spent learning
+  why position does not work here: 0.16.0 read only the line's first token, so a
+  `git push` grant covered `git push && systemctl restart dsh`; 0.16.1 read the
+  first token of every `&&`/`;`/`|` segment, and the same grant still covered
+  `git push && (systemctl restart dsh)`, `git push && $(systemctl restart dsh)`
+  and `git push && FOO=1 systemctl restart dsh`. A token-prefix grant means the
+  denylist has to see the word anywhere, in any shell clothing. The cost is false
+  positives (`grep -r rm -n .` now asks the human), which is the only acceptable
+  direction to err in.
+- **The denylist is text, not a sandbox, and the docs say so.** It cannot see
+  inside an interpreter: a plan granting a bare `node`/`python3`/`bash script.sh`
+  prefix hands the build whatever that interpreter runs, so an interpreter grant
+  is a full-access grant the human must read as one. A restart of the service the
+  board itself runs on must stay a planned human act; the denylist is what keeps
+  the shell route to it unexpressible, and the README names the route it cannot
+  close.
 - **Fail open, never silent.** Every miss, malformed input, terminal ticket or
   exception calls `next()` and reaches the human. Even a matched grant is not
   applied unless its `grant_applied` audit event was written first — an

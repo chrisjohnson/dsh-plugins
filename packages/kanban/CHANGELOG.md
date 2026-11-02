@@ -5,6 +5,40 @@
 
 ## Unreleased
 
+## 0.16.2
+
+### Fixed
+
+- **The denylist could still be evaded by shell syntax** (KAN-30 review, round
+  two). 0.16.1 checked the first token of every `&&`/`;`/`|` segment, but a
+  denylisted word does not have to be any segment's first token: with a
+  human-approved `git push` grant, `git push && (systemctl restart dsh)`,
+  `git push && $(systemctl restart dsh)`, `git push && FOO=1 systemctl restart
+  dsh`, `git push && { systemctl restart dsh; }`, `git push && eval systemctl
+  restart dsh` and `git push && xargs -I{} systemctl restart {}` were all
+  auto-approved at `danger-full-access` with no human asked. `isDenylisted` is
+  now **word-based**: the command is split on whitespace and on `(`, `)`, `{`,
+  `}`, `$`, backtick, `;`, `|`, `&` and newlines, and any word whose basename is
+  a denylisted token denies the whole call (the first-token wrapper walk of each
+  segment still runs on top, so `bash -c "…"` bodies are read as commands). A
+  plan declaring such a grant is rejected at submission. The rule over-strictly
+  catches a denylisted word that is not a command — `grep -r rm -n .` and
+  `git commit -m "rm old path"` now ask the human — which is the only acceptable
+  direction to err in, since a prompt is cheap and a wrong auto-approval is not.
+  Ordinary compounds of grantable commands (`git push && npm test`) still match.
+  Tests cover the shell-clothing cases at the denylist, matcher, approver and
+  plan-submission levels.
+
+### Documented
+
+- **The denylist is a text rule and cannot see inside an interpreter.** A plan
+  granting a bare `node`, `python3`, `perl` or `bash script.sh` prefix hands the
+  build whatever that interpreter runs, so an interpreter grant is a full-access
+  grant. README, DECISIONS, the `kanban_submit_plan` parameter description and
+  both plan prompts now say that plainly instead of promising that a service
+  restart is inexpressible; the planner is told to grant the narrowest prefix
+  that works and never a bare interpreter.
+
 ## 0.16.1
 
 ### Fixed

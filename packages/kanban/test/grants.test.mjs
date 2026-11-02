@@ -43,15 +43,26 @@ test('ordinary commands are not denylisted', () => {
   assert.equal(isDenylisted('git push origin main'), false)
   assert.equal(isDenylisted('npm run check'), false)
   assert.equal(isDenylisted('node scripts/lab.sh up --name kan30'), false)
-  assert.equal(isDenylisted('grep -r rm -n .'), false)
-  assert.equal(isDenylisted('echo "the rm -rf / rule"'), true) // substring wins, on purpose
   assert.equal(isDenylisted(''), false)
   assert.equal(isDenylisted(undefined), false)
 })
 
-test('every shell segment is checked, not just the line’s first token', () => {
-  // A granted prefix must never be able to chain into a denylisted command:
-  // the whole point of the denylist is that a service restart stays human-only.
+test('the word rule over-strictly catches a denylisted word that is not a command', () => {
+  // Deliberate false positives, and the right way round: the cost is one human
+  // prompt, the alternative is a permission nobody granted. A first-token rule
+  // would read `grep -r rm -n .` as safe and `git commit -m "rm old"` too; the
+  // word rule asks the human about both.
+  assert.equal(isDenylisted('grep -r rm -n .'), true)
+  assert.equal(isDenylisted('git commit -m "rm old path"'), true)
+  // Substrings still win wherever they appear, quote or no quote.
+  assert.equal(isDenylisted('echo "the rm -rf / rule"'), true)
+})
+
+test('a denylisted command is caught in any shell clothing, not just as a bare segment', () => {
+  // A granted prefix must never be able to chain into a denylisted command, and
+  // the round-1/round-2 lesson is that "first token of each segment" is not the
+  // same as "anywhere": every one of these hides its denylisted word behind
+  // shell syntax a position-based check walks straight past.
   for (const command of [
     'git push && systemctl restart dsh',
     'git push; systemctl restart dsh',
@@ -62,11 +73,19 @@ test('every shell segment is checked, not just the line’s first token', () => 
     'git push && launchctl kickstart -k k/k/dsh',
     'git push && service dsh restart',
     'git push\n&& systemctl restart dsh',
+    'git push && (systemctl restart dsh)',
+    'git push && $(systemctl restart dsh)',
+    'git push && FOO=1 systemctl restart dsh',
+    'git push && { systemctl restart dsh; }',
+    'git push && eval systemctl restart dsh',
+    'git push && xargs -I{} systemctl restart {}',
+    'git push && `systemctl restart dsh`',
+    'git push && /usr/bin/sudo reboot',
   ]) {
     assert.equal(isDenylisted(command), true, command)
   }
-  // Ordinary compounds stay grantable: the split is a denylist check, not a ban
-  // on shell operators.
+  // Ordinary compounds stay grantable: the word rule is a denylist check, not a
+  // ban on shell operators.
   for (const command of ['git push origin main', 'npm run check', 'node scripts/lab.sh up --name kan30', 'git push && npm test', 'git push && gh pr create']) {
     assert.equal(isDenylisted(command), false, command)
   }
@@ -85,6 +104,15 @@ test('bash grants match by token prefix at word boundaries', () => {
   // The reviewer's case: a granted prefix chained into a denylisted command.
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && systemctl restart dsh' } }), null)
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && sudo reboot' } }), null)
+  // …and the same command in shell clothing a first-token check would miss.
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && (systemctl restart dsh)' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && $(systemctl restart dsh)' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && FOO=1 systemctl restart dsh' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && { systemctl restart dsh; }' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && eval systemctl restart dsh' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && xargs -I{} systemctl restart {}' } }), null)
+  // A compound of two grantable commands still matches its grant.
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && npm test' } }), 'git push')
 })
 
 test('write and edit grants match by path-segment containment', () => {
@@ -194,6 +222,24 @@ test('a granted prefix chained into a denylisted command falls through', () => {
   })
   assert.equal(h.ask('c4b', 'bash'), h.fell)
   assert.equal(h.events.length, 0, 'no grant_applied for a command the denylist refuses')
+})
+
+test('a denylisted command hidden in shell syntax falls through too', () => {
+  // The exact shape the word rule exists for: the denylisted word is not any
+  // segment's first token, so a position-based denylist answered allowed-once.
+  const plan = { sandbox: { grants: { paths: [], commands: ['git push'] } } }
+  for (const [callId, command] of [
+    ['c4c', 'git push && (systemctl restart dsh)'],
+    ['c4d', 'git push && $(systemctl restart dsh)'],
+    ['c4e', 'git push && FOO=1 systemctl restart dsh'],
+    ['c4f', 'git push && { systemctl restart dsh; }'],
+    ['c4g', 'git push && eval systemctl restart dsh'],
+    ['c4h', 'git push && xargs -I{} systemctl restart {}'],
+  ]) {
+    const h = harness({ plan, calls: [{ callId, name: 'bash', arguments: { command } }] })
+    assert.equal(h.ask(callId, 'bash'), h.fell, command)
+    assert.equal(h.events.length, 0, `no grant_applied for ${command}`)
+  }
 })
 
 test('non-escalation reasons pass straight through', () => {
@@ -306,6 +352,11 @@ test('validateSandbox rejects a denylisted command with the explicit message', (
   // A grant that *could* chain into a denylisted command is rejected too.
   const chained = validateSandbox({ grants: { commands: ['git push && systemctl restart dsh'] } })
   assert.ok(chained.errors.some((e) => /can never be granted/.test(e)), JSON.stringify(chained.errors))
+  // …including one that hides the denylisted word behind shell syntax.
+  for (const command of ['git push && (systemctl restart dsh)', 'git push && $(systemctl restart dsh)', 'git push && FOO=1 systemctl restart dsh']) {
+    const out = validateSandbox({ grants: { commands: [command] } })
+    assert.ok(out.errors.some((e) => /can never be granted/.test(e)), `${command}: ${JSON.stringify(out.errors)}`)
+  }
 })
 
 test('validateSandbox normalizes a valid section and passes checks through', () => {
