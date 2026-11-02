@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-capacity",
-  "version": "0.3.0",
-  "description": "Process-wide, per-provider model-call capacity for DeepSeek Harness: interactive calls queue FIFO, subagent dispatch gets an immediate capacity error with free-route suggestions, and the host exposes a queue/reservation inspection panel.",
+  "version": "0.4.0",
+  "description": "Process-wide, per-provider model-call capacity for DeepSeek Harness: every model call, an interactive turn or a subagent child's, queues FIFO for its provider, and the host exposes an activity and queue inspection panel.",
   "type": "module",
   "license": "MIT",
   "main": "./index.mjs",
