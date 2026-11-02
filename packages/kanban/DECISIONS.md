@@ -467,23 +467,29 @@ config write. KAN-30 moves that decision to where the human actually is.
   and `rm -fr /` substrings are never claimable, even by an approved grant, and a
   plan declaring one is rejected at submission. The check is **word-based, not
   position-based**: the command is split on whitespace and on `(`, `)`, `{`, `}`,
-  `$`, backtick, `;`, `|`, `&` and newlines, and any word whose basename is a
-  denylisted token denies the whole call. Two review rounds were spent learning
-  why position does not work here: 0.16.0 read only the line's first token, so a
-  `git push` grant covered `git push && systemctl restart dsh`; 0.16.1 read the
-  first token of every `&&`/`;`/`|` segment, and the same grant still covered
-  `git push && (systemctl restart dsh)`, `git push && $(systemctl restart dsh)`
-  and `git push && FOO=1 systemctl restart dsh`. A token-prefix grant means the
-  denylist has to see the word anywhere, in any shell clothing. The cost is false
-  positives (`grep -r rm -n .` now asks the human), which is the only acceptable
-  direction to err in.
-- **The denylist is text, not a sandbox, and the docs say so.** It cannot see
-  inside an interpreter: a plan granting a bare `node`/`python3`/`bash script.sh`
-  prefix hands the build whatever that interpreter runs, so an interpreter grant
-  is a full-access grant the human must read as one. A restart of the service the
-  board itself runs on must stay a planned human act; the denylist is what keeps
-  the shell route to it unexpressible, and the README names the route it cannot
-  close.
+  `$`, backtick, `;`, `|`, `&` and newlines, quotes and backslashes are stripped,
+  and any word whose basename is a denylisted token denies the whole call. Three
+  review rounds were spent learning why position does not work here: 0.16.0 read
+  only the line's first token, so a `git push` grant covered `git push &&
+  systemctl restart dsh`; 0.16.1 read the first token of every `&&`/`;`/`|`
+  segment, and the same grant still covered `git push && (systemctl restart dsh)`,
+  `git push && $(systemctl restart dsh)` and `git push && FOO=1 systemctl restart
+  dsh`; 0.16.2 read every word but on exact spelling, so `git push && \systemctl
+  restart dsh` — the shell's own alias-bypass idiom — still got through. A
+  token-prefix grant means the denylist has to see the word anywhere, in any
+  natural shell spelling. The cost is false positives (`grep -r rm -n .` now asks
+  the human), which is the only acceptable direction to err in.
+- **The denylist is text, not a sandbox, and the docs say so.** Three routes stay
+  open by construction and are named in the README rather than pretended away: an
+  **interpreter** (a bare `node`/`python3`/`bash script.sh` grant hands the build
+  whatever that interpreter runs, so it is a full-access grant), an **encoded
+  payload** (`echo <base64> | base64 -d | sh` hides its words from any matcher),
+  and **indirection** (a granted command reading a script or config the build
+  wrote inside the workspace). None is reachable by string matching: closing them
+  needs the sandbox itself to resolve the exec, which is core work and out of this
+  plugin's scope. A restart of the service the board runs on must stay a planned
+  human act; the denylist keeps the direct shell route unexpressible, and the
+  human's plan review is the control for the rest.
 - **Fail open, never silent.** Every miss, malformed input, terminal ticket or
   exception calls `next()` and reaches the human. Even a matched grant is not
   applied unless its `grant_applied` audit event was written first — an
