@@ -149,3 +149,19 @@ test('v5 write_mode CHECK accepts the closed vocabulary and rejects anything els
   assert.throws(() => insert('full-access'), /CHECK constraint failed/)
   assert.throws(() => insert('WRITE'), /CHECK constraint failed/)
 })
+
+test('v6 on a v5 fixture: existing rows gain worktree 0 and keep their workspace_cwd', () => {
+  const db = new DatabaseSync(':memory:')
+  applyUpTo(db, 5)
+  const at = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at, workspace_cwd, preset, write_mode)
+     VALUES ('id-legacy', 'KAN-18', 'lazy worktree', 'working', 'plan', 'at_pickup', 'interactive', ?, ?, '/home/me/.dsh-worktrees/brave-forge', 'standard', 'workspace-write')`,
+  ).run(at, at)
+  assert.equal(migrate(db), SCHEMA_VERSION)
+  const row = db.prepare("SELECT worktree, workspace_cwd, preset, write_mode FROM tickets WHERE key = 'KAN-18'").get()
+  assert.equal(row.worktree, 0, 'an eager-era row records no new intent')
+  assert.equal(row.workspace_cwd, '/home/me/.dsh-worktrees/brave-forge', 'and keeps the copy it already points at')
+  assert.equal(row.preset, 'standard')
+  assert.equal(row.write_mode, 'workspace-write')
+})
