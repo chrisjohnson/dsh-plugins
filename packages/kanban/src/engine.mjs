@@ -313,15 +313,31 @@ export class Engine {
     const route = this.resolveRoute('planner', 1);
     const admission = this.admit(ticket, route, 'planner', { attempt: 1 });
     if (!admission.ok) return this.hold(ticket, admission);
+    // KAN-18: the working copy is settled here — the moment planning actually
+    // starts — not when the ticket was written. A throw (an origin that could not
+    // be fetched) parks the ticket with git's own reason: no plan runs against a
+    // base this plugin could not bring up to date. A driver without the seam
+    // (a test double, or a stripped-down mount) plans exactly as before.
+    let prep = { cwd: undefined, note: undefined };
+    try {
+      if (typeof this.driver.preparePlanWorktree === 'function') {
+        prep = (await this.driver.preparePlanWorktree(ticket)) ?? prep;
+      }
+    } catch (error) {
+      return this.failedTurn(ticket, { kind: 'failed', error: String(error?.message ?? error) }, 'plan');
+    }
     const promptFile = ticket.planQuestions === 'autonomous' ? 'plan-self' : 'plan-human';
-    const prompt = render(prompts.bodies[promptFile] ?? prompts.bodies['plan-human'], {
+    const rendered = render(prompts.bodies[promptFile] ?? prompts.bodies['plan-human'], {
       ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
       acceptance: acceptanceBlock(acceptance),
       key: ticket.key,
       title: ticket.title,
     });
+    // The planner has to know when it is standing on an old commit, or it plans
+    // against code that is not current and nobody tells it why.
+    const prompt = typeof prep.note === 'string' && prep.note !== '' ? `${rendered}\n\n${prep.note}\n` : rendered;
     const runId = this.ensureRun(ticket);
-    let turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan', attempt: 1, runId });
+    let turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan', attempt: 1, runId, preparedCwd: prep.cwd });
     if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'plan')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'plan');
     const action = turn.action;
@@ -809,7 +825,7 @@ export class Engine {
     return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id, turn: turn.turn ?? null };
   }
 
-  async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId }) {
+  async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId, preparedCwd }) {
     const promptHash = shortHash(hashText(prompt));
     const span = this.startRoleSpan({ ticket, role, route, spanName, attempt, runId, promptHash });
     // Everything a later auto-recovery needs to record its continuation turns
@@ -817,7 +833,7 @@ export class Engine {
     const context = { role, route, attempt, runId, spanName };
     const startedMono = process.hrtime.bigint();
     try {
-      const session = await this.driver.ensureTicketSession({ ticket, role, route, purpose });
+      const session = await this.driver.ensureTicketSession({ ticket, role, route, purpose, preparedCwd });
       this.driver.setPhase(session.sessionId, role);
       this.driver.setRoute(session.sessionId, route);
       this.store.attachSession({

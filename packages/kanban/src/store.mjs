@@ -54,6 +54,9 @@ const TICKET_FIELDS = [
   'planQuestions',
   'preset',
   'writeMode',
+  // KAN-18: the recorded *intent* to work in a git worktree. The copy itself is
+  // created when planning starts, not when the ticket is made.
+  'worktree',
 ];
 
 function ticketFromRow(row) {
@@ -77,6 +80,7 @@ function ticketFromRow(row) {
     workspaceCwd: row.workspace_cwd,
     preset: row.preset ?? null,
     writeMode: row.write_mode ?? null,
+    worktree: Number(row.worktree) === 1,
     needsAttentionReason: row.needs_attention_reason,
     confidenceThreshold: row.confidence_threshold === null ? null : Number(row.confidence_threshold),
     createdAt: row.created_at,
@@ -218,6 +222,9 @@ export class KanbanStore {
     // behavior.
     const preset = normalizePreset(input.preset);
     const writeMode = normalizeWriteMode(input.writeMode);
+    // KAN-18: the worktree switch records intent only, so it is a plain 0/1.
+    // Anything that is not exactly `true` stores 0, which is the old behavior.
+    const worktree = input.worktree === true ? 1 : 0;
 
     return this.transact(() => {
       const maxRow = this.db.prepare("SELECT MAX(CAST(SUBSTR(key, 5) AS INTEGER)) AS n FROM tickets WHERE key LIKE 'KAN-%'").get();
@@ -231,8 +238,8 @@ export class KanbanStore {
         .prepare(
           `INSERT INTO tickets (id, key, title, body, col, phase, plan_timing, plan_questions, priority, sort_order,
              allow_paid, budget_usd, spent_usd, attempt_count, escalation_rung, workspace_cwd,
-             needs_attention_reason, confidence_threshold, preset, write_mode, created_at, updated_at, version)
-           VALUES (?, ?, ?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, 1)`,
+             needs_attention_reason, confidence_threshold, preset, write_mode, worktree, created_at, updated_at, version)
+           VALUES (?, ?, ?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, ?, 1)`,
         )
         .run(
           id,
@@ -250,6 +257,7 @@ export class KanbanStore {
           threshold ?? null,
           preset,
           writeMode,
+          worktree,
           at,
           at,
         );
@@ -265,7 +273,7 @@ export class KanbanStore {
       }
       this.#event(id, 'created', {
         actor: 'human',
-        payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd, preset, writeMode },
+        payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd, preset, writeMode, worktree: worktree === 1 },
       });
       return this.getTicket(id);
     });
@@ -303,6 +311,8 @@ export class KanbanStore {
     // back to "no opinion"; anything else must be well-formed.
     if (patch.preset !== undefined) next.preset = normalizePreset(patch.preset);
     if (patch.writeMode !== undefined) next.writeMode = normalizeWriteMode(patch.writeMode);
+    // KAN-18: intent is a boolean at this boundary, 0/1 in the row.
+    if (patch.worktree !== undefined) next.worktree = patch.worktree === true;
     if (next.allowPaid && !(next.budgetUsd > 0)) {
       throw new StoreError('bad_request', 'paid tickets need a positive budgetUsd');
     }
@@ -314,7 +324,7 @@ export class KanbanStore {
         .prepare(
           `UPDATE tickets SET title = ?, body = ?, priority = ?, sort_order = ?, allow_paid = ?, budget_usd = ?,
              workspace_cwd = ?, confidence_threshold = ?, plan_timing = ?, plan_questions = ?, preset = ?, write_mode = ?,
-             updated_at = ?, version = version + 1
+             worktree = ?, updated_at = ?, version = version + 1
            WHERE id = ?`,
         )
         .run(
@@ -330,6 +340,7 @@ export class KanbanStore {
           next.planQuestions,
           next.preset,
           next.writeMode,
+          next.worktree === true ? 1 : 0,
           at,
           ticket.id,
         );

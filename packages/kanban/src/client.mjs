@@ -983,20 +983,12 @@ var CSS =
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "", preset: "", writeMode: "workspace-write" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, preset: "", writeMode: "workspace-write" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
-			var wc = React.useState(false);
-			var worktreeConfirm = wc[0], setWorktreeConfirm = wc[1];
-			var wb = React.useState(false);
-			var worktreeBusy = wb[0], setWorktreeBusy = wb[1];
-			var we = React.useState(null);
-			var worktreeError = we[0], setWorktreeError = we[1];
-			var ws = React.useState(null);
-			var extraWorkspace = ws[0], setExtraWorkspace = ws[1];
 			var br = React.useRef(null);
 			var bodyRef = br;
 			var fr = React.useRef(null);
@@ -1011,18 +1003,6 @@ var CSS =
 				var next = Object.assign({}, form);
 				next[key] = value;
 				setForm(next);
-			}
-			function createWorktree() {
-				setWorktreeBusy(true);
-				setWorktreeError(null);
-				rpc("worktree", { workspaceCwd: form.workspace || null, title: form.title }).then(function (res) {
-					setWorktreeBusy(false);
-					if (!res || !res.ok) { setWorktreeError(res && res.error ? res.error.message : "The worktree could not be created."); return; }
-					var path = res.value.worktree.managedRoot;
-					setForm(Object.assign({}, form, { workspace: path, worktree: true, worktreeCreated: true, worktreePath: path }));
-					setExtraWorkspace({ path: path, title: "worktree" });
-					setWorktreeConfirm(false);
-				}, function () { setWorktreeBusy(false); setWorktreeError("Could not reach the Host."); });
 			}
 
 			function submit() {
@@ -1047,11 +1027,14 @@ var CSS =
 						// KAN-15: empty preset means "harness default" and is
 						// stored as null so it keeps tracking future changes.
 						preset: form.preset || null,
-						writeMode: form.writeMode
+						writeMode: form.writeMode,
+						// KAN-18: intent only. The working copy is created when
+						// planning starts, from the latest default branch.
+						worktree: !!form.worktree
 					}).then(function (res) {
 						setBusy(false);
 						if (res && res.ok) {
-							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, worktreeCreated: false, worktreePath: "", preset: "", writeMode: "workspace-write" });
+							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, preset: "", writeMode: "workspace-write" });
 							props.onCreated(res.value.ticket);
 						} else {
 							setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -1070,9 +1053,9 @@ var CSS =
 				h("div", { className: "kb-row" },
 					h("div", { style: { flex: 1, minWidth: 220 } },
 						h("div", { className: "kb-label", children: "Workspace" }),
-						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, disabled: form.worktreeCreated, onChange: function (ev) { field("workspace", ev.target.value); } },
+						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, onChange: function (ev) { field("workspace", ev.target.value); } },
 							h("option", { value: "", children: "Engine default" }),
-							((props.workspaces || []).concat(extraWorkspace ? [extraWorkspace] : [])).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
+							(props.workspaces || []).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
 						)
 					),
 					h("div", null,
@@ -1141,24 +1124,16 @@ var CSS =
 				props.worktreeAvailable ? h("div", { className: "kb-row" },
 					h("div", { className: "kb-switchrow" },
 						h(Switch, {
-							ariaLabel: "Create a git worktree for this ticket",
+							ariaLabel: "Worktree for this ticket",
 							checked: form.worktree,
-							disabled: worktreeBusy || form.worktreeCreated,
-							onToggle: function (value) { if (value) { setWorktreeError(null); setWorktreeConfirm(true); } }
+							onToggle: function (value) { field("worktree", value); }
 						}),
 						h("span", { className: "kb-label", children: "Worktree" })),
-					form.worktreeCreated ? h("span", { className: "kb-worktree-path", children: form.worktreePath }) : h("span", { className: "kb-hint", children: "Create an isolated working copy for this ticket." })) : null,
+					h("span", { className: "kb-hint", children: "A worktree from the latest main is created when planning starts." })) : null,
 				err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy || invalid || form.title.trim() === "", onClick: submit, children: busy ? "Creating…" : "Create ticket" }),
-					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" })),
-				h(Modal, { open: worktreeConfirm, title: "Start in a git worktree", onClose: function () { if (!worktreeBusy) setWorktreeConfirm(false); } },
-					h("div", { className: "kb-form" },
-						h("p", { className: "kb-hint", children: "A new branch and worktree are created for this repository. The ticket will use that working copy, and the original checkout is left untouched." }),
-						worktreeError ? h("div", { className: "kb-err", children: worktreeError }) : null,
-						h("div", { className: "kb-row" },
-							h("button", { className: "kb-btn", disabled: worktreeBusy, onClick: function () { setWorktreeConfirm(false); }, children: "Cancel" }),
-							h("button", { className: "kb-btn primary", disabled: worktreeBusy, onClick: createWorktree, children: worktreeBusy ? "Creating…" : "Create worktree and use it" }))))
+					h("button", { className: "kb-btn", onClick: props.onClose, children: "Cancel" }))
 			);
 		}
 

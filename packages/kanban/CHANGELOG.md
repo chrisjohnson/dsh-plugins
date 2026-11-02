@@ -5,6 +5,45 @@
 
 ## Unreleased
 
+## 0.14.0
+
+### Changed
+
+- **A worktree is created when planning starts, not when the ticket is made**
+  (KAN-18). The new-ticket **Worktree** switch was a confirm dialog that cut a
+  working copy immediately, before anyone knew what the ticket would turn out to
+  be: a board of abandoned tickets each holding a directory. It is now a plain
+  switch that records the intent in `tickets.worktree` (schema V6, existing rows
+  0), and the copy is settled by the driver at the moment a plan session is
+  actually dispatched — from the just-fetched `origin/<default branch>`, not from
+  wherever the source checkout happened to sit. The hint says so: *A worktree from
+  the latest main is created when planning starts.*
+- **A ticket that already points at a working copy is brought up to date instead
+  of left behind.** Every eager-era ticket — this includes the whole existing
+  backlog — names a copy that was cut days ago. At plan start a *pristine* copy is
+  fast-forwarded onto the latest default branch and its base recorded; a copy with
+  work in it is **left exactly as it is** and the plan prompt gains a line naming
+  the path, the branch, why it was not moved and what it is based on, so the
+  planner knows what ground it is standing on. Nothing is deleted, reset or
+  rebased, and no existing working copy is removed by this change.
+- **A fetch that fails parks the ticket.** Planning on a base this plugin could
+  not bring up to date is the one thing the switch exists to prevent, so the plan
+  dispatch fails with git's own words in `needsAttentionReason` rather than
+  quietly planning against yesterday's code.
+
+### Added
+
+- `SessionDriver.preparePlanWorktree(ticket)`, the single place that decides where
+  a plan session runs, and `worktreeStaleNote`, the sentence a not-pristine copy
+  contributes to the plan prompt. Both talk to the `betterGitWorktree` seam
+  (`refreshManagedCopy` / `createForPath`), resolved lazily and duck-typed: with
+  `dsh-better-git-worktree` not mounted the intent is ignored with one log line and
+  planning behaves exactly as in 0.13.x. Requires `dsh-better-git-worktree` 0.2.0
+  for the fast-forward half; an older worktree plugin simply leaves copies alone.
+- The `worktree` endpoint stays as the manual escape hatch (make a copy for a
+  ticket right now); only the create form stops calling it.
+
+
 ## 0.13.1
 
 ### Fixed

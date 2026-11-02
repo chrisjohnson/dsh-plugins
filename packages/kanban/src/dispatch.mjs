@@ -61,6 +61,24 @@ export function roleForSession(purpose, ticket) {
   return 'implementer';
 }
 
+/**
+ * The sentence a plan prompt gets when the ticket's working copy was left where
+ * it is: which copy, why, and what it is standing on. A planner that does not
+ * know it is reading an old commit will plan against code that is not current,
+ * so this is appended to the prompt rather than only written to a log.
+ */
+export function worktreeStaleNote(refreshed) {
+  const reason = refreshed?.reason ?? 'unknown';
+  const base = typeof refreshed?.baseOid === 'string' && refreshed.baseOid !== ''
+    ? refreshed.baseOid.slice(0, 10)
+    : 'an unknown commit';
+  const branch = refreshed?.branch ?? '(no branch)';
+  return (
+    `Worktree note: ${refreshed?.managedRoot ?? '(unknown path)'} (branch ${branch}) was left as-is because ${reason}; ` +
+    `it is based on ${base}, not the latest main — plan against it as-is.`
+  );
+}
+
 /** Existing sessions can be reused within a purpose, never across purposes. */
 export class SessionDriver {
   constructor({ ctx, log, getConfig, store }) {
@@ -360,8 +378,96 @@ export class SessionDriver {
     return out;
   }
 
+  /**
+   * The `betterGitWorktree` seam, looked up per call: plugin mount order is not
+   * fixed, and a plugin that is simply not installed must not stop a ticket.
+   */
+  #worktreeService() {
+    try {
+      return this.ctx.get('betterGitWorktree');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Decide — and now, not at ticket-creation time — which directory a plan
+   * session starts in (KAN-18).
+   *
+   * Three shapes, in the order the board can present them:
+   *
+   *   (B) The ticket already names a checkout. That is every eager-era ticket,
+   *       and any ticket a human pointed at a workspace. When that path is a
+   *       managed working copy it is fetched and brought to the latest default
+   *       branch *if it holds nothing of its own*; a copy with work in it, or a
+   *       path this plugin does not own, is left exactly as it is and the caller
+   *       gets a note to say so, which lands in the plan prompt.
+   *
+   *   (A) The ticket only recorded the intent — the new-ticket switch. The copy
+   *       is cut here, from the just-fetched default branch, registered as a
+   *       workspace, and the ticket is re-pointed at it.
+   *
+   *   (C) Neither: the ordinary default workspace, unchanged behavior.
+   *
+   * A `git fetch` that fails throws, on purpose. Planning on a base the plugin
+   * could not bring up to date is exactly what the switch was asked to prevent,
+   * so the ticket parks in needs-attention carrying git's own reason instead of
+   * quietly planning against yesterday's code.
+   *
+   * @param {object} ticket - the ticket about to be planned.
+   * @returns {Promise<{cwd: string, note?: string}>}
+   */
+  async preparePlanWorktree(ticket) {
+    const config = this.getConfig();
+    const plain = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
+    const service = this.#worktreeService();
+    if (service === undefined || service === null) {
+      if (ticket.worktree === true) {
+        this.log.warn('kanban: %s asked for a worktree but dsh-better-git-worktree is not mounted; planning in %s', ticket.key, plain);
+      }
+      return { cwd: plain };
+    }
+    // (B) a checkout the ticket already points at.
+    if (typeof ticket.workspaceCwd === 'string' && ticket.workspaceCwd !== '') {
+      if (typeof service.refreshManagedCopy !== 'function') return { cwd: ticket.workspaceCwd };
+      const refreshed = await service.refreshManagedCopy({ path: ticket.workspaceCwd, fetchFirst: true });
+      // Not one of ours (a plain checkout, a hand-picked folder): nothing to
+      // refresh, nothing to say.
+      if (refreshed?.managed !== true) return { cwd: ticket.workspaceCwd };
+      if (refreshed.updated === true) return { cwd: ticket.workspaceCwd };
+      return { cwd: ticket.workspaceCwd, note: worktreeStaleNote(refreshed) };
+    }
+    // (A) intent only: create the copy now, from the current upstream.
+    if (ticket.worktree === true) {
+      if (typeof service.createForPath !== 'function') {
+        this.log.warn('kanban: %s asked for a worktree but the mounted worktree service cannot create one; planning in %s', ticket.key, plain);
+        return { cwd: plain };
+      }
+      const created = await service.createForPath({
+        path: config.defaultWorkspaceCwd ?? process.cwd(),
+        title: ticket.title,
+        fetchFirst: true,
+        baseOnRemote: true,
+      });
+      try {
+        await this.ctx.get('workspaceRegistry')?.create?.(created.managedRoot, ticket.title);
+      } catch (error) {
+        this.log.warn('kanban: worktree workspace registration failed for %s: %s', created.managedRoot, String(error?.message ?? error));
+      }
+      this.store.updateTicket(
+        ticket.id,
+        { workspaceCwd: created.managedRoot },
+        { actor: 'engine', reason: 'worktree created at plan start' },
+      );
+      this.log.info('kanban: %s worktree created at %s based on %s', ticket.key, created.managedRoot, created.baseOid);
+      return { cwd: created.managedRoot };
+    }
+    // (C) nothing was ever asked for.
+    return { cwd: plain };
+  }
+
   /** Return the live session for one ticket purpose, creating it on first use. */
-  async ensureTicketSession({ ticket, role, route, purpose }) {
+  async ensureTicketSession({ ticket, role, route, purpose, preparedCwd }) {
     if (this.disposed) throw new DispatchError('plugin is stopping');
     // An archived session is unusable: core's `agent/pre-step` gate rejects every
     // turn in it, so dispatching into one burns a phase turn that ends instantly
@@ -380,7 +486,9 @@ export class SessionDriver {
     }
     if (this.agents === undefined) throw new DispatchError('agents service is missing', { code: 'NO_AGENTS' });
     const config = this.getConfig();
-    const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
+    // KAN-18: `preparePlanWorktree` may have created or refreshed the copy this
+    // turn is about to run in, and its answer wins over the stored one.
+    const cwd = preparedCwd ?? ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     await mkdir(cwd, { recursive: true }).catch(() => {});
     const sessionId = `session-${randomUUID()}`;
     // KAN-15: the ticket chooses its build session's preset and write mode.

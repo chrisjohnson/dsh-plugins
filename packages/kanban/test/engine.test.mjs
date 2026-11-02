@@ -89,7 +89,20 @@ function setup(queues = {}, options = {}) {
       // structured submission; that is its normal shape.
       approver: [...(queues.approval ?? [null])],
     },
-    async ensureTicketSession({ ticket, role, purpose }) {
+    /**
+     * KAN-18: what `preparePlanWorktree` yields. An object is returned as-is; a
+     * function is called with the ticket, so a test can stand in for a fetch that
+     * throws. `undefined` (a driver without the seam at all) is the legacy shape.
+     */
+    prep: { cwd: undefined, note: undefined },
+    /** every cwd the engine handed to ensureTicketSession, in order */
+    preparedCwds: [],
+    async preparePlanWorktree(ticket) {
+      this.prepCalls = (this.prepCalls ?? 0) + 1
+      return typeof this.prep === 'function' ? this.prep(ticket) : this.prep
+    },
+    async ensureTicketSession({ ticket, role, purpose, preparedCwd }) {
+      this.preparedCwds.push(preparedCwd)
       const key = `${ticket.id}:${purpose}`
       let id = this.ticketSessions.get(key)
       if (id === undefined) {
@@ -844,4 +857,52 @@ test('the plan prompt for a ticket with an image carries its host path', async (
   assert.ok(artifact !== undefined, 'the plan prompt artifact was not written')
   assert.match(artifact.content, /Attached images \(read-only, on this host\):/)
   assert.match(artifact.content, new RegExp(`- shot\\.png: /store/${'d'.repeat(64)}`))
+})
+
+// ------------------------------------------------------- KAN-18 lazy worktree
+//
+// Planning settles the working copy. Two things the board has to get right: a
+// fetch that cannot reach origin must park the ticket rather than plan against
+// yesterday's code, and a working copy that was left alone must say so to the
+// planner, in the prompt, not only in a log line nobody reads.
+
+test('a failed fetch parks the ticket with git reason and never starts the plan session', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  driver.prep = () => {
+    throw new Error('git fetch failed for /home/dsh/dsh-deploy: could not read from remote repository')
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'plan', 'the ticket stays where it was')
+  assert.ok(parked.needsAttentionReason, 'the ticket is parked')
+  assert.match(parked.needsAttentionReason, /turn failed in plan/)
+  assert.ok(
+    parked.needsAttentionReason.includes('could not read from remote repository'),
+    `the reason must carry git's own words, got: ${parked.needsAttentionReason}`,
+  )
+  assert.equal(driver.turns.length, 0, 'no plan session was started on a base that could not be brought up to date')
+})
+
+test('the prepared cwd is the session cwd and the note reaches the plan prompt', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  const note = 'Worktree note: /managed/copy (branch dsh/copy) was left as-is because dirty; it is based on abc123def4, not the latest main — plan against it as-is.'
+  driver.prep = { cwd: '/managed/copy', note }
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(driver.prepCalls, 1)
+  assert.equal(driver.preparedCwds[0], '/managed/copy')
+  const prompt = store.latestArtifact(ticket.id, 'planner_prompt_plan')
+  assert.ok(prompt, 'the plan prompt was recorded')
+  assert.ok(prompt.content.includes(note), `the prompt must end with the note, got: ${prompt.content.slice(-200)}`)
+})
+
+test('a ticket with nothing to say about its copy gets an unannotated prompt', async () => {
+  const { store, engine, driver } = setup()
+  const ticket = pickedUp(store)
+  driver.prep = { cwd: '/managed/copy' }
+  await engine.advance(store.getTicket(ticket.id))
+  const prompt = store.latestArtifact(ticket.id, 'planner_prompt_plan')
+  assert.equal(prompt.content.includes('Worktree note:'), false)
+  assert.equal(driver.preparedCwds[0], '/managed/copy')
 })

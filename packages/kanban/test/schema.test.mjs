@@ -90,7 +90,7 @@ test('a fresh database lands on the current schema version directly', () => {
 
 test('v5 adds nullable preset and write_mode; migrated rows keep NULL', () => {
   const db = v3Database()
-  assert.equal(migrate(db), 5)
+  assert.equal(migrate(db), SCHEMA_VERSION)
   const columns = db.prepare('PRAGMA table_info(tickets)').all().map((row) => row.name)
   assert.ok(columns.includes('preset'), 'tickets.preset exists')
   assert.ok(columns.includes('write_mode'), 'tickets.write_mode exists')
@@ -99,6 +99,39 @@ test('v5 adds nullable preset and write_mode; migrated rows keep NULL', () => {
     assert.equal(row.preset, null)
     assert.equal(row.write_mode, null)
   }
+})
+
+// ---------------------------------------------------------------- KAN-18 v6
+
+test('v6 adds tickets.worktree and every pre-existing row reads 0', () => {
+  const db = v3Database()
+  assert.equal(migrate(db), 6)
+  const column = db.prepare('PRAGMA table_info(tickets)').all().find((row) => row.name === 'worktree')
+  assert.ok(column, 'tickets.worktree exists')
+  assert.equal(column.notnull, 1, 'NOT NULL')
+  assert.equal(String(column.dflt_value), '0', 'DEFAULT 0')
+  // Existing rows are untouched and keep their workspace_cwd: a pre-created
+  // working copy stays exactly where it was, and 0 means "nothing was asked for".
+  const rows = db.prepare('SELECT key, worktree, workspace_cwd FROM tickets ORDER BY key').all()
+  assert.equal(rows.length, 4)
+  for (const row of rows) assert.equal(row.worktree, 0)
+  db.prepare("UPDATE tickets SET workspace_cwd = '/somewhere/managed' WHERE key = 'KAN-1'").run()
+  assert.equal(db.prepare("SELECT workspace_cwd AS c FROM tickets WHERE key = 'KAN-1'").get().c, '/somewhere/managed')
+})
+
+test('v6 worktree CHECK accepts 0 and 1 and rejects anything else', () => {
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  const at = new Date().toISOString()
+  const insert = (value) =>
+    db.prepare(
+      `INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at, worktree)
+       VALUES (?, ?, 't', 'backlog', 'plan', 'at_pickup', 'interactive', ?, ?, ?)`,
+    ).run(`id-wt-${value}`, `KAN-WT-${value}`, at, at, value)
+  insert(0)
+  insert(1)
+  assert.throws(() => insert(2), /CHECK constraint failed/)
+  assert.throws(() => insert(null), /CHECK constraint failed|NOT NULL constraint failed/)
 })
 
 test('v5 write_mode CHECK accepts the closed vocabulary and rejects anything else', () => {
