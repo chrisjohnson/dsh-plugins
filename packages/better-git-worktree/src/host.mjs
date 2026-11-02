@@ -188,8 +188,12 @@ export default function betterGitWorktree(ctx, config = {}) {
 
   // Other plugins (Kanban) create a working copy from a repository path and
   // adopt it once their workflow session starts in the managed root.
+  // `refreshManagedCopy` is the other half of that handshake: a copy that
+  // already exists is brought to the latest default branch when it holds nothing
+  // of its own, and reported — never touched — when it does.
   ctx.provide('betterGitWorktree', {
     createForPath: (options) => service.createForPath(options.path, options),
+    refreshManagedCopy: (options) => service.refreshManagedCopy(options.path, options),
   })
 
   // -- RPC surface (client -> host) ---------------------------------------------

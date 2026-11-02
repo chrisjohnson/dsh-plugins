@@ -5,6 +5,35 @@
 
 ## Unreleased
 
+## 0.2.0
+
+### Added
+
+- **The cross-plugin seam grew the two halves of a lazy worktree** (KAN-18), so a
+  workflow plugin can settle a working copy at the moment work starts instead of
+  the moment a ticket is written. `createForPath` takes two options: `fetchFirst`
+  awaits `git fetch origin` before anything is read (a repository with no origin
+  is skipped — there is nothing to be stale against) and a failed fetch **throws**
+  with git's own reason rather than handing the caller a stale view;
+  `baseOnRemote` cuts the copy at the just-fetched `origin/<default branch>`
+  instead of wherever the source checkout happens to be sitting, falling back to
+  local HEAD when that ref cannot be resolved. `createWorktree` accepts the
+  matching `baseOid` override.
+- `refreshManagedCopy({ path, fetchFirst })` answers the other half: *is the copy
+  this ticket already points at still an empty shell of the base it came from?* A
+  pristine copy — clean tree including untracked paths, and no commit the commit
+  it was cut from does not already have — is fast-forwarded onto the fetched
+  default branch and the registry's `baseOid` follows. Anything else is left
+  exactly as it is and reported: `dirty`, `has-own-commits`, `diverged`, `missing`,
+  `unverified`, `unknown-base`, `no-remote-base`, `no-repository`. An unmanaged path
+  answers `{ managed: false }`. Nothing is ever deleted, reset or rebased here: a
+  copy with work in it is somebody's work, so the answer is a reason, not a
+  mutation. Both calls are published on `ctx.provide('betterGitWorktree', …)`.
+- The host test context learned `ctx.provide`, which the plugin has used since
+  0.1.3; without it every host test failed on a machine that had the peer packages
+  installed (they skip on a bare clone, so nothing noticed).
+
+
 ## 0.1.3
 
 ### Added

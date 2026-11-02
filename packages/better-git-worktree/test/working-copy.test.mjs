@@ -284,3 +284,26 @@ test('unpublished commits are counted without origin refs: a fresh copy is clean
     cleanup()
   }
 })
+
+// ---------------------------------------------------------------- KAN-18 base override
+
+test('createWorktree starts at an explicit baseOid when the caller resolved one', async () => {
+  const { dir, cleanup } = tempDir()
+  try {
+    const { repo } = makeRepo(dir)
+    const base = git(repo, 'rev-parse', 'HEAD')
+    const later = commitFile(repo, 'newer.txt', 'newer\n', 'local work after the base')
+    assert.notEqual(base, later)
+    const created = await createWorktree({ repoRoot: repo, home: dir, baseOid: base })
+    // The copy is on the commit it was told to use, not on the source's HEAD.
+    assert.equal(created.baseOid, base)
+    assert.equal(git(created.managedRoot, 'rev-parse', 'HEAD'), base)
+    assert.equal(existsSync(join(created.managedRoot, 'newer.txt')), false, 'the newer commit is not in the copy')
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), later, 'the source checkout is untouched')
+    // An empty override is no override: HEAD is still the default.
+    const defaulted = await createWorktree({ repoRoot: repo, home: dir, baseOid: '' })
+    assert.equal(defaulted.baseOid, later)
+  } finally {
+    cleanup()
+  }
+})

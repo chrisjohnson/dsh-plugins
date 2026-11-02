@@ -24,7 +24,7 @@ import { existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 
-import { TtlCache, gitFetch } from './git-runner.mjs'
+import { TtlCache, gitFetch, gitText, runGit } from './git-runner.mjs'
 import { baseRefFor, currentBranch, defaultBranch, readWorktreeStatus, repoRoot } from './repository.mjs'
 import {
   branchReview,
@@ -180,6 +180,38 @@ export function createService(deps) {
     })
   }
 
+  /** Whether this repository has an `origin` to fetch from at all. */
+  async function hasOrigin(root) {
+    return (await gitText(root, ['remote', 'get-url', 'origin'])) !== undefined
+  }
+
+  /**
+   * An awaited `git fetch origin`, for a caller that must not proceed on a stale
+   * base. Unlike `kickFetch` this one fails loudly and says why: a caller that
+   * is about to start work on "the latest main" has to know when it could not
+   * find out what the latest main is.
+   * @throws when the fetch fails.
+   */
+  async function fetchOrigin(root) {
+    const result = await fetchRemote(root)
+    if (!result.ok) {
+      const detail = result.timedOut === true
+        ? 'timed out'
+        : (result.stderr.trim().split('\n')[0] || `exit ${result.code}`)
+      throw new Error(`git fetch failed for ${root}: ${detail}`)
+    }
+    lastFetchAt.set(root, Date.now())
+    cache.invalidatePrefix('status:')
+    warmAll()
+    return result
+  }
+
+  /** The commit `origin/<branch>` points at in `root`, or undefined when there is no such ref. */
+  async function remoteBranchOid(root, branch) {
+    if (typeof branch !== 'string' || branch === '') return undefined
+    return gitText(root, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`])
+  }
+
   // -- creating and converting --------------------------------------------------
 
   /**
@@ -247,6 +279,17 @@ export function createService(deps) {
    * Create a managed working copy for a repository path, independent of any
    * session. It is registered as pending and adopted by the first session whose
    * cwd resolves to the managed root.
+   *
+   * Two options exist for a caller that must start from *current* upstream
+   * rather than from wherever this checkout happens to be sitting:
+   *
+   *   `fetchFirst`   await `git fetch origin` before anything is read (a repo
+   *                  with no origin is skipped — there is nothing to be stale
+   *                  against). A failed fetch throws: the caller decides what a
+   *                  stale base means, this function never guesses.
+   *   `baseOnRemote` cut the copy at the just-fetched `origin/<default branch>`
+   *                  instead of local HEAD. When that ref cannot be resolved the
+   *                  copy falls back to local HEAD, which is the old behavior.
    */
   async function createForPath(path, options = {}) {
     if (typeof path !== 'string' || path.trim() === '') throw new Error('createForPath needs a repository path')
@@ -256,10 +299,16 @@ export function createService(deps) {
     if (registry.list().some((record) => record.managedRoot === root)) {
       throw new Error(`${root} is already a managed git worktree`)
     }
+    if (options.fetchFirst === true && (await hasOrigin(root))) await fetchOrigin(root)
     const branchName = await currentBranch(root)
     const base = (await defaultBranch(root)) ?? branchName
     const baseRef = await baseRefFor(root, base)
-    const created = await createWorktree({ repoRoot: root, home })
+    const remoteOid = options.baseOnRemote === true ? await remoteBranchOid(root, base) : undefined
+    const created = await createWorktree({
+      repoRoot: root,
+      home,
+      ...(remoteOid === undefined ? {} : { baseOid: remoteOid }),
+    })
     const pendingId = `pending-${randomUUID()}`
     const record = registry.put({
       sessionId: pendingId,
@@ -285,6 +334,115 @@ export function createService(deps) {
       baseOid: created.baseOid,
       pendingId,
       record,
+    }
+  }
+
+  /**
+   * Bring one already-registered working copy up to the latest default branch,
+   * or say exactly why it was left alone.
+   *
+   * This is the other half of a lazy worktree: a caller may point at a copy that
+   * was created earlier — by hand, or the moment its ticket was made — and still
+   * expect the work to start from current upstream. Only a copy with nothing of
+   * its own in it is moved: a clean tree *including untracked paths*, and no
+   * commit that the commit it was cut from does not already have. Anything else
+   * is somebody's work, and fast-forwarding under it would be a mutation nobody
+   * asked for, so it is reported instead.
+   *
+   * The copy reads the source repository's objects through its alternates file,
+   * so the fetched commits are already here; the merge is given the OID resolved
+   * in the source, because the copy's own `origin/<branch>` ref is whatever its
+   * last fetch left there.
+   *
+   * @param {string} path - the working copy to inspect (its registry record is found by root).
+   * @param {object} [options]
+   * @param {boolean} [options.fetchFirst] - await `git fetch origin` in the source repository first.
+   * @returns {Promise<{managed: false, path: string} | {managed: true, updated: boolean, ...}>}
+   *   `updated: false` always carries a `reason`.
+   * @throws when the fetch is requested and fails, or the path is not a repository of its own.
+   */
+  async function refreshManagedCopy(path, options = {}) {
+    if (typeof path !== 'string' || path.trim() === '') throw new Error('refreshManagedCopy needs a path')
+    const record = registry.findByRoot(path)
+    if (record === undefined) return { managed: false, path }
+    const facts = {
+      managed: true,
+      managedRoot: record.managedRoot,
+      branch: record.branch,
+      baseBranch: record.baseBranch,
+      baseOid: record.baseOid,
+    }
+    if (!exists(record.managedRoot)) return { ...facts, updated: false, reason: 'missing' }
+    const root = record.repoRoot ?? (await repoRoot(record.managedRoot))
+    if (root === undefined) return { ...facts, updated: false, reason: 'no-repository' }
+    if (options.fetchFirst === true && (await hasOrigin(root))) await fetchOrigin(root)
+
+    const status = await readStatus(record.managedRoot, {
+      baseBranch: record.baseBranch,
+      baseOid: record.baseOid,
+      // A managed copy must be a repository of its own: git otherwise walks up to
+      // the source checkout and reports *that* as clean.
+      requireOwnRepo: true,
+    })
+    if (status === undefined || status.error !== undefined || (status.unverified ?? []).length > 0) {
+      return { ...facts, updated: false, reason: 'unverified', detail: status?.error ?? status?.unverified?.[0] }
+    }
+    const dirty = Number(status.dirty ?? 0)
+    if (dirty > 0) return { ...facts, updated: false, reason: 'dirty', dirty }
+
+    // "No commits of its own" is measured against the commit the copy was cut
+    // from, falling back to the default-branch ref when the record predates
+    // baseOid tracking.
+    const base = record.baseOid ?? record.baseRef
+    let ownCommits = 0
+    if (typeof base === 'string' && base !== '') {
+      const counted = await gitText(record.managedRoot, ['rev-list', '--count', `${base}..HEAD`])
+      if (counted === undefined) return { ...facts, updated: false, reason: 'unknown-base', dirty }
+      ownCommits = Number(counted)
+      if (!Number.isFinite(ownCommits)) return { ...facts, updated: false, reason: 'unknown-base', dirty }
+    }
+    if (ownCommits > 0) return { ...facts, updated: false, reason: 'has-own-commits', dirty, ownCommits }
+
+    const head = await gitText(record.managedRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+    const targetOid = (await remoteBranchOid(root, record.baseBranch))
+      ?? (record.baseRef === undefined ? undefined : await gitText(root, ['rev-parse', '--verify', '--quiet', record.baseRef]))
+    if (targetOid === undefined) {
+      return { ...facts, updated: false, reason: 'no-remote-base', dirty, ownCommits }
+    }
+    if (head === targetOid) {
+      // Nothing moved: still report it as current, and make sure the record says so.
+      if (record.baseOid !== head) registry.patch(record.sessionId, { baseOid: head })
+      cache.invalidate(`status:${record.managedRoot}`)
+      return { ...facts, baseOid: head, updated: true, alreadyCurrent: true, dirty, ownCommits }
+    }
+    const merged = await runGit(record.managedRoot, ['merge', '--ff-only', targetOid], { timeoutMs: 300000 })
+    if (!merged.ok) {
+      // A clean copy whose base is not an ancestor of the default branch: the
+      // histories have diverged and only the owner can decide what that means.
+      return {
+        ...facts,
+        updated: false,
+        reason: 'diverged',
+        dirty,
+        ownCommits,
+        detail: merged.stderr.trim().split('\n')[0] || `exit ${merged.code}`,
+      }
+    }
+    const newHead = (await gitText(record.managedRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])) ?? targetOid
+    registry.patch(record.sessionId, { baseOid: newHead })
+    // Keep the copy's own view of the default branch in step with the source's,
+    // so its status reads "up to date" instead of "nothing to compare against".
+    if (typeof record.baseBranch === 'string' && record.baseBranch !== '') {
+      await runGit(record.managedRoot, ['update-ref', `refs/remotes/origin/${record.baseBranch}`, targetOid], { timeoutMs: 60000 })
+    }
+    cache.invalidate(`status:${record.managedRoot}`)
+    return {
+      ...facts,
+      baseOid: newHead,
+      updated: true,
+      alreadyCurrent: false,
+      dirty,
+      ownCommits,
     }
   }
 
@@ -589,6 +747,7 @@ export function createService(deps) {
     kickFetch,
     createForSession,
     createForPath,
+    refreshManagedCopy,
     adoptForCwd,
     convertSession,
     removeWorkingCopy,
