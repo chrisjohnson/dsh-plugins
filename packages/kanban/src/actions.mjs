@@ -37,6 +37,42 @@ const PLAN_PARAMETERS = {
       },
     },
   },
+  // KAN-30: the plan-time sandbox grant. Declaring grants parks the plan for a
+  // one-time human approval; omitting it builds immediately, exactly as before.
+  sandbox: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Optional sandbox section. Declare ONLY what the build session would otherwise be prompted for mid-build: ' +
+      'grants.paths = absolute paths outside the workspace root the build must write (write/edit under each path is auto-approved once you approve this plan); ' +
+      'grants.commands = token-prefix command grants for bash calls the standing sandbox would deny (the command must start with these tokens at word boundaries). ' +
+      'Service restarts, sudo, rm, kill, dd and similar are denylisted and can never be granted. ' +
+      'For each declared path run `test -w <path>` read-only while planning and record the result in checks as {path, check, observed}; ' +
+      'a check that failed belongs in the plan as a risk, not as a grant. Platform temp areas (e.g. /tmp) are already writable under workspace-write — do not grant them.',
+    properties: {
+      grants: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          paths: { type: 'array', items: { type: 'string' }, description: 'Absolute paths the build session may write outside the workspace root.' },
+          commands: { type: 'array', items: { type: 'string' }, description: 'Token-prefix command grants for sandbox-denied bash calls.' },
+        },
+      },
+      checks: {
+        type: 'array',
+        description: 'Read-only probes the planner ran for each declared grant path, e.g. {path, check: "test -w <path>", observed: "writable"}.',
+        items: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            path: { type: 'string', required: true },
+            check: { type: 'string', required: true },
+            observed: { type: 'string', required: true },
+          },
+        },
+      },
+    },
+  },
 };
 
 const IMPLEMENT_PARAMETERS = {
@@ -318,7 +354,17 @@ export function registerActionTools({ ctx, sessionId, liveRef, driver, store }) 
         return { plan: null, conditions: [], review: null, note: 'This ticket has no plan yet. Call kanban_submit_plan when you have one.' };
       }
       return {
-        plan: plan === null ? null : { summary: plan.summary ?? '', steps: plan.steps ?? [], done_when: conditions },
+        plan: plan === null
+          ? null
+          : {
+            summary: plan.summary ?? '',
+            steps: plan.steps ?? [],
+            done_when: conditions,
+            // KAN-30: the approved grants ride in the plan artifact, so a build
+            // session re-reading its contract sees exactly what it may do
+            // outside the sandbox without asking again.
+            ...(plan.sandbox === undefined || plan.sandbox === null ? {} : { sandbox: plan.sandbox }),
+          },
         conditions,
         review,
       };

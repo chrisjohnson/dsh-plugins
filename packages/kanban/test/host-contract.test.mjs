@@ -533,3 +533,44 @@ test('planning settles the working copy through the betterGitWorktree seam', asy
   assert.match(plan, /preparedCwd: prep\.cwd/)
   assert.match(files['engine.mjs'], /ensureTicketSession\(\{ ticket, role, route, purpose, preparedCwd \}\)/)
 })
+
+// --------------------------------------------------------------- KAN-30
+
+test('approvePlan is wired on both endpoints and the engine owns the decision', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  // Both the resolve and the action endpoint accept it, and both delegate —
+  // the host decides nothing itself.
+  assert.equal((host.match(/action === 'approvePlan'/g) || []).length, 2, 'approvePlan on resolve and action')
+  assert.equal((host.match(/engineRef\.current\.approvePlan\(/g) || []).length, 2)
+  const engine = files['engine.mjs']
+  assert.match(engine, /async approvePlan\(ticketId, message = ''\)/)
+  assert.match(engine, /isPlanReady\(ticket\.needsAttentionReason\)/)
+  assert.match(engine, /'plan_approved'/)
+})
+
+test('the grant approver is registered only on build sessions, on both session paths', async () => {
+  const files = await sources()
+  const dispatch = files['dispatch.mjs']
+  assert.match(dispatch, /import \{ makeGrantApprover \} from '\.\/grants\.mjs'/)
+  assert.match(dispatch, /agentCtx\.on\('approval\/request', makeGrantApprover\(\{ store: this\.store, log: this\.log \}\), \{ prepend: true \}\)/)
+  // Exactly two call sites: the fresh-session setup and the post-restart
+  // reattach, each gated on purpose === 'build'.
+  assert.equal((dispatch.match(/#registerGrantApprover\(/g) || []).length, 3, 'one definition, two call sites')
+  assert.match(dispatch, /if \(purpose === 'build'\) this\.#registerGrantApprover\(agentCtx\)/)
+  assert.match(dispatch, /if \(purpose === 'build'\) this\.#registerGrantApprover\(agent\.ctx\)/)
+})
+
+test('the plan-ready park and the Approve-plan button agree on the prefix', async () => {
+  const files = await sources()
+  const grants = files['grants.mjs']
+  assert.match(grants, /export const PLAN_READY_PREFIX = 'Plan ready:'/)
+  const client = files['client.mjs']
+  assert.match(client, /indexOf\("Plan ready:"\) === 0/)
+  assert.match(client, /\}, "Approve plan"\)/)
+  assert.match(client, /props\.onResolve\(t\.id, "approvePlan"\)/)
+  // The grants section renders paths, commands and the checks table.
+  assert.match(client, /Sandbox grants/)
+  assert.match(client, /d\.plan\.sandbox\.grants/)
+  assert.match(client, /d\.plan\.sandbox\.checks/)
+})

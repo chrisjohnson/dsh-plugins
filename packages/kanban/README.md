@@ -106,6 +106,67 @@ The plan session is one flat session: it asks questions, researches, and calls
 review and approval share one session; a complete review flips that same session
 to the approver phase and asks the human what to do with the work.
 
+### Sandbox grants (0.16.0)
+
+A build session runs under the ticket's write mode with the ticket's workspace as
+its sandbox root. Anything outside that — a lab directory, a scratch checkout, a
+command the sandbox would deny — normally stops the build mid-turn to ask a human.
+A plan may declare those needs up front, in an optional `sandbox` section:
+
+```json
+"sandbox": {
+  "grants": {
+    "paths": ["/home/dsh/dsh-lab/kan30-grant"],
+    "commands": ["git push", "gh pr create"]
+  },
+  "checks": [
+    { "path": "/home/dsh/dsh-lab/kan30-grant", "check": "test -w /home/dsh/dsh-lab/kan30-grant", "observed": "writable" }
+  ]
+}
+```
+
+- **A plan that declares grants parks.** The ticket stays in Plan with a
+  *Plan ready: N sandbox grant(s) declared* reason and an **Approve plan**
+  button on the board. Approving is the one-time grant: it lifts the park,
+  records a `plan_approved` event, and the build starts with exactly these
+  escalations pre-approved. A plan without grants behaves exactly as before —
+  no park, no new step.
+- **Matching is mechanical.** A `write`/`edit` call is covered when its
+  `file_path` is a granted path or lives under it at a path-segment boundary
+  (`/a/b` grants `/a/b/c`, never `/a/bc`). A `bash` call is covered when its
+  command starts with a granted prefix at word boundaries (`git push` grants
+  `git push origin main`, never `git pushfoo`). The matcher reads the exact
+  arguments from the session's own `tool/call` event, never from the model's
+  justification text.
+- **The denylist is never claimable.** Commands whose first token (seen through
+  wrappers like `sudo`, `env`, `nohup`, `timeout`, and `sh -c`/`bash -c` script
+  bodies) is `systemctl`, `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm`
+  or `dd`, and any line containing `rm -rf /` or `rm -fr /`, can never be
+  auto-approved — not even by a grant a human approved. A plan that declares
+  one is rejected at submission with a *can never be granted* error. The
+  grant mechanism therefore cannot restart a service or delete outside the
+  sandbox's own rules.
+- **Everything else still asks.** The grant approver is an agent-scoped
+  `approval/request` waterfall listener registered only on build sessions
+  (plan and verify sessions stay read-only and receive none). It claims only
+  asks whose reason starts with `escalate sandbox to `, and it fails open:
+  a malformed call, a missing plan, a terminal ticket or any exception falls
+  through to the human. Grants live in the plan artifact, so a new plan
+  version supersedes them, and while a ticket is parked on *Plan ready* the
+  grants are not yet live.
+- **Every auto-approval is audited.** A covered escalation appends a
+  `grant_applied` ticket event (`toolName`, `callId`, `grant`, `mode`,
+  `target`) before answering `allowed-once`; the board's event feed shows
+  each one. If the audit event cannot be written, the ask goes to the human
+  instead of being answered silently.
+
+The planner is coached to gather evidence for its grants: for every declared
+path it runs the read-only `test -w <path>` and records `{path, check,
+observed}` in `sandbox.checks`, so the human approves against what was
+actually observed rather than an assumption (the KAN-17 `~/dsh-lab` and
+KAN-29 `/tmp` classes of surprise). Platform temp areas are already writable
+under `workspace-write` and need no grant.
+
 ## Config
 
 <!-- verify-allow: config-documented -->

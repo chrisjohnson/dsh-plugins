@@ -111,6 +111,30 @@ test('plan normalization is flat', () => {
   assert.equal(plan.conditions[0].ordinal, 0)
 })
 
+// KAN-30: the optional sandbox section.
+test('plan validation rejects an unusable grant', () => {
+  const base = { done_when: [{ id: 'a', statement: 's', how_verified: 'v' }] }
+  assert.ok(validatePlan({ ...base, sandbox: { grants: { paths: ['relative/dir'] } } }).some((e) => /absolute path/.test(e)))
+  assert.ok(validatePlan({ ...base, sandbox: { grants: { commands: ['   '] } } }).some((e) => /commands\[0\]/.test(e)))
+  assert.ok(
+    validatePlan({ ...base, sandbox: { grants: { commands: ['systemctl restart dsh'] } } }).some((e) => /can never be granted/.test(e)),
+  )
+  assert.deepEqual(validatePlan({ ...base, sandbox: { grants: { paths: ['/abs/dir'], commands: ['git push'] } } }), [])
+  assert.deepEqual(validatePlan(base), [])
+})
+
+test('plan normalization carries the sandbox section and leaves a plain plan untouched', () => {
+  const withGrants = normalizePlan({
+    summary: 's',
+    done_when: [{ id: 'a', statement: 'st', how_verified: 'h' }],
+    sandbox: { grants: { paths: ['/lab/grant'], commands: ['git push'] }, checks: [{ path: '/lab/grant', check: 'test -w /lab/grant', observed: 'writable' }] },
+  })
+  assert.deepEqual(withGrants.sandbox.grants, { paths: ['/lab/grant'], commands: ['git push'] })
+  assert.equal(withGrants.sandbox.checks[0].observed, 'writable')
+  const plain = normalizePlan({ summary: 's', done_when: [{ id: 'a', statement: 'st', how_verified: 'h' }] })
+  assert.equal('sandbox' in plain, false)
+})
+
 test('review, verification, grill and adjudication schemas', () => {
   assert.deepEqual(validateReview({ verdict: 'pass', reasons: [] }), [])
   assert.ok(validateReview({ verdict: 'fail', reasons: [] }).length > 0)

@@ -32,6 +32,8 @@ function boot(stateDir, { createAgent }) {
     logger: () => log,
     on: () => {},
     effect: () => {},
+    // The host provides its service at boot; the fake only has to survive it.
+    provide: () => {},
     get: (name) => {
       if (name === 'agents') return { get: (id) => agents.get(id), list: () => [...agents.values()] }
       if (name === 'agentLoop') return { createAgent }

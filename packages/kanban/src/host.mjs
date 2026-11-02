@@ -429,6 +429,14 @@ export default async function kanban(ctx, config = {}) {
               const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
               return { ok: true, value: { ticket: updated } };
             }
+            // KAN-30: the one-time approval of a plan that declared sandbox
+            // grants. The park this action lifts is what kept the build from
+            // starting; approving starts it with its grants live.
+            if (action === 'approvePlan') {
+              const updated = await engineRef.current.approvePlan(ticket.id, typeof p.message === 'string' ? p.message : '');
+              void engineRef.current.tick();
+              return { ok: true, value: { ticket: updated } };
+            }
             if (action === 'recoverSession') {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
               const attached = await driver.attachExistingSession(p.sessionId);
@@ -467,6 +475,14 @@ export default async function kanban(ctx, config = {}) {
             }
             if (action === 'approve') {
               const updated = await engineRef.current.approve(ticket.id, typeof p.message === 'string' ? p.message : '');
+              return { ok: true, value: { ticket: updated } };
+            }
+            // KAN-30: same approval of a plan's sandbox grants as on the
+            // resolve endpoint, for callers that act on a ticket without
+            // reading its park state first.
+            if (action === 'approvePlan') {
+              const updated = await engineRef.current.approvePlan(ticket.id, typeof p.message === 'string' ? p.message : '');
+              void engineRef.current.tick();
               return { ok: true, value: { ticket: updated } };
             }
             if (action === 'recoverSession') {

@@ -15,6 +15,7 @@ import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
+import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -332,6 +333,11 @@ export class Engine {
       acceptance: acceptanceBlock(acceptance),
       key: ticket.key,
       title: ticket.title,
+      // KAN-30: the planner has to know what the build session will be standing
+      // on to declare the grants it will actually need — the mode it writes
+      // under and the root that mode confines it to.
+      write_mode: ticket.writeMode ?? 'workspace-write',
+      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
     });
     // The planner has to know when it is standing on an old commit, or it plans
     // against code that is not current and nobody tells it why.
@@ -349,14 +355,85 @@ export class Engine {
     if (!Array.isArray(action.value.done_when) || action.value.done_when.length === 0) {
       return this.needsAttention(ticket, 'plan rejected: no done_when conditions');
     }
-    const plan = normalizePlan(action.value);
-    const version = this.store.currentPlanVersion(ticket.id) + 1;
-    this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
-    this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2), { spanId: turn.spanId });
-    this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version } });
+    const stored = this.storePlan(ticket, action.value, { spanId: turn.spanId });
     await this.closeSession(turn.sessionId);
+    // KAN-30: a plan that declares sandbox grants never reaches Build on its
+    // own — the human approving the plan is the one-time grant. A plan without
+    // grants takes the exact path it always took.
+    if (stored.grantCount > 0) {
+      this.parkPlanReady(ticket, stored);
+      return { kind: 'wait' };
+    }
     const next = this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'plan submitted' });
     return { kind: next.column === 'working' ? 'continue' : 'wait' };
+  }
+
+  /**
+   * Store one submitted plan — conditions plus the plan artifact — and report
+   * what it declares. Every plan path (the planner turn, the approval
+   * follow-up, the human's manual submission) funnels through here so the
+   * grant bookkeeping cannot drift between them. The artifact carries the
+   * validated `sandbox` section verbatim, which is what makes a new plan
+   * version supersede the old grants without any schema change.
+   */
+  storePlan(ticket, value, { spanId = null, phaseFrom = 'plan', phaseTo = 'implement', payload = {} } = {}) {
+    const plan = normalizePlan(value);
+    const version = this.store.currentPlanVersion(ticket.id) + 1;
+    this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
+    this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2), { spanId });
+    const grantCount = countGrants(plan.sandbox);
+    this.appendEvent(ticket.id, 'planned', {
+      phaseFrom,
+      phaseTo: grantCount > 0 ? phaseFrom : phaseTo,
+      payload: { planVersion: version, grants: grantCount, ...payload },
+    });
+    return { plan, version, grantCount };
+  }
+
+  /**
+   * KAN-30: park a plan-phase ticket on the Plan-ready reason. The board shows
+   * the grants and the Approve-plan action; the engine does nothing further
+   * until a human lifts the park (approvePlan) or replaces the plan.
+   */
+  parkPlanReady(ticket, stored) {
+    this.appendEvent(ticket.id, 'plan_ready', {
+      phaseFrom: ticket.phase,
+      phaseTo: ticket.phase,
+      payload: {
+        planVersion: stored.version,
+        grantCount: stored.grantCount,
+        grants: stored.plan.sandbox?.grants ?? null,
+      },
+    });
+    return this.store.setNeedsAttention(ticket.id, planReadyReason(stored.grantCount), {
+      planVersion: stored.version,
+      grantCount: stored.grantCount,
+    });
+  }
+
+  /**
+   * KAN-30: the one-time human approval of a plan that declared sandbox
+   * grants. Lifting the park is what makes the grants live — from here the
+   * build session's grant approver answers covered escalation asks in place of
+   * the human. A ticket not parked on the Plan-ready reason is a bad request:
+   * this action must never double as a generic retry.
+   */
+  async approvePlan(ticketId, message = '') {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    if (TERMINAL_COLUMNS.includes(ticket.column)) throw new StoreError('bad_request', 'ticket is closed');
+    if (!isPlanReady(ticket.needsAttentionReason)) throw new StoreError('bad_request', 'ticket is not awaiting plan approval');
+    const planRow = this.store.latestArtifact(ticketId, 'plan');
+    const plan = planRow === undefined ? null : safeJson(planRow.content);
+    const grantCount = countGrants(plan?.sandbox);
+    this.store.clearNeedsAttention(ticketId, { actor: 'human', reason: 'plan approved' });
+    this.appendEvent(ticketId, 'plan_approved', {
+      phaseFrom: ticket.phase,
+      phaseTo: 'implement',
+      actor: 'human',
+      payload: { planVersion: plan?.planVersion ?? null, grantCount, message },
+    });
+    return this.store.transitionTicket(ticketId, { phase: 'implement' }, { actor: 'human', reason: 'plan approved' });
   }
 
   // -------------------------------------------------------------- implement
@@ -555,13 +632,15 @@ export class Engine {
     if (ticket.phase !== 'verify') throw new StoreError('bad_request', 'ticket is not awaiting approval');
     const errors = validatePlan(value);
     if (errors.length > 0) throw new StoreError('bad_request', `plan rejected: ${errors.join('; ')}`);
-    const plan = normalizePlan(value);
-    const version = this.store.currentPlanVersion(ticket.id) + 1;
-    this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
-    this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
-    this.appendEvent(ticket.id, 'planned', { phaseFrom: 'verify', phaseTo: 'implement', payload: { planVersion: version, fromApproval: true } });
+    const stored = this.storePlan(ticket, value, { phaseFrom: 'verify', payload: { fromApproval: true } });
     const sessionId = this.driver.liveTicketSession(ticket.id, 'build');
     if (sessionId !== undefined) await this.closeSession(sessionId);
+    // KAN-30: a follow-up plan that re-declares grants re-parks the ticket on
+    // the Plan-ready reason — the old approval is not consent to new grants.
+    // Without grants the follow-up takes over the ticket exactly where it stood.
+    if (stored.grantCount > 0) {
+      return this.parkPlanReady(this.store.getTicket(ticket.id), stored);
+    }
     // The follow-up plan takes over the ticket where it stands: the approval
     // park is lifted and the engine drives Build again in the same column. The
     // session that carried approval is closed with it, so the next round starts
@@ -579,12 +658,15 @@ export class Engine {
       if (ticket.phase !== 'plan') throw new StoreError('invalid_phase', `plan submitted from ${ticket.phase}`);
       const errors = validatePlan(action.value);
       if (errors.length > 0) throw new StoreError('bad_request', `plan rejected: ${errors.join('; ')}`);
-      const plan = normalizePlan(action.value);
-      const version = this.store.currentPlanVersion(ticket.id) + 1;
-      this.store.replaceConditions(ticket.id, version, plan.conditions, 'plan');
-      this.store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: version }, null, 2));
-      this.appendEvent(ticket.id, 'planned', { phaseFrom: 'plan', phaseTo: 'implement', payload: { planVersion: version, manual: true } });
+      const stored = this.storePlan(ticket, action.value, { payload: { manual: true } });
       await this.closeSession(sessionId);
+      // KAN-30: a manual plan submission with grants parks on Plan-ready like
+      // any other — the human who submits it still approves its grants as a
+      // separate, explicit act. Without grants it moves as before.
+      if (stored.grantCount > 0) {
+        this.parkPlanReady(this.store.getTicket(ticket.id), stored);
+        return;
+      }
       // A human submission is a resolution: the park is lifted and the ticket
       // keeps moving from the column it is already in.
       this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'manual plan submission' });
