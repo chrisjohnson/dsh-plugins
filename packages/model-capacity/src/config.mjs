@@ -6,7 +6,7 @@
 // the same slots.
 
 export const DEFAULT_CONFIG = {
-  /** When false the gate and the subagent guard are inert (useful for rollout). */
+  /** When false the gate is inert (useful for rollout). */
   enabled: true,
   /** Limit for a provider that has no explicit entry. */
   defaultMaxConcurrent: 1,
@@ -14,10 +14,6 @@ export const DEFAULT_CONFIG = {
   limits: [],
   /** Bound on queued calls per provider, so a runaway fan-out cannot grow memory without limit. */
   queueLimitPerProvider: 1000,
-  /** A subagent reservation that never materialises is released after this long. */
-  reservationTtlMs: 300000,
-  /** Tools whose dispatch is preflighted against capacity and gets an immediate error. */
-  subagentTools: ['subagent', 'subagent_fork', 'spawn_teammate'],
 };
 
 const TOP_LEVEL = new Set(Object.keys(DEFAULT_CONFIG));
@@ -64,12 +60,6 @@ export function resolveConfig(input = {}) {
   }
   if (!Number.isInteger(config.queueLimitPerProvider) || config.queueLimitPerProvider < 1) {
     throw new ConfigError('must be an integer >= 1', 'queueLimitPerProvider');
-  }
-  if (!Number.isInteger(config.reservationTtlMs) || config.reservationTtlMs < 1000) {
-    throw new ConfigError('must be an integer >= 1000', 'reservationTtlMs');
-  }
-  if (!Array.isArray(config.subagentTools) || config.subagentTools.some((name) => !isNonEmptyString(name))) {
-    throw new ConfigError('must be an array of tool names', 'subagentTools');
   }
   if (!Array.isArray(config.limits)) throw new ConfigError('must be an array', 'limits');
 

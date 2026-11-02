@@ -13,14 +13,17 @@ async function sources() {
   return out
 }
 
-test('the plugin registers a gate and a guard, never a model tool', async () => {
+test('the plugin registers a gate and no tool path of any kind', async () => {
   const files = await sources()
   for (const [name, text] of Object.entries(files)) {
     assert.equal(/tools\.register\s*\(/.test(text), false, `${name} registers a tool`)
     assert.equal(/registerTool\s*\(/.test(text), false, `${name} registers a tool`)
   }
   assert.match(files['host.mjs'], /llm\/stream/)
-  assert.match(files['host.mjs'], /tools\.guard\(/)
+  // No preflight: a subagent dispatch is not intercepted anywhere, so there is
+  // no tool guard and no guard module to install one.
+  assert.equal(/tools\.guard\(/.test(files['host.mjs']), false, 'host.mjs installs a tool guard')
+  assert.equal('guard.mjs' in files, false, 'a guard module exists')
 })
 
 test('routes live under the authenticated /api fence', async () => {

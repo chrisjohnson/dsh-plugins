@@ -1,19 +1,19 @@
 // dsh-model-capacity: the Host half.
 //
-// Owns one process-wide CapacityManager, gates every `llm/stream` call, and
-// preflights agent-spawning tools. The service is exposed as `ctx.capacity` so
-// other plugins and the panel can inspect it.
+// Owns one process-wide CapacityManager and gates every `llm/stream` call, so
+// every model request in the process — an interactive turn or a subagent
+// child's — waits in the same per-provider FIFO queue. The service is exposed as
+// `ctx.capacity` so other plugins and the panel can inspect it.
 
 import { Service } from '@deepseek-ai/cordis';
 
 import { ConfigError, isEnabled, limitFor, resolveConfig } from './config.mjs';
 import { gatedStream } from './gate.mjs';
-import { checkSubagentCapacity } from './guard.mjs';
 import { CapacityManager } from './semaphore.mjs';
 
 const PLUGIN_NAME = 'dsh-model-capacity';
 const API_BASE = '/api/modelCapacity';
-const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'dismissReservation', 'forceRelease', 'setLimits'];
+const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'forceRelease', 'setLimits'];
 
 export default class ModelCapacity extends Service {
   constructor(ctx, config = {}) {
@@ -26,7 +26,6 @@ export default class ModelCapacity extends Service {
       defaultLimit: resolved.defaultMaxConcurrent,
       limits: resolved.limits,
       queueLimitPerProvider: resolved.queueLimitPerProvider,
-      reservationTtlMs: resolved.reservationTtlMs,
       onEvent: (type, payload) => this.#event(type, payload),
     });
     this.catalog = [];
@@ -40,7 +39,6 @@ export default class ModelCapacity extends Service {
     this.refreshTimer = null;
     this.reloadTimer = null;
     this.gateDisposer = null;
-    this.guardDisposer = null;
     this.eventDisposers = [];
     this.started = false;
 
@@ -106,40 +104,6 @@ export default class ModelCapacity extends Service {
       (options, next) => gatedStream(this.manager, options, next, isEnabled(this.config)),
       { global: true, prepend: true },
     );
-    const tools = this.ctx.get('tools');
-    if (tools !== undefined) {
-      this.guardDisposer = tools.guard((execution) =>
-        checkSubagentCapacity(execution, this.manager, this.config, this.catalog),
-      );
-    }
-    for (const name of ['session/created', 'session/disposed']) {
-      this.eventDisposers.push(
-        this.ctx.on(
-          name,
-          (session) => {
-            if (name === 'session/created') {
-              const parent = session.header?.parentSession;
-              if (typeof parent === 'string' && parent !== '') this.manager.bindChild(parent, session.id);
-            } else {
-              this.manager.releaseForSession(session.id);
-            }
-          },
-          { global: true },
-        ),
-      );
-    }
-    this.eventDisposers.push(
-      this.ctx.on(
-        'session/event',
-        (session, event) => {
-          if (event.type !== 'tool/result') return;
-          const callId = event.data?.message?.toolCallId;
-          const isError = event.data?.message?.isError === true || event.data?.error !== undefined;
-          if (isError && callId !== undefined) this.manager.cancelReservationByCallId(callId, 'tool_error');
-        },
-        { global: true },
-      ),
-    );
     this.eventDisposers.push(
       this.ctx.on('llm/adapters-updated', () => {
         void this.refreshCatalog().then(() => {
@@ -148,9 +112,6 @@ export default class ModelCapacity extends Service {
         });
       }, { global: true }),
     );
-    const expiry = setInterval(() => this.manager.expireReservations(), 5000);
-    if (typeof expiry.unref === 'function') expiry.unref();
-    this.expiryTimer = expiry;
     await this.refreshCatalog();
     await this.refreshSessionMeta();
     const metaTimer = setInterval(() => void this.refreshSessionMeta(), 10000);
@@ -160,23 +121,15 @@ export default class ModelCapacity extends Service {
     this.#reportUnknownProviders();
     this.#installRoutes();
     this.#watchConfig();
-    this.log.info('applied: limits=%s default=%d subagentTools=%s', JSON.stringify(Object.fromEntries(this.config.limits.map((l) => [l.provider, l.maxConcurrent]))), this.config.defaultMaxConcurrent, this.config.subagentTools.join(','));
+    this.log.info('applied: limits=%s default=%d', JSON.stringify(Object.fromEntries(this.config.limits.map((l) => [l.provider, l.maxConcurrent]))), this.config.defaultMaxConcurrent);
   }
 
   stop() {
-    if (this.expiryTimer !== null) clearInterval(this.expiryTimer);
     if (this.metaTimer !== null) clearInterval(this.metaTimer);
     if (this.reloadTimer !== null) clearInterval(this.reloadTimer);
     if (this.gateDisposer !== null) {
       try {
         this.gateDisposer();
-      } catch {
-        // already detached
-      }
-    }
-    if (this.guardDisposer !== null) {
-      try {
-        this.guardDisposer();
       } catch {
         // already detached
       }
@@ -301,11 +254,6 @@ export default class ModelCapacity extends Service {
       ...provider,
       active: provider.active.map((lease) => ({ ...lease, ...this.describe(lease.sessionId) })),
       waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.describe(waiter.sessionId) })),
-      reservations: provider.reservations.map((reservation) => ({
-        ...reservation,
-        parent: this.describe(reservation.parentSession),
-        child: this.describe(reservation.childSession),
-      })),
     }));
     return {
       enabled: isEnabled(this.config),
@@ -345,10 +293,6 @@ export default class ModelCapacity extends Service {
     return { cancelled: this.manager.cancelWaiter(waiterId), waiterId };
   }
 
-  dismissReservation(reservationId) {
-    return { dismissed: this.manager.cancelReservation(reservationId, 'panel'), reservationId };
-  }
-
   forceRelease(leaseId) {
     return { released: this.manager.forceRelease(leaseId), leaseId };
   }
@@ -377,9 +321,6 @@ export default class ModelCapacity extends Service {
             case 'cancelWaiter':
               if (typeof p.waiterId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'waiterId is required', details: {} } };
               return { ok: true, value: this.cancelWaiter(p.waiterId) };
-            case 'dismissReservation':
-              if (typeof p.reservationId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'reservationId is required', details: {} } };
-              return { ok: true, value: this.dismissReservation(p.reservationId) };
             case 'forceRelease':
               if (typeof p.leaseId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'leaseId is required', details: {} } };
               return { ok: true, value: this.forceRelease(p.leaseId) };
@@ -459,7 +400,6 @@ export default class ModelCapacity extends Service {
         this.config = config;
         this.manager.defaultLimit = config.defaultMaxConcurrent;
         this.manager.queueLimitPerProvider = config.queueLimitPerProvider;
-        this.manager.reservationTtlMs = config.reservationTtlMs;
         this.manager.configure(config.limits);
         last = json;
         this.#seedBuckets();
