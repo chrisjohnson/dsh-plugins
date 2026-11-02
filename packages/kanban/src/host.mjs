@@ -160,14 +160,22 @@ export default async function kanban(ctx, config = {}) {
       return ticket;
     };
 
-    /** True while a plan session of this ticket is waiting on a human answer. */
-    const isAwaitingUser = (ticket) => ticket.phase === 'plan' && driver.isAwaitingUser(ticket.id);
+    /**
+     * True while any session of this ticket is paused mid-turn on an unanswered
+     * ask_user_question — in any phase, on an engine- or a human-driven turn
+     * (KAN-17 generalized what used to be a plan-phase-only waiter scan).
+     */
+    const isAwaitingUser = (ticket) => driver.isAwaitingQuestion(ticket.id);
+
+    /** True while any session of this ticket sits on an unanswered approval prompt (KAN-17). */
+    const isAwaitingApproval = (ticket) => driver.isAwaitingApproval(ticket.id);
 
     /** The card-level visual status: attention | active | idle. Never a column. */
     const statusOf = (ticket) =>
       cardStatus(ticket, {
         active: engine.active.has(ticket.id) || driver.isTicketBusy(ticket.id),
         awaitingUser: isAwaitingUser(ticket),
+        awaitingApproval: isAwaitingApproval(ticket),
       });
 
     const board = () => {
@@ -177,8 +185,13 @@ export default async function kanban(ctx, config = {}) {
         const item = summary(ticket, store.isEditable(ticket.id));
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
         item.awaitingQuestion = isAwaitingUser(ticket);
+        item.awaitingApproval = isAwaitingApproval(ticket);
         item.status = statusOf(ticket);
-        if (item.status === 'attention' && !ticket.needsAttentionReason) item.needsAttentionReason = 'Waiting on your answer';
+        // Attention without an engine park is a mid-turn human wait (KAN-17):
+        // say which one, so the red card explains itself the way a park does.
+        if (item.status === 'attention' && !ticket.needsAttentionReason) {
+          item.needsAttentionReason = item.awaitingApproval ? 'Awaiting your approval' : 'Waiting on your answer';
+        }
         byColumn[ticket.column]?.push(item);
       }
       return {
@@ -199,6 +212,11 @@ export default async function kanban(ctx, config = {}) {
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
       const awaitingQuestion = isAwaitingUser(ticket);
+      const awaitingApproval = isAwaitingApproval(ticket);
+      // KAN-17: the session holding the pending ask, so the detail can open the
+      // prompt itself. The verify-phase fallback below stays: a parked approval
+      // has no in-flight wait, and its panel still opens the build session.
+      const pendingWait = driver.humanWaitSession(ticket.id);
       // `editable` is the lock the client renders: the pencil is dead the moment
       // any engine has touched the ticket (see store.isEditable).
       const editable = store.isEditable(ticket.id);
@@ -210,11 +228,13 @@ export default async function kanban(ctx, config = {}) {
           editable,
         },
         awaitingQuestion,
+        awaitingApproval,
         status: statusOf(ticket),
         // Approval runs inside the build session, so the session the panel opens
         // while a ticket waits is that same one. The field name is the client's
         // contract and stays.
-        approvalSessionId: ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null,
+        approvalSessionId: pendingWait?.sessionId
+          ?? (ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null),
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
         sessions: store.listSessions(ticket.id),

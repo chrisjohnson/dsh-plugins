@@ -95,16 +95,21 @@ export function compareQueue(a, b) {
 /**
  * The card-level visual status, computed from live facts — never a column.
  *
- * - `attention`: the engine parked the ticket (a reason is set) or a plan
- *   session is waiting on a human answer. Red glow on the board.
+ * - `attention`: the engine parked the ticket (a reason is set), a plan
+ *   session is waiting on a human answer, or — KAN-17 — a session is paused
+ *   mid-turn on an unanswered approval prompt. Red glow on the board.
  * - `active`: the engine is driving the ticket right now (a workflow turn is in
  *   flight, engine- or human-initiated). Blue pulse.
  * - `idle`: nothing is running and nothing is asked of anyone. Plain card.
+ *
+ * A mid-turn human wait outranks `active` on purpose: the turn is in flight,
+ * but the session is doing nothing until a person answers, and "running" would
+ * hide the one state that actually needs eyes on it.
  */
-export function cardStatus(ticket, { active = false, awaitingUser = false } = {}) {
+export function cardStatus(ticket, { active = false, awaitingUser = false, awaitingApproval = false } = {}) {
   if (ticket === undefined || ticket === null) return 'idle';
   const reason = ticket.needsAttentionReason;
-  if (awaitingUser || (reason !== undefined && reason !== null && String(reason).trim() !== '')) {
+  if (awaitingUser || awaitingApproval || (reason !== undefined && reason !== null && String(reason).trim() !== '')) {
     return 'attention';
   }
   if (active) return 'active';

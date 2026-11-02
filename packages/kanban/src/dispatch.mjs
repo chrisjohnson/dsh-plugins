@@ -76,6 +76,18 @@ export class SessionDriver {
     /** engine hook: that turn ended without a structured action */
     this.onSettleTurn = null;
     this.waiters = new Map();
+    /**
+     * Sessions paused mid-turn on a human, KAN-17: sessionId ->
+     * `{kind: 'approval' | 'question', id, toolName?, reason?}`.
+     *
+     * A harness approval prompt (`approval/asked` ... `approval/decided`) and
+     * an unanswered `ask_user_question` call are both pauses *inside* a turn:
+     * the turn stays in flight while the person decides, so the board would
+     * otherwise show a blue "running" card for a session doing nothing but
+     * waiting. The engine's own waiters only cover turns it started itself;
+     * this map covers every turn on a ticket session, engine- or human-driven.
+     */
+    this.humanWaits = new Map();
     /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
     /** `${ticketId}:${purpose}` -> Set<sessionId> (newest last) */
@@ -126,6 +138,7 @@ export class SessionDriver {
       // not be the answer. Running this first made an engine-driven turn on a
       // reactivated ticket look busy to its own settle, so the ticket was never
       // parked again (the approval intro was the case that hit it).
+      this.#trackHumanWait(session, event);
       this.#trackTicketTurn(session, event);
     });
   }
@@ -146,6 +159,7 @@ export class SessionDriver {
     }
     this.waiters.clear();
     this.actions.clear();
+    this.humanWaits.clear();
     this.activity.clear();
   }
 
@@ -161,6 +175,144 @@ export class SessionDriver {
       this.activity.turnStart(session.id);
     } else if (event.type === 'turn/end') {
       this.activity.turnEnd(session.id);
+    }
+  }
+
+  // --------------------------------------------------- mid-turn human waits --
+  //
+  // KAN-17: an approval prompt or an ask_user_question call pauses a turn in
+  // flight, not between turns, so `turn/start`/`turn/end` alone cannot tell the
+  // board "this session is waiting on a person". The durable log carries exactly
+  // that fact — `approval/asked`/`approval/decided` paired by id, and a
+  // `tool/call` for ask_user_question answered by the `tool/result` citing the
+  // same callId — and every one of those events arrives here for every session,
+  // whether the engine started the turn or a human did.
+
+  #trackHumanWait(session, event) {
+    const sessionId = session.id;
+    switch (event.type) {
+      case 'approval/asked': {
+        if (this.activity.ticketOf(sessionId) === undefined) return;
+        const data = event.data ?? {};
+        this.humanWaits.set(sessionId, {
+          kind: 'approval',
+          id: data.id ?? null,
+          toolName: data.toolName ?? null,
+          reason: data.reason ?? null,
+        });
+        return;
+      }
+      case 'approval/decided': {
+        const wait = this.humanWaits.get(sessionId);
+        if (wait === undefined || wait.kind !== 'approval') return;
+        // Pair by id; the pair is turn-enclosed, so at most one ask is open and
+        // an unnumbered event on either side still clears the one that is.
+        const id = event.data?.id;
+        if (wait.id === null || id === undefined || id === null || wait.id === id) this.humanWaits.delete(sessionId);
+        return;
+      }
+      case 'tool/call': {
+        const name = event.data?.name ?? event.data?.call?.name;
+        if (name !== 'ask_user_question') return;
+        if (this.activity.ticketOf(sessionId) === undefined) return;
+        this.humanWaits.set(sessionId, { kind: 'question', id: event.data?.callId ?? null });
+        return;
+      }
+      case 'tool/result': {
+        const wait = this.humanWaits.get(sessionId);
+        if (wait === undefined || wait.kind !== 'question') return;
+        // A tool result names its call by callId, never by tool name: the
+        // message carries `toolCallId` (and `source.callId`), not a `name`.
+        const callId = event.data?.callId ?? event.data?.message?.toolCallId ?? event.data?.message?.source?.callId;
+        if (wait.id === null || callId === undefined || callId === null || wait.id === callId) this.humanWaits.delete(sessionId);
+        return;
+      }
+      case 'turn/start':
+      case 'turn/end': {
+        // Defensive: an ask whose decided/result event was never published (a
+        // crash between the two, a cancelled turn) must not haunt the session
+        // into permanent red. A new turn cannot inherit the old one's wait.
+        this.humanWaits.delete(sessionId);
+        return;
+      }
+    }
+  }
+
+  /** The pending wait of one kind on any session of this ticket, if there is one. */
+  #findHumanWait(ticketId, kind) {
+    for (const [sessionId, wait] of this.humanWaits) {
+      if (wait.kind !== kind) continue;
+      const owner = this.live.get(sessionId)?.ticketId ?? this.activity.ticketOf(sessionId);
+      if (owner === ticketId) return { sessionId, ...wait };
+    }
+    return null;
+  }
+
+  /** True while a session of this ticket sits on an unanswered approval prompt. */
+  isAwaitingApproval(ticketId) {
+    return this.#findHumanWait(ticketId, 'approval') !== null;
+  }
+
+  /**
+   * True while a session of this ticket sits on an unanswered ask_user_question,
+   * in any phase and on any turn — this supersedes the plan-phase-only waiter
+   * scan the board used before KAN-17.
+   */
+  isAwaitingQuestion(ticketId) {
+    return this.#findHumanWait(ticketId, 'question') !== null;
+  }
+
+  /**
+   * The session holding a pending ask, approval first when both are open. The
+   * detail view opens this one so the human can reach the prompt.
+   */
+  humanWaitSession(ticketId) {
+    return this.#findHumanWait(ticketId, 'approval') ?? this.#findHumanWait(ticketId, 'question');
+  }
+
+  /**
+   * Restart recovery (KAN-17): a session reopened mid-turn may be sitting on an
+   * unanswered ask. Walk back to the open turn — the last `turn/start` with no
+   * matching `turn/end`, the same boundary `@deepseek-ai/dsh-user-approval`
+   * requires for its audit pair — and seed the wait from what is unanswered in
+   * it. Best-effort: an unreadable log simply shows no wait.
+   */
+  #seedHumanWait(sessionId, agent) {
+    try {
+      const events = agent?.session?.snapshotEvents?.() ?? [];
+      let openFrom = -1;
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const type = events[i]?.type;
+        if (type === 'turn/end') return;
+        if (type === 'turn/start') { openFrom = i; break; }
+      }
+      if (openFrom < 0) return;
+      const asked = new Map();
+      const questions = new Map();
+      for (let i = openFrom + 1; i < events.length; i += 1) {
+        const event = events[i];
+        if (event?.type === 'approval/asked') asked.set(event.data?.id ?? '', event.data ?? {});
+        else if (event?.type === 'approval/decided') asked.delete(event.data?.id ?? '');
+        else if (event?.type === 'tool/call' && (event.data?.name ?? event.data?.call?.name) === 'ask_user_question') questions.set(event.data?.callId ?? '', event.data ?? {});
+        else if (event?.type === 'tool/result') {
+          const callId = event.data?.callId ?? event.data?.message?.toolCallId ?? event.data?.message?.source?.callId;
+          if (callId !== undefined && callId !== null) questions.delete(callId);
+        }
+      }
+      const approval = [...asked.values()].pop();
+      if (approval !== undefined) {
+        this.humanWaits.set(sessionId, {
+          kind: 'approval',
+          id: approval.id ?? null,
+          toolName: approval.toolName ?? null,
+          reason: approval.reason ?? null,
+        });
+        return;
+      }
+      const question = [...questions.values()].pop();
+      if (question !== undefined) this.humanWaits.set(sessionId, { kind: 'question', id: question.callId ?? null });
+    } catch (error) {
+      this.log.warn('kanban driver: human-wait reattach scan failed for %s: %s', sessionId, String(error?.message ?? error));
     }
   }
 
@@ -443,6 +595,9 @@ export class SessionDriver {
     this.live.set(sessionId, liveRef);
     this.activity.negatives.delete(sessionId);
     this.#addTicketSession(ticket.id, purpose, sessionId);
+    // KAN-17: a session reopened mid-turn may be sitting on an unanswered
+    // approval ask or question; the board must show that, not blue "running".
+    this.#seedHumanWait(sessionId, agent);
     await this.#registerExistingTools(agent.ctx, liveRef, sessionId);
     this.#applySandboxMode(liveRef);
     void this.#attachWorkspace(sessionId, ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd(), 0);
@@ -453,13 +608,6 @@ export class SessionDriver {
   async #registerExistingTools(agentCtx, liveRef, sessionId) {
     // Same as the setup path: every action tool, no guard.
     liveRef.actionDispose = registerActionTools({ ctx: agentCtx, sessionId, liveRef, driver: this, store: this.store });
-  }
-
-  isAwaitingUser(ticketId) {
-    for (const [sessionId, waiter] of this.waiters) {
-      if (waiter.awaitingUser && this.live.get(sessionId)?.ticketId === ticketId) return true;
-    }
-    return false;
   }
 
   #settleTurn(session, event, waiter) {
@@ -682,6 +830,7 @@ export class SessionDriver {
     for (const [key, ids] of this.ticketSessions) { ids.delete(sessionId); if (ids.size === 0) this.ticketSessions.delete(key); }
     this.activity.forget(sessionId);
     this.actions.delete(sessionId);
+    this.humanWaits.delete(sessionId);
     if (typeof live.actionDispose === 'function') live.actionDispose();
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {

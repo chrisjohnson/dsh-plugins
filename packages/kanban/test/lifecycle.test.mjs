@@ -68,3 +68,15 @@ test('card status is computed, never a column', () => {
   assert.equal(cardStatus({ column: 'backlog', needsAttentionReason: 'boom' }, { active: true }), 'attention')
   assert.equal(cardStatus(idle, { awaitingUser: true }), 'attention')
 })
+
+test('a mid-turn human wait outranks active (KAN-17)', () => {
+  const working = { column: 'working', needsAttentionReason: null }
+  // The turn is in flight AND paused on a person: red, not blue.
+  assert.equal(cardStatus(working, { active: true, awaitingApproval: true }), 'attention')
+  assert.equal(cardStatus(working, { active: true, awaitingUser: true }), 'attention')
+  // Either flag alone, with no turn in flight at all, is still attention.
+  assert.equal(cardStatus(working, { awaitingApproval: true }), 'attention')
+  assert.equal(cardStatus(working, { awaitingUser: true }), 'attention')
+  // Neither flag: the in-flight turn stays blue.
+  assert.equal(cardStatus(working, { active: true }), 'active')
+})
