@@ -210,3 +210,29 @@ test('the implement prompt is unchanged: the full plan and conditions', async ()
   assert.match(prompt, /## done_when/)
   assert.match(prompt, /verify: test -f notes\.txt/)
 })
+
+test('both plan prompts coach that done_when conditions are agent-verifiable, never human', async () => {
+  // KAN-19: a plan once carried a `human-visual-verify` condition no agent could
+  // ever evidence. Both plan prompts must now state the hard rule, and the
+  // rendered artifact — not just the file on disk — is what the planner reads.
+  for (const planQuestions of ['interactive', 'autonomous']) {
+    const { store, engine, promptOf } = await setup()
+    const ticket = store.createTicket({
+      title: 'demo',
+      body: 'make the note',
+      acceptance: ['note exists'],
+      workspaceCwd: CWD,
+      planTiming: 'at_pickup',
+      planQuestions,
+      column: 'working',
+    })
+    await engine.plan(store.getTicket(ticket.id))
+    const prompt = promptOf('planner_prompt_plan')
+    assert.ok(prompt, `the rendered ${planQuestions} plan prompt is recorded as an artifact`)
+    assert.match(prompt, /verifiable by an agent without human input/, `${planQuestions} prompt must demand agent-verifiable conditions`)
+    assert.match(prompt, /Never write a condition that requires a human action, visual confirmation, a production restart/, `${planQuestions} prompt must name the forbidden evidence`)
+    assert.match(prompt, /human approval is already implicit/, `${planQuestions} prompt must say approval is already implicit`)
+    assert.match(prompt, /agent-verifiable proxy/, `${planQuestions} prompt must point at the proxy strategy`)
+    assert.equal(prompt.includes('{{'), false, 'the plan prompt still has an unresolved placeholder')
+  }
+})

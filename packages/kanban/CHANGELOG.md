@@ -5,6 +5,29 @@
 
 ## Unreleased
 
+## 0.15.0
+
+### Changed
+
+- **Plans may no longer depend on a human to be verified** (KAN-19). A plan once
+  carried a `human-visual-verify` done_when condition that no agent could ever
+  evidence, and the pipeline had nowhere to put it. Both plan prompts
+  (`plan-human.md`, `plan-self.md`) now state the hard rule: every `done_when`
+  condition must be verifiable by an agent without human input — never a human
+  action, visual confirmation, a production restart, or confirmation "on the
+  ticket". Human approval is already implicit for every ticket (a passing review
+  moves the ticket straight to a human), so when the real acceptance is human
+  judgement the plan should carry the strongest agent-verifiable proxy — tests,
+  a lab smoke, a grep or `git ls-remote` check — and leave the judgement to the
+  approval step. The `kanban_submit_plan` tool's `done_when` description says
+  the same at submission time, and a new prompt test pins the coaching into the
+  rendered `planner_prompt_plan` artifact.
+- **The implement prompt tells the builder to fetch first.** A build can start
+  long after planning settled the working copy (KAN-18 fetches at plan start,
+  nothing did at build start), so `implement.md` now instructs the implementer
+  to `git fetch` and bring the working copy up to date with the default branch
+  before starting work.
+
 ## 0.14.0
 
 ### Changed
