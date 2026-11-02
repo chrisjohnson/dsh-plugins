@@ -16,11 +16,22 @@
 //
 // - The denylist is never claimable. A service restart, a `sudo`, an `rm` can
 //   never be auto-approved by a grant, even one a human approved — those asks
-//   always reach the human. The check runs on every shell segment of the
-//   command, so a granted prefix cannot chain into a denylisted command
-//   (`git push && systemctl restart dsh` is denied, not granted). The grant
-//   mechanism can therefore never restart a service or delete outside the
-//   sandbox's own rules.
+//   always reach the human. The check is WORD-BASED, not position-based: every
+//   command word in the line is compared against the denylist after splitting
+//   on whitespace and on the shell syntax that can hide a command from a
+//   first-token read (`(`, `)`, `{`, `}`, `$`, backtick, `;`, `|`, `&`), so a
+//   granted prefix cannot carry a denylisted command however it is written —
+//   `git push && systemctl restart dsh`, `git push && (systemctl restart dsh)`,
+//   `git push && $(systemctl restart dsh)` and `git push && FOO=1 systemctl
+//   restart dsh` are all denied. The cost is false positives (`grep -r rm -n .`
+//   asks the human too), which is the correct side to fail on: a prompt is
+//   cheap, a wrong auto-approval is not.
+// - The denylist is a text rule and cannot see inside an interpreter. A plan
+//   that grants a bare `node`, `python3`, `perl` or `bash script.sh` prefix
+//   hands the build whatever that interpreter chooses to run, so an interpreter
+//   grant is a full-access grant and the human approving the plan has to read it
+//   that way. The denylist narrows what a grant can say; it does not sandbox the
+//   commands a grant lets through.
 // - Every miss, malformed input, or exception calls `next()`: the human stays
 //   the answerer of last resort. A broken grant path fails open to a prompt,
 //   never closed to a silent denial.
@@ -28,10 +39,10 @@
 import { isAbsolute, normalize, resolve } from 'node:path';
 
 /**
- * First command tokens that may never be covered by a grant, whatever the plan
- * declared and whatever the human approved. `rm` is here because a granted
- * `rm` outside the workspace is a deletion the sandbox was built to make the
- * human decide; the `rm -rf /` substrings below catch the compound spellings.
+ * Command words that may never appear anywhere in a grant-covered call, whatever
+ * the plan declared and whatever the human approved. `rm` is here because a
+ * granted `rm` outside the workspace is a deletion the sandbox was built to make
+ * the human decide; the `rm -rf /` substrings below catch the compound spellings.
  */
 export const GRANT_DENYLIST = Object.freeze(['systemctl', 'service', 'launchctl', 'sudo', 'kill', 'pkill', 'rm', 'dd']);
 
@@ -68,18 +79,37 @@ function baseToken(token) {
 }
 
 /**
- * Whether a command line is denylisted. Two rules, each applied to the WHOLE
+ * Every command word in a line. A word ends at whitespace or at shell syntax
+ * that can hide a command from a first-token read — `(`, `)`, `{`, `}`, `$`,
+ * backtick, `;`, `|`, `&` and newlines — so `(systemctl`, `$(systemctl` and
+ * `{ systemctl` all yield the word `systemctl`. Quotes are stripped rather than
+ * honoured as grouping, and each word is reduced to its basename, so
+ * `/usr/bin/systemctl` reads as `systemctl` too.
+ */
+function commandWords(text) {
+  return text
+    .split(/[\s(){}$`;|&\n\r]+/)
+    .map((word) => baseToken(word.replace(/["'`]/g, '')))
+    .filter(Boolean);
+}
+
+/**
+ * Whether a command line is denylisted. Three rules, each applied to the WHOLE
  * line:
  *
  * - a denylisted substring (`rm -rf /`, `rm -fr /`) anywhere in it;
- * - a denylisted first token in ANY shell segment of it — the line is split on
- *   `&&`, `||`, `;`, `|`, `&` and newlines first, and each segment's first
- *   token is checked through the wrapper chain.
+ * - ANY command word whose basename is a denylisted token — the primary rule,
+ *   and deliberately not a first-token rule: a token-prefix grant means the
+ *   denylist has to see a denylisted command anywhere in the call, in any shell
+ *   clothing (`&&`, `||`, `;`, `|`, `&`, a subshell, a command substitution, a
+ *   brace group, an `env`-style assignment prefix, `eval`, `xargs`);
+ * - the first-token wrapper walk of each shell segment on top, so
+ *   `bash -c "…"`, `sh -c "…"` and `timeout 10 bash -lc "…"` script bodies are
+ *   still read as the commands they run.
  *
- * The segment split is what makes the denylist mean anything next to a
- * token-prefix grant: `git push && systemctl restart dsh` starts with a
- * perfectly grantable token, and a first-token-only check would let a granted
- * prefix carry a denylisted command in the same call.
+ * Being word-based makes this over-strict on purpose: `grep -r rm -n .` is
+ * denylisted even though its `rm` is a pattern, and the human is asked. A false
+ * positive costs one prompt; a false negative is a permission nobody granted.
  *
  * @param {unknown} command
  * @returns {boolean}
@@ -89,6 +119,7 @@ export function isDenylisted(command) {
   const text = command.trim();
   const lower = text.toLowerCase();
   for (const pattern of GRANT_DENYLIST_SUBSTRINGS) if (lower.includes(pattern)) return true;
+  for (const word of commandWords(text)) if (GRANT_DENYLIST.includes(word)) return true;
   for (const segment of text.split(/&&|\|\||[;|&\n\r]/)) {
     if (segmentDenylisted(segment)) return true;
   }

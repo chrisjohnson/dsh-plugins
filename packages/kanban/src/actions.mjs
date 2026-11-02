@@ -46,7 +46,12 @@ const PLAN_PARAMETERS = {
       'Optional sandbox section. Declare ONLY what the build session would otherwise be prompted for mid-build: ' +
       'grants.paths = absolute paths outside the workspace root the build must write (write/edit under each path is auto-approved once you approve this plan); ' +
       'grants.commands = token-prefix command grants for bash calls the standing sandbox would deny (the command must start with these tokens at word boundaries). ' +
-      'Service restarts, sudo, rm, kill, dd and similar are denylisted and can never be granted. ' +
+      'The denylist is word-based, not position-based: a call is denied if ANY word in it — after splitting on whitespace and on ( ) { } $ backtick ; | & and newlines — ' +
+      'is systemctl, service, launchctl, sudo, kill, pkill, rm or dd, so a granted prefix can never chain into one of those in any shell clothing ' +
+      '("git push && systemctl restart dsh", "git push && (systemctl restart dsh)", "git push && FOO=1 systemctl restart dsh" are all refused), and a plan declaring ' +
+      'such a grant is rejected at submission. Keep grants narrow and free of denylisted words, since a command containing one falls through to the human. ' +
+      'The denylist cannot see inside an interpreter: granting a bare node/python3/bash-script.sh prefix hands the build whatever that interpreter runs, so grant the ' +
+      'narrowest prefix that works, never a bare interpreter, and say in the plan why the grant is safe. ' +
       'For each declared path run `test -w <path>` read-only while planning and record the result in checks as {path, check, observed}; ' +
       'a check that failed belongs in the plan as a risk, not as a grant. Platform temp areas (e.g. /tmp) are already writable under workspace-write — do not grant them.',
     properties: {

@@ -138,18 +138,30 @@ A plan may declare those needs up front, in an optional `sandbox` section:
   `git push origin main`, never `git pushfoo`). The matcher reads the exact
   arguments from the session's own `tool/call` event, never from the model's
   justification text.
-- **The denylist is never claimable.** The check runs on **every shell segment**
-  of the command — the line is split on `&&`, `||`, `;`, `|`, `&` and newlines —
-  and a segment whose first token (seen through wrappers like `sudo`, `env`,
-  `nohup`, `timeout`, and `sh -c`/`bash -c` script bodies) is `systemctl`,
-  `service`, `launchctl`, `sudo`, `kill`, `pkill`, `rm` or `dd` denies the whole
-  call; so does any line containing `rm -rf /` or `rm -fr /`. None of it can
-  ever be auto-approved, not even by a grant a human approved, and a plan
-  declaring one is rejected at submission with a *can never be granted* error.
-  Because the segment split happens before the prefix match, a granted prefix
-  cannot be used to chain a denylisted command: a `git push` grant does not
-  cover `git push && systemctl restart dsh`. The grant mechanism therefore
-  cannot restart a service or delete outside the sandbox's own rules.
+- **The denylist is never claimable.** The check is **word-based, not
+  position-based**: the command is split on whitespace and on the shell syntax
+  that can hide a command from a first-token read (`(`, `)`, `{`, `}`, `$`,
+  backtick, `;`, `|`, `&` and newlines), and if ANY resulting word — reduced to
+  its basename and seen through wrappers like `sudo`, `env`, `nohup`, `timeout`
+  and `sh -c`/`bash -c` script bodies — is `systemctl`, `service`, `launchctl`,
+  `sudo`, `kill`, `pkill`, `rm` or `dd`, the whole call is denied; so is any line
+  containing `rm -rf /` or `rm -fr /`. None of it can ever be auto-approved, not
+  even by a grant a human approved, and a plan declaring one is rejected at
+  submission with a *can never be granted* error. Because no position in the
+  command is safe, a granted prefix cannot carry a denylisted command in any
+  shell clothing: a `git push` grant covers `git push origin main` and nothing
+  like `git push && systemctl restart dsh`, `git push && (systemctl restart
+  dsh)`, `git push && $(systemctl restart dsh)` or `git push && FOO=1 systemctl
+  restart dsh`. Being word-based costs false positives on purpose — `grep -r rm
+  -n .` and `git commit -m "rm old path"` ask the human too — because a prompt is
+  cheap and a wrong auto-approval is not.
+- **The denylist is a text rule; it cannot see inside an interpreter.** It
+  narrows what a grant may *say*; it does not sandbox what a granted command
+  *does*. A plan granting a bare `node`, `python3`, `perl` or `bash script.sh`
+  prefix hands the build whatever that interpreter chooses to run, including a
+  service restart reached through code instead of through a shell word. Read an
+  interpreter grant as a full-access grant when you approve a plan: look at the
+  script it will run, or grant the narrowest prefix that actually works.
 - **Everything else still asks.** The grant approver is an agent-scoped
   `approval/request` waterfall listener registered only on build sessions
   (plan and verify sessions stay read-only and receive none). It claims only
