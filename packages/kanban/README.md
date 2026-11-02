@@ -249,6 +249,19 @@ planning, building or reviewing, never navigates you out of the board. The
 explicit buttons still do — **Open build session** on the approval panel,
 **Open** in the sessions table, **Recover tools** on an orphaned session.
 
+A Backlog ticket usually plans when you drag it into Working. **Start planning**
+is the exception you can make without moving it: a small button on the card, and
+the same one beside the pencil in the detail hero, sets that ticket's planning to
+*now* and lets the engine run the plan session right there in Backlog. When the
+plan lands the ticket is still in Backlog, now at **Build** — planning and
+building stay two separate decisions, and dragging it over is still what starts
+the work. The button shows only where it would do something: a Backlog ticket
+still at the plan phase, not already planning now, not mid-turn, and not waiting
+on your answer. On a parked plan ticket it doubles as the retry — pressing it
+again lifts the park and launches a fresh plan. Behind it is a `startPlanning`
+action on the `action` endpoint; it writes `planTiming` and nothing else, and
+refuses any other ticket with `bad_request`.
+
 A ticket is edited through the one pencil in the detail hero, which opens a
 single editor for the whole card: title, body, acceptance (one statement per
 line — change a line to edit it, delete a line to remove it), planning,

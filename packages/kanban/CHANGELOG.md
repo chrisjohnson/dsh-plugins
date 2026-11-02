@@ -5,6 +5,26 @@
 
 ## Unreleased
 
+## 0.13.0
+
+### Added
+
+- **Start planning.** A Backlog ticket that plans *when picked up* can now be
+  planned from the board without dragging it anywhere. A small **Start planning**
+  button sits on the card, and the same one next to the pencil in the ticket
+  detail hero: it sets that ticket's planning to *now* and nudges the engine,
+  which runs the plan session right there in Backlog. When the plan lands the
+  ticket stays in Backlog, now at **Build**, waiting to be dragged to Working —
+  planning and building remain two separate decisions.
+  The button appears only where it does something: a Backlog ticket still at the
+  plan phase that is not already planning now, not mid-turn, and not waiting on
+  your answer. On a parked plan ticket — a plan that ended without submitting, or
+  one that was rejected — it doubles as the retry: it lifts the park and launches
+  a fresh plan. The action is a new `startPlanning` action on the existing
+  `action` endpoint; it writes `planTiming`, moves no column and no phase, and
+  refuses anything else with `bad_request`. The engine already planned Backlog
+  plan-now tickets and stopped at Build, so this release changes no engine code.
+
 ## 0.12.1
 
 ### Fixed
