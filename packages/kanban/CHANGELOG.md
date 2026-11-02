@@ -5,6 +5,33 @@
 
 ## Unreleased
 
+## 0.16.3
+
+### Fixed
+
+- **A backslash-escaped command word still evaded the denylist** (KAN-30 review,
+  round three). 0.16.2 compares whole words, but on their exact spelling, so the
+  shell's own alias-bypass idiom slipped through: with a human-approved `git
+  push` grant, `git push && \systemctl restart dsh` and `git push && \sudo
+  reboot` were auto-approved at `danger-full-access` with no human asked, and so
+  was `git push && sys\temctl restart dsh`. `commandWords` now strips backslashes
+  along with quotes before comparing, so `\systemctl`, `sys\temctl` and `\rm`
+  read as the commands they run. Tests cover the escaped forms at the denylist,
+  matcher and approver levels.
+
+### Documented
+
+- **The three routes the denylist cannot close, named instead of glossed.** It is
+  a text rule, not a sandbox: an **interpreter** (a bare `node`/`python3`/`bash
+  script.sh` grant hands the build whatever that interpreter runs), an **encoded
+  payload** (`echo <base64> | base64 -d | sh` hides its words from any matcher)
+  and **indirection** (a granted command reading a script or config the build
+  wrote inside the workspace) are out of reach of string matching by
+  construction — closing them needs the sandbox itself to resolve the exec, which
+  is core work outside this plugin. README, DECISIONS, the `kanban_submit_plan`
+  parameter description and both plan prompts now say that, and replace the "in
+  any shell clothing" absolute with "any natural shell form".
+
 ## 0.16.2
 
 ### Fixed

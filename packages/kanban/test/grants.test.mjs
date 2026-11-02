@@ -81,6 +81,10 @@ test('a denylisted command is caught in any shell clothing, not just as a bare s
     'git push && xargs -I{} systemctl restart {}',
     'git push && `systemctl restart dsh`',
     'git push && /usr/bin/sudo reboot',
+    'git push && \\systemctl restart dsh',
+    'git push && \\sudo reboot',
+    'git push && sys\\temctl restart dsh',
+    'git push && \\rm -rf /home/dsh/important',
   ]) {
     assert.equal(isDenylisted(command), true, command)
   }
@@ -89,6 +93,22 @@ test('a denylisted command is caught in any shell clothing, not just as a bare s
   for (const command of ['git push origin main', 'npm run check', 'node scripts/lab.sh up --name kan30', 'git push && npm test', 'git push && gh pr create']) {
     assert.equal(isDenylisted(command), false, command)
   }
+})
+
+test('a backslash-escaped command word is still the command', () => {
+  // The shell's own alias-bypass idiom is a one-character evasion of a
+  // word-equality denylist, so backslashes are stripped before comparison.
+  assert.equal(isDenylisted('git push && \\systemctl restart dsh'), true)
+  assert.equal(isDenylisted('git push && \\sudo reboot'), true)
+  assert.equal(isDenylisted('git push && sys\\temctl restart dsh'), true)
+  assert.equal(isDenylisted('git push && \\kill -9 1'), true)
+  // Stripping a backslash must not invent a denylisted word out of ordinary
+  // arguments.
+  assert.equal(isDenylisted('git push origin main'), false)
+  assert.equal(isDenylisted('echo a\\ b'), false)
+  // A denylisted word that is merely an argument still trips the rule — the
+  // documented false-positive side of the tradeoff, and it only costs a prompt.
+  assert.equal(isDenylisted('grep -rn "sudo" docs'), true)
 })
 
 // ----------------------------------------------------------------- matcher --
@@ -111,6 +131,8 @@ test('bash grants match by token prefix at word boundaries', () => {
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && { systemctl restart dsh; }' } }), null)
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && eval systemctl restart dsh' } }), null)
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && xargs -I{} systemctl restart {}' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && \\systemctl restart dsh' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && \\sudo reboot' } }), null)
   // A compound of two grantable commands still matches its grant.
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && npm test' } }), 'git push')
 })
@@ -235,6 +257,8 @@ test('a denylisted command hidden in shell syntax falls through too', () => {
     ['c4f', 'git push && { systemctl restart dsh; }'],
     ['c4g', 'git push && eval systemctl restart dsh'],
     ['c4h', 'git push && xargs -I{} systemctl restart {}'],
+    ['c4i', 'git push && \\systemctl restart dsh'],
+    ['c4j', 'git push && sys\\temctl restart dsh'],
   ]) {
     const h = harness({ plan, calls: [{ callId, name: 'bash', arguments: { command } }] })
     assert.equal(h.ask(callId, 'bash'), h.fell, command)

@@ -12,26 +12,28 @@
 // (the store, the session log) is passed in, so the whole matrix is testable
 // on a bare clone.
 //
-// Two invariants hold no matter what a plan declares:
+// Three invariants hold no matter what a plan declares:
 //
 // - The denylist is never claimable. A service restart, a `sudo`, an `rm` can
 //   never be auto-approved by a grant, even one a human approved — those asks
 //   always reach the human. The check is WORD-BASED, not position-based: every
 //   command word in the line is compared against the denylist after splitting
 //   on whitespace and on the shell syntax that can hide a command from a
-//   first-token read (`(`, `)`, `{`, `}`, `$`, backtick, `;`, `|`, `&`), so a
-//   granted prefix cannot carry a denylisted command however it is written —
-//   `git push && systemctl restart dsh`, `git push && (systemctl restart dsh)`,
-//   `git push && $(systemctl restart dsh)` and `git push && FOO=1 systemctl
-//   restart dsh` are all denied. The cost is false positives (`grep -r rm -n .`
-//   asks the human too), which is the correct side to fail on: a prompt is
-//   cheap, a wrong auto-approval is not.
-// - The denylist is a text rule and cannot see inside an interpreter. A plan
-//   that grants a bare `node`, `python3`, `perl` or `bash script.sh` prefix
-//   hands the build whatever that interpreter chooses to run, so an interpreter
-//   grant is a full-access grant and the human approving the plan has to read it
-//   that way. The denylist narrows what a grant can say; it does not sandbox the
-//   commands a grant lets through.
+//   first-token read (`(`, `)`, `{`, `}`, `$`, backtick, `;`, `|`, `&`), with
+//   quotes and backslashes stripped, so a granted prefix cannot carry a
+//   denylisted command written in any natural shell form — `git push &&
+//   systemctl restart dsh`, `git push && (systemctl restart dsh)`, `git push &&
+//   $(systemctl restart dsh)`, `git push && FOO=1 systemctl restart dsh` and
+//   `git push && \systemctl restart dsh` are all denied. The cost is false
+//   positives (`grep -r rm -n .` asks the human too), which is the correct side
+//   to fail on: a prompt is cheap, a wrong auto-approval is not.
+// - The denylist is a text rule, not a sandbox, and it says so rather than
+//   pretending otherwise. It cannot see what a command only decodes or executes
+//   indirectly: a bare `node`, `python3`, `perl` or `bash script.sh` grant hands
+//   the build whatever that interpreter runs, an `echo <base64> | base64 -d | sh`
+//   payload hides its words from any matcher, and a granted command that reads a
+//   script or config the build wrote inside the workspace is equally opaque.
+//   Those routes are closed by the human reading the plan, not by this module.
 // - Every miss, malformed input, or exception calls `next()`: the human stays
 //   the answerer of last resort. A broken grant path fails open to a prompt,
 //   never closed to a silent denial.
@@ -82,14 +84,16 @@ function baseToken(token) {
  * Every command word in a line. A word ends at whitespace or at shell syntax
  * that can hide a command from a first-token read — `(`, `)`, `{`, `}`, `$`,
  * backtick, `;`, `|`, `&` and newlines — so `(systemctl`, `$(systemctl` and
- * `{ systemctl` all yield the word `systemctl`. Quotes are stripped rather than
- * honoured as grouping, and each word is reduced to its basename, so
- * `/usr/bin/systemctl` reads as `systemctl` too.
+ * `{ systemctl` all yield the word `systemctl`. Quotes and backslashes are
+ * stripped rather than honoured (a backslash before a command name is the
+ * shell's own alias-bypass idiom, so `\systemctl` and `sys\temctl` must read as
+ * `systemctl`), and each word is reduced to its basename, so `/usr/bin/systemctl`
+ * reads as `systemctl` too.
  */
 function commandWords(text) {
   return text
     .split(/[\s(){}$`;|&\n\r]+/)
-    .map((word) => baseToken(word.replace(/["'`]/g, '')))
+    .map((word) => baseToken(word.replace(/["'`\\]/g, '')))
     .filter(Boolean);
 }
 
@@ -102,7 +106,8 @@ function commandWords(text) {
  *   and deliberately not a first-token rule: a token-prefix grant means the
  *   denylist has to see a denylisted command anywhere in the call, in any shell
  *   clothing (`&&`, `||`, `;`, `|`, `&`, a subshell, a command substitution, a
- *   brace group, an `env`-style assignment prefix, `eval`, `xargs`);
+ *   brace group, an `env`-style assignment prefix, `eval`, `xargs`, a leading
+ *   backslash);
  * - the first-token wrapper walk of each shell segment on top, so
  *   `bash -c "…"`, `sh -c "…"` and `timeout 10 bash -lc "…"` script bodies are
  *   still read as the commands they run.
