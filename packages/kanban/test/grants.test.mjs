@@ -58,10 +58,10 @@ test('the word rule over-strictly catches a denylisted word that is not a comman
   assert.equal(isDenylisted('echo "the rm -rf / rule"'), true)
 })
 
-test('a denylisted command is caught in any shell clothing, not just as a bare segment', () => {
+test('a denylisted command is caught in any natural shell form, not just as a bare segment', () => {
   // A granted prefix must never be able to chain into a denylisted command, and
-  // the round-1/round-2 lesson is that "first token of each segment" is not the
-  // same as "anywhere": every one of these hides its denylisted word behind
+  // the round-1/2/3 lesson is that "first token of each segment" is not the same
+  // as "anywhere": every one of these hides its denylisted word behind
   // shell syntax a position-based check walks straight past.
   for (const command of [
     'git push && systemctl restart dsh',
