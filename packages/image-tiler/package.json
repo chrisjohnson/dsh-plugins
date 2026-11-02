@@ -1,0 +1,49 @@
+{
+  "name": "dsh-image-tiler",
+  "version": "0.1.0",
+  "description": "Automatic image tiling for DeepSeek Harness: a user-attached image that exceeds the routed model's pixel cap is split into overlapping under-cap tiles before the step is committed, so oversized screenshots reach a small-vision local model whole instead of being refused or silently downscaled.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "vision",
+    "image",
+    "tiling",
+    "screenshot"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/image-tiler"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/image-tiler#readme",
+  "bugs": {
+    "url": "https://github.com/chrisjohnson/dsh-plugins/issues"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

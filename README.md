@@ -35,6 +35,7 @@ Pick the tag from [the repository's tags](https://github.com/chrisjohnson/dsh-pl
 | **[dsh-session-cost](./packages/session-cost/)** | A compact estimated-cost badge in the composer stats bar: reads the session billed-token buckets and prices them with public models.dev rates, hidden at $0. | 0.1.0 | `packages/session-cost` |
 | **[dsh-math-literal](./packages/math-literal/)** | Keeps single-`$` dollars literal in web chat: unpaired `$` in settled markdown renders as a literal dollar sign (matching the streaming arm) instead of opening an inline-math pair, while real math and code regions are untouched. | 0.1.0 | `packages/math-literal` |
 | **[dsh-browser](./packages/browser/)** | One browser context per DSH session on a single shared remote Browserless connection for `dsh-playwright-browser`'s tools, with reconnect after a dropped connection, context cleanup when a session ends, and an announced local fallback. | 0.1.0 | `packages/browser` |
+| **[dsh-image-tiler](./packages/image-tiler/)** | Tiles a user-attached image that exceeds the routed model's pixel cap into overlapping under-cap tiles at `agent/pre-step`, so oversized screenshots reach small-vision local models whole instead of being refused or downscaled into mush. | 0.1.0 | `packages/image-tiler` |
 
 Install lines for the latest release of each package:
 
@@ -50,6 +51,7 @@ dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.gi
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-session-cost-v0.1.0&path:/packages/session-cost"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-math-literal-v0.1.0&path:/packages/math-literal"
 dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-browser-v0.1.0&path:/packages/browser"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-tiler-v0.1.0&path:/packages/image-tiler"
 ```
 
 Each package's README is the contract: what it does, every configuration key and what happens when it is unset, how it fails, how to install it, and how to run its checks. Nothing important lives only here.
