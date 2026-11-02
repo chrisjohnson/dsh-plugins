@@ -5,6 +5,22 @@
 
 ## Unreleased
 
+## 0.16.1
+
+### Fixed
+
+- **A granted command prefix could chain into a denylisted command** (KAN-30
+  review). The denylist inspected only the line's first token (seen through
+  wrappers), while a bash grant matches by token prefix, so a human-approved
+  `git push` grant auto-approved `git push && systemctl restart dsh` at
+  `danger-full-access` — the one thing the denylist exists to make impossible.
+  `isDenylisted` now splits the command on `&&`, `||`, `;`, `|`, `&` and
+  newlines and runs the first-token wrapper walk on **every** segment, so a
+  denylisted token anywhere in a compound command denies the whole call, and a
+  plan declaring such a grant is rejected at submission. Ordinary compounds of
+  allowed commands (`git push && npm test`) still match. Tests cover the
+  chaining cases at the denylist, matcher and approver levels.
+
 ## 0.16.0
 
 ### Added

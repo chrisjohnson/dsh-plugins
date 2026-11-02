@@ -49,6 +49,29 @@ test('ordinary commands are not denylisted', () => {
   assert.equal(isDenylisted(undefined), false)
 })
 
+test('every shell segment is checked, not just the line’s first token', () => {
+  // A granted prefix must never be able to chain into a denylisted command:
+  // the whole point of the denylist is that a service restart stays human-only.
+  for (const command of [
+    'git push && systemctl restart dsh',
+    'git push; systemctl restart dsh',
+    'git push && sudo reboot',
+    'git push && rm -rf /tmp/x',
+    'git push | dd of=/dev/sda',
+    'npm test && pkill node',
+    'git push && launchctl kickstart -k k/k/dsh',
+    'git push && service dsh restart',
+    'git push\n&& systemctl restart dsh',
+  ]) {
+    assert.equal(isDenylisted(command), true, command)
+  }
+  // Ordinary compounds stay grantable: the split is a denylist check, not a ban
+  // on shell operators.
+  for (const command of ['git push origin main', 'npm run check', 'node scripts/lab.sh up --name kan30', 'git push && npm test', 'git push && gh pr create']) {
+    assert.equal(isDenylisted(command), false, command)
+  }
+})
+
 // ----------------------------------------------------------------- matcher --
 
 test('bash grants match by token prefix at word boundaries', () => {
@@ -59,6 +82,9 @@ test('bash grants match by token prefix at word boundaries', () => {
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'sudo git push' } }), null)
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git pull' } }), null)
   assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && rm -rf /' } }), null)
+  // The reviewer's case: a granted prefix chained into a denylisted command.
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && systemctl restart dsh' } }), null)
+  assert.equal(matchGrant({ grants, toolName: 'bash', arguments: { command: 'git push && sudo reboot' } }), null)
 })
 
 test('write and edit grants match by path-segment containment', () => {
@@ -158,6 +184,16 @@ test('a denylisted command falls through even when a grant covers it', () => {
   const plan = { sandbox: { grants: { paths: [], commands: ['rm'] } } }
   const h = harness({ plan, calls: [{ callId: 'c4', name: 'bash', arguments: { command: 'rm -rf /tmp/x' } }] })
   assert.equal(h.ask('c4', 'bash'), h.fell)
+})
+
+test('a granted prefix chained into a denylisted command falls through', () => {
+  const plan = { sandbox: { grants: { paths: [], commands: ['git push'] } } }
+  const h = harness({
+    plan,
+    calls: [{ callId: 'c4b', name: 'bash', arguments: { command: 'git push origin main && systemctl restart dsh' } }],
+  })
+  assert.equal(h.ask('c4b', 'bash'), h.fell)
+  assert.equal(h.events.length, 0, 'no grant_applied for a command the denylist refuses')
 })
 
 test('non-escalation reasons pass straight through', () => {
@@ -267,6 +303,9 @@ test('validateSandbox rejects relative paths and blank commands', () => {
 test('validateSandbox rejects a denylisted command with the explicit message', () => {
   const out = validateSandbox({ grants: { commands: ['systemctl restart dsh'] } })
   assert.ok(out.errors.some((e) => /can never be granted/.test(e)))
+  // A grant that *could* chain into a denylisted command is rejected too.
+  const chained = validateSandbox({ grants: { commands: ['git push && systemctl restart dsh'] } })
+  assert.ok(chained.errors.some((e) => /can never be granted/.test(e)), JSON.stringify(chained.errors))
 })
 
 test('validateSandbox normalizes a valid section and passes checks through', () => {
