@@ -5,6 +5,27 @@
 
 ## Unreleased
 
+## 0.13.1
+
+### Fixed
+
+- **A session waiting on you now reads as attention, not as running.** A harness
+  approval prompt and an `ask_user_question` call both pause a turn *in flight*
+  — the turn stays open while the person decides — so a ticket whose build
+  session had sat on an escalation ask for ten minutes still showed the blue
+  pulsing "Running" card, and nothing on the board said a human was needed.
+  The driver now folds the durable log's own record of the pause — the
+  `approval/asked` … `approval/decided` pair (matched by id) and an
+  `ask_user_question` call answered by the `tool/result` citing the same
+  callId — into a per-session wait for every ticket session, on engine-driven
+  and human-driven turns alike. `cardStatus` lets that wait take attention
+  precedence over `active`, the card badge reads **Awaiting approval** or
+  **Waiting on you** in any phase, and the detail hero grows an **Open session**
+  button that lands on the pending prompt. A session reopened mid-turn after a
+  restart is seeded from its own log, so the red card survives the restart too.
+  No config key, no schema change, no tool change: the events were already in
+  the session log, the board just never looked.
+
 ## 0.13.0
 
 ### Added

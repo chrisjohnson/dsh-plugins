@@ -165,7 +165,9 @@ test('nothing opens a session on its own', async () => {
   // No effect anywhere in the client may navigate: every remaining call sits on
   // the same line as the click that caused it, or is the definition itself.
   const callers = client.split('\n').filter((line) => line.includes('openSessionById'))
-  assert.equal(callers.length, 4, 'one definition and three click handlers, nothing else')
+  // KAN-17 added the hero's Open-session button for a mid-turn human wait: one
+  // definition and four click handlers, nothing else.
+  assert.equal(callers.length, 5, 'one definition and four click handlers, nothing else')
   for (const line of callers) {
     const allowed = line.includes('var openSessionById = null;')
       || line.includes('openSessionById = function')
@@ -469,4 +471,36 @@ test('the client rule and the host rule say the same thing', async () => {
   const [host, browser] = [rule(planning, 'canStartPlanning'), rule(client, 'canStartPlanning')]
   assert.deepEqual(browser, host, 'the client hides a button the host would accept, or offers one it would refuse')
   assert.deepEqual(host, [true, true, true, true], 'the host rule lost one of its four conditions')
+})
+
+test('KAN-17: a mid-turn human wait reaches the board as attention', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  const dispatch = files['dispatch.mjs']
+  const client = files['client.mjs']
+
+  // The driver owns the fold and answers both kinds of wait for any phase.
+  assert.match(dispatch, /this\.humanWaits = new Map\(\)/)
+  assert.match(dispatch, /case 'approval\/asked'/)
+  assert.match(dispatch, /case 'approval\/decided'/)
+  assert.match(dispatch, /isAwaitingApproval\(ticketId\)/)
+  assert.match(dispatch, /isAwaitingQuestion\(ticketId\)/)
+  assert.match(dispatch, /#seedHumanWait\(sessionId, agent\)/, 'reattach seeds the wait from the session log')
+
+  // The host feeds both flags to the card status and surfaces them on the board
+  // and in the detail, with a reason that names which ask is pending.
+  assert.match(host, /awaitingApproval: isAwaitingApproval\(ticket\)/)
+  assert.match(host, /item\.awaitingApproval = isAwaitingApproval\(ticket\)/)
+  assert.match(host, /'Awaiting your approval'/)
+  assert.match(host, /awaitingApproval,\n\s*status:/, 'the detail payload carries the flag')
+  assert.match(host, /pendingWait\?\.sessionId/, 'the detail points at the session holding the ask')
+  // The question scan is no longer gated on the plan phase.
+  assert.equal(/ticket\.phase === 'plan' && driver\.isAwaitingUser/.test(host), false)
+
+  // The client labels both cases and offers the way to the prompt.
+  assert.match(client, /t\.awaitingApproval \? "Awaiting approval"/)
+  assert.match(client, /t\.awaitingQuestion \? "Waiting on you"/)
+  assert.match(client, /d\.awaitingApproval \? "awaiting approval"/)
+  assert.match(client, /openSessionById\(d\.approvalSessionId\)/)
+  assert.match(client, /"Open session"/)
 })

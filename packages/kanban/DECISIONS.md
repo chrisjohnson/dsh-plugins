@@ -384,3 +384,50 @@ the card.
   be imported without the dsh peer packages, so an action defined inline there
   is an action no test can reach. `startPlanning` takes its store, driver and
   engine as arguments and is tested against a real store and a real `Engine`.
+
+## 2026-11-02 — a mid-turn human wait is attention (0.13.1)
+
+A card said "running" while its session sat on an unanswered approval prompt.
+KAN-6's production build-session log is the proof: one `approval/asked` waited
+~11.7 minutes for a human while the card pulsed blue. The turn *is* in flight —
+the harness pauses inside it — so `cardStatus`'s `active` rule, read from
+`turn/start`/`turn/end` alone, could not tell "working" from "blocked on a
+person".
+
+- **The session log is the source of truth, not a new signal.** The harness
+  already appends `approval/asked` / `approval/decided` (paired by `id`, and
+  turn-enclosed by `@deepseek-ai/dsh-user-approval`'s own precondition) and a
+  `tool/call` for `ask_user_question` whose `tool/result` cites the same
+  `callId`. The driver folds those on the `session/event` stream it already
+  consumes, so there is no new event, no tool change, no schema change and no
+  config key — the board simply starts reading facts that were always there.
+- **The fold lives in the driver, not the engine.** The engine only sees turns
+  it started itself (its waiters); a human driving a ticket session by hand, or
+  an approval prompt raised inside a human's turn, is visible only on the
+  global stream the driver subscribes to. Tracking there covers engine- and
+  human-driven turns in every phase uniformly.
+- **Attention outranks active, and the wait must die with its turn.** A pending
+  ask outranks `active` in `cardStatus` because the one state that needs eyes
+  is the one a blue pulse would hide. Every entry is cleared by its own
+  `approval/decided` / `tool/result`, and defensively by `turn/end` and
+  `turn/start`: a decision that was never published (a crash between the pair)
+  must not haunt the session into permanent red. `closeSession` clears it too.
+- **Restart recovery reads the log backwards, the same way the harness does.**
+  A session reopened mid-turn has no live events to fold, so `attachExisting`
+  scans back to the open turn — last `turn/start` with no matching `turn/end`,
+  the exact boundary `dsh-user-approval` requires for its audit pair — and
+  seeds the wait from what is unanswered inside it. An ask from an earlier turn
+  is not the open turn's business.
+- **The question scan generalises instead of duplicating.** Before this,
+  `ask_user_question` was only surfaced while a *plan-phase* engine waiter was
+  armed. The new scan is a superset (any phase, any turn), so the old
+  plan-phase-only method is gone rather than kept beside it, and the host's
+  `awaitingQuestion` now means "a session of this ticket is waiting on your
+  answer", full stop.
+- **The detail synthesises a reason for a question but not for an approval.**
+  The parked-ticket panels (`ApprovalPanel`, `NeedsAttention`) render from
+  `needsAttentionReason`; inventing one for a mid-turn approval would render
+  the park panel — retry/discard buttons — under a ticket whose engine is still
+  inside the turn. The approval case therefore rides on the new
+  `awaitingApproval` flag: chip, badge and the hero's **Open session** button,
+  no fake park.

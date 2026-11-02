@@ -58,6 +58,14 @@ glow while a workflow turn is in flight, a red glowing card when the engine has
 parked the ticket for a human (a failure, a question, or approval), and a plain
 grey card otherwise.
 
+Since 0.13.1 a red card also covers the wait *inside* a turn: when a session
+pauses mid-turn on an unanswered approval prompt (the harness `approval/asked`
+… `approval/decided` pair) or an unanswered `ask_user_question`, the card shows
+**Awaiting approval** or **Waiting on you** instead of pretending work is
+happening. This needs no configuration: there is no new config key, no schema
+change and no tool change — the durable session log already carried the fact,
+and the board now reads it.
+
 Needs attention is a state, not a parking brake or a column. The moment any
 session attached to a parked ticket starts a turn — you answering the engine's
 question, driving the build by hand, or talking an approval through — the park
@@ -241,13 +249,18 @@ events. JSONL/CSV exports and analytics remain available.
 
 A card is **blue and softly glowing** while its ticket has a turn in flight, and
 **static red** when it needs attention — border, tint, left accent bar and a red
-status dot, no pulsing. Attention is a state to read, not a light to chase.
+status dot, no pulsing. Attention is a state to read, not a light to chase. A
+red card whose session is paused mid-turn on a person says so in its badge —
+**Awaiting approval** for an unanswered approval prompt, **Waiting on you** for
+an unanswered question — in any phase, not only in approval.
 
 Clicking a card opens the ticket detail. Nothing in the board ever opens a
 session by itself: watching the poll, or clicking through a ticket that is
 planning, building or reviewing, never navigates you out of the board. The
 explicit buttons still do — **Open build session** on the approval panel,
-**Open** in the sessions table, **Recover tools** on an orphaned session.
+**Open session** in the detail hero while a mid-turn wait is pending (it lands
+you on the prompt itself), **Open** in the sessions table, **Recover tools** on
+an orphaned session.
 
 A Backlog ticket usually plans when you drag it into Working. **Start planning**
 is the exception you can make without moving it: a small button on the card, and

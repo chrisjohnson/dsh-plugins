@@ -484,7 +484,11 @@ var CSS =
 			return status === "attention" ? "err" : status === "active" ? "run" : "idle";
 		}
 		function nextAction(t) {
-			if (t.status === "attention") return t.phase === "verify" ? "Awaiting approval" : t.awaitingQuestion ? "Waiting on you" : "Needs your decision";
+			// KAN-17: awaitingApproval / awaitingQuestion mean a session is paused
+			// mid-turn on a human — the red card says which ask is pending, in any
+			// phase. The verify-phase rule below is the engine-parked approval: no
+			// turn in flight, the human still holds the decision.
+			if (t.status === "attention") return t.awaitingApproval ? "Awaiting approval" : t.awaitingQuestion ? "Waiting on you" : t.phase === "verify" ? "Awaiting approval" : "Needs your decision";
 			if (t.status === "active") return t.phase === "plan" ? "Grilling / planning" : "Running";
 			if (t.column === "done" || t.column === "discarded") return "Closed";
 			if (t.column === "working") return "Queued";
@@ -1524,7 +1528,7 @@ var CSS =
 						h("span", { className: "kb-statusdot " + detailStatus, title: detailStatus, "aria-label": "Status: " + detailStatus }),
 						h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) }),
 						h("span", { className: "kb-chip", children: t.column }),
-						t.needsAttentionReason ? h("span", { className: "kb-chip err", children: d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
+						(t.needsAttentionReason || d.awaitingApproval) ? h("span", { className: "kb-chip err", children: d.awaitingApproval ? "awaiting approval" : d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
 						// One pencil for the whole ticket. The lock is the host's
 						// answer, not a guess: `editable` is false the moment any
 						// engine has touched this ticket, and the update endpoint
@@ -1547,7 +1551,19 @@ var CSS =
 							className: "kb-btn sm",
 							title: "Plan this ticket now, in Backlog, without moving it to Working",
 							onClick: function () { props.onAction(t.id, "startPlanning", {}); }
-						}, "Start planning") : null
+						}, "Start planning") : null,
+						// KAN-17: a mid-turn human wait has no park panel to open
+						// the session from — the engine is still inside the turn —
+						// so the hero itself offers the way to the prompt. A
+						// conditional element, never a conditional hook: the two
+						// useState calls at the top of TicketDetail are the only
+						// hooks this component has, and nothing here adds one.
+						(d.awaitingApproval || d.awaitingQuestion) && d.approvalSessionId ? h("button", {
+							type: "button",
+							className: "kb-btn sm",
+							title: "Open the session that is waiting on you",
+							onClick: function () { if (openSessionById) openSessionById(d.approvalSessionId); }
+						}, "Open session") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h("div", { className: "kb-hero-meta" },
