@@ -1,0 +1,14 @@
+# Bundle layer for dsh-image-tiler.
+#
+# The row carries NO config: a patch layer replaces a row's whole `config`
+# object instead of deep-merging, so the deployment owns its complete section
+# in its own profile patch. Defaults live in src/config.mjs and are documented
+# in README.md. To tune it, add a profile-level row:
+#
+#   - id: image-tiler
+#     config:
+#       caps:
+#         "my-provider/my-vision-model": 393216
+- insert:
+    - id: image-tiler
+      name: dsh-image-tiler
