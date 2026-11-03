@@ -10,6 +10,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { leaseRate } from './rate.mjs';
+
 export class CapacityError extends Error {
   constructor(code, message, details = {}) {
     super(message);
@@ -259,6 +261,8 @@ export class CapacityManager {
           kind: lease?.kind ?? 'call',
           startedAt: lease?.startedAt ?? null,
           elapsedMs: lease === undefined ? null : Math.max(0, now - lease.startedAt),
+          outputTokens: lease === undefined ? 0 : Math.max(0, Math.round(lease.outputTokens ?? 0)),
+          tokensPerSec: leaseRate(lease, now),
         };
       });
       const waiters = bucket.waiters.map((waiter, index) => ({

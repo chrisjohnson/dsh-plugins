@@ -33,6 +33,45 @@ window.__ModuleLoader__.load({
 			return Math.floor(m / 60) + "h " + (m % 60) + "m";
 		}
 
+		function fmtRate(value) {
+			if (value === null || value === undefined || !isFinite(value)) return "\u2014";
+			return value >= 100 ? String(Math.round(value)) : value.toFixed(1);
+		}
+
+		function Sparkline(props) {
+			var values = props.values || [];
+			var width = 120, height = 28;
+			if (values.length < 2) return h("svg", { className: "mc-spark", width: width, height: height, "aria-hidden": "true" });
+			var max = 1;
+			values.forEach(function (v) { if (v > max) max = v; });
+			var step = width / (SPARK_POINTS - 1);
+			var offset = width - (values.length - 1) * step;
+			var points = values.map(function (v, i) {
+				return (offset + i * step).toFixed(1) + "," + (height - 2 - (v / max) * (height - 4)).toFixed(1);
+			}).join(" ");
+			return h("svg", { className: "mc-spark", width: width, height: height, viewBox: "0 0 " + width + " " + height, "aria-hidden": "true" },
+				h("polyline", { points: points, fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round" }));
+		}
+
+		function RateCell(props) {
+			return h("div", { className: "mc-kpi mc-rate " + props.tone + (props.live ? " is-live" : "") },
+				h("div", { className: "mc-kpi-value" }, fmtRate(props.value), h("small", null, " tok/s")),
+				h("div", { className: "mc-kpi-label", children: props.label }),
+				h("div", { className: "mc-kpi-hint", children: props.hint }),
+				props.history ? h(Sparkline, { values: props.history }) : null
+			);
+		}
+
+		function RateStrip(props) {
+			var rates = props.rates || { instant: 0, avg1m: 0, avg5m: 0, avg1h: 0, totalTokens: 0 };
+			return h("div", { className: "mc-rates", "data-live": rates.instant > 0 ? "true" : "false" },
+				h(RateCell, { tone: "mc-tone-teal", value: rates.instant, label: "Concurrent output now", hint: "all providers, last 3 s", history: props.history, live: rates.instant > 0 }),
+				h(RateCell, { tone: "mc-tone-blue", value: rates.avg1m, label: "1 minute average", hint: "all providers, concurrent" }),
+				h(RateCell, { tone: "mc-tone-violet", value: rates.avg5m, label: "5 minute average", hint: "all providers, concurrent" }),
+				h(RateCell, { tone: "mc-tone-amber", value: rates.avg1h, label: "1 hour average", hint: "all providers, concurrent" })
+			);
+		}
+
 		function shortId(id) {
 			return typeof id === "string" && id.length > 14 ? id.slice(-8) : (id || "no session");
 		}
@@ -62,6 +101,11 @@ window.__ModuleLoader__.load({
 			+ ".mc-kpi-value{font:650 24px/28px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--mc-accent)}"
 			+ ".mc-kpi-label{margin-top:2px;font-weight:600;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
 			+ ".mc-kpi-hint{margin-top:2px;font-size:10px;color:var(--dsw-alias-label-tertiary,#999)}"
+			+ ".mc-rates{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}"
+			+ ".mc-rate .mc-kpi-value small{font:500 11px/16px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
+			+ ".mc-rate.is-live{box-shadow:0 0 0 1px color-mix(in srgb,var(--mc-accent) 35%,transparent),0 8px 24px color-mix(in srgb,var(--mc-accent) 14%,transparent)}"
+			+ ".mc-spark{display:block;margin-top:6px;color:var(--mc-accent);opacity:.85;max-width:100%}"
+			+ ".mc-sc-rate{font:600 10px/14px ui-monospace,monospace;color:var(--mc-accent);white-space:nowrap}"
 			+ ".mc-tone-blue{--mc-accent:#3b82f6;--mc-accent-2:#06b6d4}"
 			+ ".mc-tone-violet{--mc-accent:#8b5cf6;--mc-accent-2:#d946ef}"
 			+ ".mc-tone-teal{--mc-accent:#0d9488;--mc-accent-2:#22c55e}"
@@ -181,7 +225,7 @@ window.__ModuleLoader__.load({
 			+ "@keyframes mc-poof{0%{transform:scale(1);opacity:1}100%{transform:scale(1.08);opacity:0}}"
 			+ "@media (prefers-color-scheme:dark){.mc-provider,.mc-session-card,.mc-kpi{background:var(--dsw-alias-bg-layer-1,#16181d)}.mc-session-card.mc-live{background:linear-gradient(135deg,rgba(34,197,94,.08),var(--dsw-alias-bg-layer-1,#16181d))}.mc-tag{background:rgba(255,255,255,.06)}.mc-empty-card{background:rgba(255,255,255,.02)}}"
 			+ "@media (prefers-reduced-motion:reduce){.mc-session-card.mc-live,.mc-session-card.mc-enter,.mc-session-card.mc-live.mc-enter,.mc-sc-state.live i,.mc-status i{animation:none}.mc-session-card.mc-ghost{display:none}.mc-session-card{transition:none}.mc-capbar>span{transition:none}}"
-			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-provider-grid{grid-template-columns:1fr}}";
+			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-rates{grid-template-columns:repeat(2,minmax(0,1fr))}.mc-provider-grid{grid-template-columns:1fr}}";
 
 
 		function ensureStyles() {
@@ -340,7 +384,7 @@ window.__ModuleLoader__.load({
 
 		function CapacityIcon(props) {
 			var size = props && props.size ? props.size : 16;
-			var pair = useSnapshot(1500);
+			var pair = useSnapshot();
 			var snapshot = pair[0];
 			var providers = snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : [];
 			var compact = size === 18;
@@ -363,25 +407,183 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function useSnapshot(intervalMs) {
-			var s = React.useState(null);
-			var snapshot = s[0], setSnapshot = s[1];
-			var e = React.useState(null);
-			var error = e[0], setError = e[1];
-			React.useEffect(function () {
-				var alive = true;
-				function load() {
-					rpc("snapshot", {}).then(function (res) {
-						if (!alive) return;
-						if (res && res.ok) { setSnapshot(res.value); setError(null); }
-						else if (res && res.error) setError(res.error.message);
-					}, function () { if (alive) setError("Could not reach the Host."); });
+		// ---------------------------------------------------------------------
+		// Live feed.
+		//
+		// One shared store serves every component that shows capacity (sidebar
+		// badges, the composer dock, the Activity page). It holds a single
+		// long-lived streaming request to the Host while anything is subscribed and
+		// the tab is visible, and nothing at all while the tab is hidden. If the
+		// stream cannot be held (a proxy that buffers, an old Host) it falls back
+		// to a slow snapshot poll and retries the stream with back-off.
+		// ---------------------------------------------------------------------
+
+		var STREAM_URL = "/api/modelCapacity/stream";
+		var STALL_MS = 20000;
+		var FALLBACK_POLL_MS = 2000;
+		var RETRY_BASE_MS = 2000;
+		var RETRY_MAX_MS = 30000;
+		var SPARK_POINTS = 90;
+
+		function createFeed(env) {
+			var listeners = new Set();
+			var state = { snapshot: null, error: null, history: [], mode: "idle" };
+			var controller = null;
+			var pollTimer = null;
+			var retryTimer = null;
+			var stallTimer = null;
+			var failures = 0;
+			var generation = 0;
+
+			function emit() {
+				Array.from(listeners).forEach(function (listener) { listener(); });
+			}
+			function set(patch) {
+				state = Object.assign({}, state, patch);
+				emit();
+			}
+			function ingest(snapshot) {
+				var history = state.history;
+				var instant = snapshot && snapshot.rates ? snapshot.rates.instant : 0;
+				history = history.concat([instant || 0]);
+				if (history.length > SPARK_POINTS) history = history.slice(history.length - SPARK_POINTS);
+				set({ snapshot: snapshot, error: null, history: history });
+			}
+			function hidden() {
+				return !!(env.document && env.document.hidden);
+			}
+			function clearTimers() {
+				if (pollTimer !== null) { env.clearInterval(pollTimer); pollTimer = null; }
+				if (retryTimer !== null) { env.clearTimeout(retryTimer); retryTimer = null; }
+				if (stallTimer !== null) { env.clearTimeout(stallTimer); stallTimer = null; }
+			}
+			function stopAll() {
+				generation += 1;
+				clearTimers();
+				if (controller !== null) { try { controller.abort(); } catch (e) { /* already closed */ } controller = null; }
+				state = Object.assign({}, state, { mode: "idle" });
+			}
+			function pollOnce() {
+				env.rpc("snapshot", {}).then(function (res) {
+					if (state.mode !== "poll") return;
+					if (res && res.ok) ingest(res.value);
+					else if (res && res.error) set({ error: res.error.message });
+				}, function () { if (state.mode === "poll") set({ error: "Could not reach the Host." }); });
+			}
+			function fallBack() {
+				var mine = generation;
+				if (controller !== null) { try { controller.abort(); } catch (e) { /* already closed */ } controller = null; }
+				if (stallTimer !== null) { env.clearTimeout(stallTimer); stallTimer = null; }
+				failures += 1;
+				if (pollTimer === null) {
+					state = Object.assign({}, state, { mode: "poll" });
+					pollOnce();
+					pollTimer = env.setInterval(pollOnce, FALLBACK_POLL_MS);
+					emit();
 				}
-				load();
-				var timer = setInterval(load, intervalMs || 1500);
-				return function () { alive = false; clearInterval(timer); };
-			}, []);
-			return [snapshot, error];
+				var delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, Math.min(failures, 5)));
+				retryTimer = env.setTimeout(function () {
+					retryTimer = null;
+					if (mine === generation && listeners.size > 0 && !hidden()) openStream();
+				}, delay);
+			}
+			function armStall() {
+				if (stallTimer !== null) env.clearTimeout(stallTimer);
+				var mine = generation;
+				stallTimer = env.setTimeout(function () {
+					stallTimer = null;
+					if (mine === generation) fallBack();
+				}, STALL_MS);
+			}
+			function openStream() {
+				if (typeof env.fetch !== "function" || typeof env.AbortController !== "function") { fallBack(); return; }
+				var mine = generation;
+				controller = new env.AbortController();
+				var signal = controller.signal;
+				armStall();
+				env.fetch(STREAM_URL, {
+					method: "POST", headers: { "content-type": "application/json" },
+					credentials: "same-origin", body: "{}", signal: signal
+				}).then(function (response) {
+					if (!response.ok || !response.body || typeof response.body.getReader !== "function") throw new Error("stream unavailable");
+					var reader = response.body.getReader();
+					var decoder = new env.TextDecoder();
+					var buffer = "";
+					function pump() {
+						return reader.read().then(function (chunk) {
+							if (mine !== generation) return undefined;
+							if (chunk.done) throw new Error("stream closed");
+							armStall();
+							buffer += decoder.decode(chunk.value, { stream: true });
+							var cut;
+							while ((cut = buffer.indexOf("\n")) >= 0) {
+								var line = buffer.slice(0, cut);
+								buffer = buffer.slice(cut + 1);
+								if (line === "") continue;
+								var snapshot;
+								try { snapshot = JSON.parse(line); } catch (e) { continue; }
+								if (pollTimer !== null) { env.clearInterval(pollTimer); pollTimer = null; }
+								if (retryTimer !== null) { env.clearTimeout(retryTimer); retryTimer = null; }
+								failures = 0;
+								state = Object.assign({}, state, { mode: "stream" });
+								ingest(snapshot);
+							}
+							return pump();
+						});
+					}
+					return pump();
+				}).catch(function () {
+					if (mine !== generation || signal.aborted) return;
+					fallBack();
+				});
+			}
+			function start() {
+				if (listeners.size === 0 || hidden() || state.mode !== "idle") return;
+				state = Object.assign({}, state, { mode: "stream" });
+				failures = 0;
+				openStream();
+			}
+			function onVisibility() {
+				if (hidden()) stopAll();
+				else start();
+			}
+			if (env.document && env.document.addEventListener) env.document.addEventListener("visibilitychange", onVisibility);
+			return {
+				subscribe: function (listener) {
+					listeners.add(listener);
+					start();
+					return function () {
+						listeners.delete(listener);
+						if (listeners.size === 0) stopAll();
+					};
+				},
+				get: function () { return state; },
+				dispose: function () {
+					stopAll();
+					if (env.document && env.document.removeEventListener) env.document.removeEventListener("visibilitychange", onVisibility);
+				}
+			};
+		}
+
+		var liveFeed = createFeed({
+			document: typeof document !== "undefined" ? document : null,
+			fetch: typeof window !== "undefined" && window.fetch ? window.fetch.bind(window) : undefined,
+			AbortController: typeof AbortController !== "undefined" ? AbortController : undefined,
+			TextDecoder: typeof TextDecoder !== "undefined" ? TextDecoder : undefined,
+			setTimeout: function (fn, ms) { return window.setTimeout(fn, ms); },
+			clearTimeout: function (id) { window.clearTimeout(id); },
+			setInterval: function (fn, ms) { return window.setInterval(fn, ms); },
+			clearInterval: function (id) { window.clearInterval(id); },
+			rpc: rpc
+		});
+
+		function useFeed() {
+			return React.useSyncExternalStore(liveFeed.subscribe, liveFeed.get);
+		}
+
+		function useSnapshot() {
+			var state = useFeed();
+			return [state.snapshot, state.error];
 		}
 
 		function act(method, payload) {
@@ -392,7 +594,7 @@ window.__ModuleLoader__.load({
 
 		function SessionWaitDock(props) {
 			var sessionId = props && props.sessionId;
-			var pair = useSnapshot(1200);
+			var pair = useSnapshot();
 			var snapshot = pair[0], error = pair[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
@@ -475,7 +677,8 @@ window.__ModuleLoader__.load({
 				h("div", { className: "mc-sc-meta" },
 					h("span", { className: "mc-tag", children: e.workspace || "no workspace" }),
 					h("span", { className: "mc-tag model", children: e.model || "?" }),
-					h("span", { className: "mc-tag", children: e.kind || "call" })
+					h("span", { className: "mc-tag", children: e.kind || "call" }),
+					active && e.tokensPerSec !== null && e.tokensPerSec !== undefined ? h("span", { className: "mc-sc-rate", children: fmtRate(e.tokensPerSec) + " tok/s" }) : null
 				),
 				h("div", { className: "mc-sc-actions" },
 					h("button", {
@@ -564,7 +767,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "mc-provider-head" },
 					h("div", { style: { minWidth: 0 } },
 						h("div", { className: "mc-provider-name", children: p.name }),
-						h("div", { className: "mc-provider-sub", children: p.unlimited ? "unlimited concurrency · never queues" : p.limit + " concurrent model calls" })
+						h("div", { className: "mc-provider-sub", children: (p.unlimited ? "unlimited concurrency · never queues" : p.limit + " concurrent model calls") + (p.rates ? " · " + fmtRate(p.rates.instant) + " tok/s now · " + fmtRate(p.rates.avg1m) + " avg 1m" : "") })
 					),
 					h("div", { className: "mc-util" },
 						h("strong", { children: demand }),
@@ -576,7 +779,7 @@ window.__ModuleLoader__.load({
 					h("span", { style: { width: pct + "%" } })
 				),
 				h("div", { className: "mc-section", ref: activeRef },
-					h("div", { className: "mc-section-head", children: ["Active", h("span", { className: "mc-count", children: p.active.length })] }),
+					h("div", { className: "mc-section-head" }, "Active", h("span", { className: "mc-count", children: p.active.length })),
 					activeRows.length === 0 ? h("div", { className: "mc-empty-card", children: "No active calls" }) :
 						activeRows.map(function (row) {
 							if (row.ghost) {
@@ -593,7 +796,7 @@ window.__ModuleLoader__.load({
 						})
 				),
 				h("div", { className: "mc-section", ref: queueRef },
-					h("div", { className: "mc-section-head", children: ["Queue", h("span", { className: "mc-count", children: p.waiters.length })] }),
+					h("div", { className: "mc-section-head" }, "Queue", h("span", { className: "mc-count", children: p.waiters.length })),
 					queueRows.length === 0 ? h("div", { className: "mc-empty-card", children: "Queue empty" }) :
 						queueRows.map(function (row) {
 							if (row.ghost) {
@@ -693,10 +896,10 @@ window.__ModuleLoader__.load({
 		}
 
 		function CapacityPanel() {
-			// 750 ms, not 1500: the poof and the promotion have to land while you are
-			// still looking at the card that caused them.
-			var pair = useSnapshot(750);
-			var snapshot = pair[0], error = pair[1];
+			// Capacity events are pushed within ~150 ms, so the poof and the promotion
+			// land while you are still looking at the card that caused them.
+			var feedState = useFeed();
+			var snapshot = feedState.snapshot, error = feedState.error;
 			var n = React.useState(null);
 			var notice = n[0], setNotice = n[1];
 			var b = React.useState(null);
@@ -720,11 +923,12 @@ window.__ModuleLoader__.load({
 						),
 						h("div", { className: "mc-page-actions" },
 							h("button", { className: "mc-btn", disabled: snapshot === null || snapshot.writable === false, onClick: function () { setLimitsOpen(true); }, children: "Adjust limits" }),
-							h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : ""), children: [h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing"] })
+							h("span", { className: "mc-status" + (snapshot && snapshot.enabled === false ? " off" : "") }, h("i"), snapshot === null ? "loading" : snapshot.enabled === false ? "disabled" : "enforcing")
 						)
 					),
 					notice ? h("div", { className: "mc-notice", children: notice }) : null,
 					error ? h("div", { className: "mc-notice", children: error }) : null,
+					snapshot === null ? null : h(RateStrip, { rates: snapshot.rates, history: feedState.history }),
 					snapshot === null ? h("div", { className: "mc-empty", children: "Loading capacity state…" }) :
 						snapshot.providers.length === 0 ? h("div", { className: "mc-empty", children: "No provider has been used yet." }) :
 							h(React.Fragment, null,
@@ -748,22 +952,36 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		// Wait history changes only when a wait is recorded, which the feed announces
+		// as a new `waitSeq`. Every turn card of a session asks for the same list, so
+		// one request per (session, waitSeq) is shared among them.
+		var waitsCache = {};
+
+		function fetchWaits(sessionId, seq) {
+			var hit = waitsCache[sessionId];
+			if (hit && hit.seq === seq) return hit.promise;
+			var keys = Object.keys(waitsCache);
+			if (keys.length >= 50) delete waitsCache[keys[0]];
+			var promise = rpc("sessionWaits", { sessionId: sessionId }).then(function (res) {
+				return res && res.ok && res.value && Array.isArray(res.value.waits) ? res.value.waits : null;
+			}, function () { return null; });
+			waitsCache[sessionId] = { seq: seq, promise: promise };
+			return promise;
+		}
+
 		function useSessionWaits(sessionId) {
 			var s = React.useState([]);
 			var waits = s[0], setWaits = s[1];
+			var feedState = useFeed();
+			var seq = feedState.snapshot ? feedState.snapshot.waitSeq : null;
 			React.useEffect(function () {
-				if (!sessionId) return undefined;
+				if (!sessionId || feedState.snapshot === null) return undefined;
 				var alive = true;
-				function load() {
-					rpc("sessionWaits", { sessionId: sessionId }).then(function (res) {
-						if (!alive) return;
-						if (res && res.ok && res.value && Array.isArray(res.value.waits)) setWaits(res.value.waits);
-					}, function () {});
-				}
-				load();
-				var timer = setInterval(load, 2000);
-				return function () { alive = false; clearInterval(timer); };
-			}, [sessionId]);
+				fetchWaits(sessionId, seq === undefined ? null : seq).then(function (list) {
+					if (alive && list) setWaits(list);
+				});
+				return function () { alive = false; };
+			}, [sessionId, seq]);
 			return waits;
 		}
 

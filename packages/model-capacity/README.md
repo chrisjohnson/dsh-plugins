@@ -141,14 +141,27 @@ are already interrupted by the restart). No database is used.
   the session log's `title` projection; workspace names come from the workspace
   registry, matched by the session's cwd.
 - The Activity page animates handover, because a list that silently re-shuffles is
-  unreadable. Each poll diffs a provider against the one before it: a lease that
+  unreadable. Each pushed frame diffs a provider against the one before it: a lease that
   left Active is re-rendered in its old position as an inert ghost clone that
   scales up and fades out (~350 ms); a session that moved from Queue to Active gets
   a slide-down-and-fade entrance; the cards still queued slide up to close the gap
   (a small in-section FLIP on `leaseId`/`waiterId` keys, so the motion follows the
-  card, not the row). The panel polls every 750 ms so this lands while you are
-  looking at it. Under `prefers-reduced-motion` none of it runs — no ghost is even
+  card, not the row). Capacity events reach the page within about 150 ms, so this
+  lands while you are looking at it. Under `prefers-reduced-motion` none of it runs — no ghost is even
   mounted, and the lists simply update.
+- **Throughput.** The top of the page shows the output tokens per second of every
+  model call running in this DSH instance added together: a live **now** figure
+  (trailing 3 s, with a sparkline of the last 90 frames) and the **1 minute**,
+  **5 minute** and **1 hour** averages. Each provider card repeats its own now and
+  1-minute figures and each active call card shows that call's own rate. The
+  rate is counted from the stream itself: streamed text, reasoning and tool-call
+  fragments count at four characters per token while they arrive, and when the
+  provider's usage chunk comes in the call is corrected to the provider's own
+  output-token count, so totals are exact and only the live figure is an
+  estimate. The averages are over the whole window, idle time included, and a
+  meter younger than the window averages over its own age, so a freshly started
+  host is not diluted. They are in-memory and start from zero at a host restart.
+  Prompt-processing (prefill) rates are not shown.
 - `conversation.input.dock` on every session: appears only while that session has
   a queued call.
 - Controls: **Cancel turn** (safe; cancels the session's active turn, which
@@ -157,7 +170,29 @@ are already interrupted by the restart). No database is used.
   still run; this can exceed the limit — use it only for a stuck lease).
 
 Routes are under the authenticated `/api` fence:
-`/api/modelCapacity/{snapshot,cancelSession,cancelWaiter,forceRelease}`.
+`/api/modelCapacity/{snapshot,stream,sessionWaits,cancelSession,cancelWaiter,forceRelease,setLimits}`.
+
+### Live updates and their cost
+
+`stream` is the push channel: one long-lived response of newline-delimited JSON
+snapshots. Every component on the page (sidebar pills, the composer dock, the
+Activity page, the per-turn wait cards) shares a single stream, which the browser
+opens only while something is shown **and the tab is visible**. A hidden tab holds
+no connection and runs no timer. On the Host a frame is built once however many
+tabs are connected, capacity events are coalesced into at most one frame per
+150 ms, an idle snapshot (nothing running, nothing queued) is not re-sent apart from
+a 15 s keep-alive, and with nobody connected there is no timer and no work. Session
+titles and workspace names are re-read at most every 10 s and only while a snapshot
+is being read.
+
+Metering costs a constant amount per streamed chunk: one add to a one-second
+bucket in a fixed ring (3600 buckets per meter, one meter overall and one per
+provider), with no allocation and no growth with traffic.
+
+If the stream cannot be held (a proxy that buffers or drops long responses, or an
+older Host) the page falls back to a `snapshot` poll every 2 s while visible and
+retries the stream with back-off up to 30 s; a stream that is silent for 20 s is
+treated as dead.
 
 ## Tests
 
@@ -172,10 +207,13 @@ interactive call), config resolution including the removed 0.3.0 keys, and host
 contracts (no tool registration, no tool guard, no credentials, routes under
 `/api`).
 
-The browser half is not unit-tested and deliberately stays that way: `src/client.mjs`
-is a classic script for `window.__ModuleLoader__` with no module boundary to import
-through, so a test would mean extracting the diff into a second file that only the
-browser loads — a seam for no reviewer's benefit. What it does get is the repository's
+The rate math (`src/rate.mjs`) and the push feed (`src/feed.mjs`) are pure modules
+with their own tests: window arithmetic, ring bounds, estimate-then-reconcile
+accounting, coalescing, keep-alives and unsubscribe cleanup. The browser half is a
+classic script with no module boundary to import through, so its transport is tested
+by loading the real source against stubs (a manual timer wheel, a controllable
+streaming `fetch`, a visibility flag): one shared stream, nothing while hidden, the
+polling fallback and its recovery. The visual side is not unit-tested. It gets the repository's
 Rules-of-Hooks gate (`node scripts/check-plugin-hooks.mjs`, the only automated check
 that can see this file at all) plus the deployment's lab UI smoke, which mounts the
 panel for real and fails on any `slot entry crashed`. The animation behaviour itself is

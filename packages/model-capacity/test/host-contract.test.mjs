@@ -33,6 +33,16 @@ test('routes live under the authenticated /api fence', async () => {
   assert.equal(/webServer\.register/.test(host), false)
 })
 
+test('the host pushes snapshots over a streaming route and does no idle polling of its own', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /STREAM_ENDPOINT/)
+  assert.match(host, /feed\.subscribe/)
+  // Session metadata is refreshed on demand when a snapshot is read, not on a
+  // timer that runs whether or not anyone is looking.
+  assert.equal(/setInterval\(\(\) => void this\.refreshSessionMeta/.test(host), false)
+  assert.match(host, /#touchMeta/)
+})
+
 test('no credentials, endpoints or provider wire code', async () => {
   const files = await sources()
   for (const [name, text] of Object.entries(files)) {

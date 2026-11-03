@@ -8,11 +8,15 @@
 import { Service } from '@deepseek-ai/cordis';
 
 import { ConfigError, isEnabled, limitFor, resolveConfig } from './config.mjs';
+import { SnapshotFeed } from './feed.mjs';
 import { gatedStream } from './gate.mjs';
+import { RateBook, observeChunk } from './rate.mjs';
 import { CapacityManager } from './semaphore.mjs';
 
 const PLUGIN_NAME = 'dsh-model-capacity';
 const API_BASE = '/api/modelCapacity';
+const STREAM_ENDPOINT = 'stream';
+const META_MAX_AGE_MS = 10000;
 const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'forceRelease', 'setLimits'];
 
 export default class ModelCapacity extends Service {
@@ -36,6 +40,10 @@ export default class ModelCapacity extends Service {
     this.metaError = null;
     this.metaUpdatedAt = null;
     this.metaTimer = null;
+    this.metaInFlight = false;
+    this.metaTriedAt = 0;
+    this.rates = new RateBook();
+    this.feed = new SnapshotFeed({ build: () => this.snapshot() });
     this.refreshTimer = null;
     this.reloadTimer = null;
     this.gateDisposer = null;
@@ -89,6 +97,7 @@ export default class ModelCapacity extends Service {
       this.#recordWait(payload);
     }
     if (process.env.DSH_MODEL_CAPACITY_DEBUG === '1') this.log.info('capacity %s %o', type, payload);
+    this.feed.notify();
     try {
       this.ctx.emit('capacity/' + type, payload);
     } catch {
@@ -101,7 +110,7 @@ export default class ModelCapacity extends Service {
     this.started = true;
     this.gateDisposer = this.ctx.on(
       'llm/stream',
-      (options, next) => gatedStream(this.manager, options, next, isEnabled(this.config)),
+      (options, next) => gatedStream(this.manager, options, next, isEnabled(this.config), this.#tap),
       { global: true, prepend: true },
     );
     this.eventDisposers.push(
@@ -114,9 +123,6 @@ export default class ModelCapacity extends Service {
     );
     await this.refreshCatalog();
     await this.refreshSessionMeta();
-    const metaTimer = setInterval(() => void this.refreshSessionMeta(), 10000);
-    if (typeof metaTimer.unref === 'function') metaTimer.unref();
-    this.metaTimer = metaTimer;
     this.#seedBuckets();
     this.#reportUnknownProviders();
     this.#installRoutes();
@@ -125,7 +131,7 @@ export default class ModelCapacity extends Service {
   }
 
   stop() {
-    if (this.metaTimer !== null) clearInterval(this.metaTimer);
+    this.feed.close();
     if (this.reloadTimer !== null) clearInterval(this.reloadTimer);
     if (this.gateDisposer !== null) {
       try {
@@ -160,11 +166,20 @@ export default class ModelCapacity extends Service {
     return entries;
   }
 
+  /** Meters one stream chunk into the global and per-provider rates and the call's own tally. */
+  #tap = (lease, chunk) => {
+    const at = this.manager.now();
+    const delta = observeChunk(lease, chunk, at);
+    if (delta !== 0) this.rates.add(lease.provider, delta, at);
+  };
+
   /**
    * Cache `{title, cwd, workspace}` for every visible session. Titles are the
    * session log's `title` projection; workspace names come from the workspace
    * registry. Refreshed every 10 s so the panel can decorate synchronously
-   * without turning each poll into a full session scan.
+   * without turning each poll into a full session scan. The refresh is demand
+   * driven: it runs when a snapshot is read and the cache is older than ten
+   * seconds, so an idle host with no panel open never scans sessions.
    */
   /** Attach a completed wait to the turn that was open when the call was admitted. */
   #recordWait(payload) {
@@ -187,6 +202,18 @@ export default class ModelCapacity extends Service {
 
   sessionWaits(sessionId) {
     return this.waitHistory.filter((entry) => entry.sessionId === sessionId).sort((a, b) => a.at - b.at);
+  }
+
+  #touchMeta() {
+    if (this.metaInFlight) return;
+    if (Date.now() - this.metaTriedAt < META_MAX_AGE_MS) return;
+    this.metaTriedAt = Date.now();
+    this.metaInFlight = true;
+    void this.refreshSessionMeta()
+      .catch(() => {})
+      .finally(() => {
+        this.metaInFlight = false;
+      });
   }
 
   async refreshSessionMeta() {
@@ -249,9 +276,11 @@ export default class ModelCapacity extends Service {
   // ------------------------------------------------------------------ panel API
 
   snapshot() {
+    this.#touchMeta();
     const snap = this.manager.snapshot();
     const providers = snap.providers.map((provider) => ({
       ...provider,
+      rates: this.rates.providerSummary(provider.name, snap.asOf),
       active: provider.active.map((lease) => ({ ...lease, ...this.describe(lease.sessionId) })),
       waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.describe(waiter.sessionId) })),
     }));
@@ -259,6 +288,8 @@ export default class ModelCapacity extends Service {
       enabled: isEnabled(this.config),
       asOf: snap.asOf,
       totals: snap.totals,
+      rates: this.rates.summary(snap.asOf),
+      waitSeq: this.waitSeq,
       limits: this.config.limits,
       defaultMaxConcurrent: this.config.defaultMaxConcurrent,
       queueLimitPerProvider: this.config.queueLimitPerProvider,
@@ -372,6 +403,12 @@ export default class ModelCapacity extends Service {
         const response = envelope ? { type: 'server-response', rpcId: envelope.rpcId, result } : result;
         return Response.json(response, { headers: { 'cache-control': 'no-store' } });
       };
+      connection.fetch.register({
+        path: `${API_BASE}/${STREAM_ENDPOINT}`,
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => this.#openStream(request),
+      });
       for (const endpoint of ENDPOINTS) {
         connection.fetch.register({
           path: `${API_BASE}/${endpoint}`,
@@ -380,6 +417,41 @@ export default class ModelCapacity extends Service {
           fetch: apiFetch(endpoint),
         });
       }
+    });
+  }
+
+  /**
+   * The push channel: a long-lived response of newline-delimited JSON snapshots.
+   * The browser holds one for as long as a panel is visible; the feed behind it
+   * does no work when none is open. A frame is dropped rather than queued when
+   * the reader is behind, because the next one supersedes it.
+   */
+  #openStream(request) {
+    const encoder = new TextEncoder();
+    let unsubscribe = null;
+    const stop = () => {
+      if (unsubscribe !== null) unsubscribe();
+      unsubscribe = null;
+    };
+    const body = new ReadableStream({
+      start: (controller) => {
+        unsubscribe = this.feed.subscribe((line) => {
+          if (controller.desiredSize !== null && controller.desiredSize <= 0) return;
+          controller.enqueue(encoder.encode(line));
+        });
+        request.signal?.addEventListener('abort', () => {
+          stop();
+          try {
+            controller.close();
+          } catch {
+            // already closed
+          }
+        }, { once: true });
+      },
+      cancel: stop,
+    });
+    return new Response(body, {
+      headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' },
     });
   }
 
