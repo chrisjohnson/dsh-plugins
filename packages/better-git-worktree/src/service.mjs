@@ -17,8 +17,8 @@
 // Performance contract
 // --------------------
 // Every git read goes through the TTL cache in git-runner.mjs, a background timer
-// keeps working-copy status warm, and `git fetch` is throttled per repository. A
-// sidebar poll therefore costs no git process in the steady state.
+// keeps working-copy status warm while a page is attached (and stops when none is),
+// and `git fetch` is throttled per repository. Concurrent polls share their reads.
 
 import { existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -41,6 +41,8 @@ import { findOpener as defaultFindOpener, openFolder as defaultOpenFolder } from
 export const STATUS_TTL_MS = 4000
 export const BACKGROUND_REFRESH_MS = 15000
 export const FETCH_INTERVAL_MS = 90000
+/** A page counts as attached for this long after its last request (several poll periods). */
+export const WATCH_IDLE_MS = 120000
 
 const message = (error) => (error instanceof Error ? error.message : String(error))
 
@@ -73,6 +75,9 @@ export function createService(deps) {
 
   /** repoRoot -> timestamp of the last fetch we kicked. */
   const lastFetchAt = new Map()
+
+  /** When a page last called handleRpc; gates the periodic warm-up (see warmIfWatched). */
+  let lastClientAt = 0
 
   // -- the checkout a session works in ------------------------------------------
 
@@ -163,6 +168,18 @@ export function createService(deps) {
     for (const record of registry.list()) {
       void statusFor(record.sessionId).catch(() => {})
     }
+  }
+
+  /**
+   * The periodic warm-up: refresh every registered copy, but only while a page has
+   * talked to this host recently. With no page attached nothing reads the cache,
+   * so the git processes would be pure waste; the first request after a quiet spell
+   * simply reads cold.
+   */
+  function warmIfWatched(maxIdleMs = WATCH_IDLE_MS) {
+    if (Date.now() - lastClientAt > maxIdleMs) return false
+    warmAll()
+    return true
   }
 
   /** Throttled, non-blocking `git fetch` for one repository. */
@@ -573,18 +590,29 @@ export function createService(deps) {
   // -- RPC surface (client -> host) ---------------------------------------------
 
   async function handleRpc(endpoint, payload) {
+    lastClientAt = Date.now()
     const p = payload !== null && typeof payload === 'object' ? payload : {}
     const sessionId = typeof p.sessionId === 'string' ? p.sessionId : undefined
     switch (endpoint) {
       case 'snapshot': {
-        const entries = []
-        for (const record of registry.list()) {
-          // `force` bypasses the status cache: the archive dialog asks for a fresh read.
-          entries.push(await statusFor(record.sessionId, { force: p.force === true }))
+        // `force` bypasses the status cache: the archive dialog asks for a fresh read.
+        // Reads run side by side (each is single-flight through the cache), in registry order.
+        const force = p.force === true
+        const wantsCurrent = typeof p.statusSessionId === 'string' && p.statusSessionId !== ''
+        const [entries, current] = await Promise.all([
+          Promise.all(registry.list().map((record) => statusFor(record.sessionId, { force }))),
+          // The session on screen rides along, so the page needs one request per refresh, not two.
+          wantsCurrent ? statusFor(p.statusSessionId, { force: p.forceStatus === true || force }) : Promise.resolve(undefined),
+        ])
+        const ignoredByRepo = new Map()
+        const ignoredFor = (repoRoot) => {
+          if (!ignoredByRepo.has(repoRoot)) ignoredByRepo.set(repoRoot, worktreesIgnored(repoRoot))
+          return ignoredByRepo.get(repoRoot)
         }
         return {
           ok: true,
           value: {
+            ...(wantsCurrent ? { current: current ?? null } : {}),
             worktrees: entries.map((entry) => ({
               ...entry,
               // `ignored` only matters for a copy nested inside the checkout; one
@@ -592,7 +620,7 @@ export function createService(deps) {
               // nothing to ignore.
               nested: typeof entry.repoRoot === 'string' && typeof entry.managedRoot === 'string'
                 && entry.managedRoot.startsWith(`${entry.repoRoot}/`),
-              ignored: typeof entry.repoRoot === 'string' ? worktreesIgnored(entry.repoRoot) : true,
+              ignored: typeof entry.repoRoot === 'string' ? ignoredFor(entry.repoRoot) : true,
             })),
             at: Date.now(),
             // What this host can actually do, so the client can offer only the
@@ -744,6 +772,7 @@ export function createService(deps) {
     checkoutForSession,
     statusFor,
     warmAll,
+    warmIfWatched,
     kickFetch,
     createForSession,
     createForPath,

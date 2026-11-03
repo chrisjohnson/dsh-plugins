@@ -559,3 +559,124 @@ test('a fetch failure inside refreshManagedCopy throws with git reason', async (
     t.cleanup()
   }
 })
+
+// ---------------------------------------------------------------------------
+// Request budget: what one page costs this host, and when it costs nothing.
+// ---------------------------------------------------------------------------
+
+import { readWorktreeStatus } from '../src/repository.mjs'
+
+/** A service whose status reads are counted, over a real repository with two prepared copies. */
+async function countedSetup() {
+  const { dir, cleanup } = tempDir('bgw-budget-')
+  const { repo } = makeRepo(dir, { remote: true })
+  const registry = new WorktreeRegistry(join(dir, 'state', REGISTRY_FILE))
+  const agents = new Map()
+  const reads = []
+  const { log } = quietLog()
+  const service = createService({
+    registry,
+    log,
+    home: join(dir, 'home'),
+    getAgent: (id) => agents.get(id),
+    workspaceRegistry: () => ({ resolveByPath: async (path) => ({ id: 'w', path }), delete: async () => {} }),
+    createSession: async () => ({ sessionId: 'continued', carried: true }),
+    overrides: {
+      gitFetch: async () => ({ ok: false }),
+      findOpener: () => undefined,
+      readWorktreeStatus: (path, options) => {
+        reads.push(path)
+        return readWorktreeStatus(path, options)
+      },
+    },
+  })
+  for (const n of ['a', 'b']) {
+    agents.set(`src-${n}`, { id: `src-${n}`, session: { id: `src-${n}`, header: { cwd: repo } } })
+    await service.handleRpc('prepare', { sourceSessionId: `src-${n}`, targetSessionId: `wt-${n}` })
+  }
+  agents.set('plain', { id: 'plain', session: { id: 'plain', header: { cwd: repo } } })
+  reads.length = 0
+  service.cache.invalidatePrefix('status:')
+  return { dir, repo, service, reads, cleanup }
+}
+
+test('snapshot answers for the session on screen in the same response, and only when asked', async () => {
+  const t = await countedSetup()
+  try {
+    const plain = await t.service.handleRpc('snapshot', {})
+    assert.equal('current' in plain.value, false, 'nothing extra unless asked')
+    const asked = await t.service.handleRpc('snapshot', { statusSessionId: 'plain' })
+    assert.equal(asked.value.current.path, t.repo)
+    assert.equal(asked.value.current.branch, 'main')
+    const copy = await t.service.handleRpc('snapshot', { statusSessionId: 'wt-a' })
+    assert.equal(copy.value.current.sessionId, 'wt-a')
+    assert.deepEqual(copy.value.worktrees.map((w) => w.sessionId), ['wt-a', 'wt-b'], 'registry order is kept')
+    const unknown = await t.service.handleRpc('snapshot', { statusSessionId: 'nobody' })
+    assert.equal(unknown.value.current, null)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('the combined answer matches what the separate status call returns', async () => {
+  const t = await countedSetup()
+  try {
+    const separate = (await t.service.handleRpc('status', { sessionId: 'plain' })).value.status
+    const combined = (await t.service.handleRpc('snapshot', { statusSessionId: 'plain' })).value.current
+    assert.deepEqual(combined, separate)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a poll costs one status read per copy plus one for a plain session on screen; the copy on screen is not read twice', async () => {
+  const t = await countedSetup()
+  try {
+    await t.service.handleRpc('snapshot', { statusSessionId: 'wt-a' })
+    assert.equal(t.reads.length, 2, 'two copies, the one on screen included')
+    t.reads.length = 0
+    t.service.cache.invalidatePrefix('status:')
+    await t.service.handleRpc('snapshot', { statusSessionId: 'plain' })
+    assert.equal(t.reads.length, 3, 'two copies and the plain checkout')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('two pages polling at once share the reads', async () => {
+  const t = await countedSetup()
+  try {
+    await Promise.all([t.service.handleRpc('snapshot', {}), t.service.handleRpc('snapshot', {}), t.service.handleRpc('snapshot', {})])
+    assert.equal(t.reads.length, 2, 'one read per copy however many callers')
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('the periodic warm-up does nothing once pages go quiet, and resumes when one asks again', async (ctx) => {
+  const t = await countedSetup()
+  try {
+    // Setup talked to the service; ten quiet minutes later nobody is attached.
+    const real = Date.now
+    const clock = ctx.mock.method(Date, 'now', () => real() + 10 * 60 * 1000)
+    assert.equal(t.service.warmIfWatched(), false)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(t.reads.length, 0, 'no page, no reads')
+    // A page asks: it is attached again, and the copies are kept warm for it.
+    await t.service.handleRpc('snapshot', {})
+    t.reads.length = 0
+    t.service.cache.invalidatePrefix('status:')
+    assert.equal(t.service.warmIfWatched(), true)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(t.reads.length, 2, 'a page is attached: copies are kept warm')
+    // And it goes quiet again.
+    t.reads.length = 0
+    t.service.cache.invalidatePrefix('status:')
+    clock.mock.mockImplementation(() => real() + 20 * 60 * 1000)
+    assert.equal(t.service.warmIfWatched(), false)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(t.reads.length, 0)
+  } finally {
+    t.cleanup()
+  }
+})

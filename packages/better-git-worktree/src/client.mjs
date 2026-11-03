@@ -141,6 +141,24 @@ window.__ModuleLoader__.load({
 			var tracked = null;
 			var started = 0;
 			var applied = 0;
+			var inflight = null;
+			var inflightTracked = null;
+			function sameJson(a, b) {
+				return a === b || JSON.stringify(a) === JSON.stringify(b);
+			}
+			/** Reads the session on screen with `status`; only for a host that does not send `current`. */
+			function legacyStatus(sessionId, force) {
+				return rpc("status", { sessionId: sessionId, force: force })
+					.then(function (result) {
+						if (result && result.ok === true && result.value && result.value.status && sessionId === tracked) {
+							state.current = Object.assign({}, state.current);
+							state.current[sessionId] = result.value.status;
+							return true;
+						}
+						return false;
+					})
+					.catch(function () { return false; });
+			}
 			function emit() {
 				for (var listener of Array.from(listeners)) {
 					try {
@@ -185,30 +203,48 @@ window.__ModuleLoader__.load({
 					return this.refresh(true, true);
 				},
 				/**
-				 * Poll the host. Resolves `{ ok, error }` for THIS request, never rejects:
+				 * Ask the host. Resolves `{ ok, error }` for THIS request, never rejects:
 				 * a caller that needs the present (the archive dialog) must look at `ok`,
 				 * because a failed read leaves the previous entries in place. Requests are
-				 * sequenced by start order, so a slow older poll that finishes after a
+				 * sequenced by start order, so a slow older request that finishes after a
 				 * fresher one cannot overwrite it.
+				 *
+				 * One request carries both the registry and the status of the session on
+				 * screen. A plain refresh (the poll) shares a request that is already in
+				 * flight instead of starting another, and does not bypass the host's
+				 * status cache; `force` (an action just changed something) and `fresh`
+				 * (the archive dialog needs the present) always go out on their own.
+				 * Nothing is re-rendered when the answer is the same as the last one.
 				 */
 				refresh: function (force, fresh) {
+					var plain = force !== true && fresh !== true;
+					if (plain && inflight !== null && inflightTracked === tracked) return inflight;
 					var seq = ++started;
 					var outcome = { ok: false, error: null };
-					var current = tracked === null ? Promise.resolve() : rpc("status", { sessionId: tracked, force: force === true })
-						.then(function (result) {
-							if (result && result.ok === true && result.value && result.value.status) {
-								if (tracked !== null) state.current[tracked] = result.value.status;
-							}
-						})
-						.catch(function () {});
-					var snapshot = rpc("snapshot", fresh === true ? { force: true } : {})
+					var asked = tracked;
+					var payload = {};
+					if (fresh === true) payload.force = true;
+					if (asked !== null) {
+						payload.statusSessionId = asked;
+						if (force === true) payload.forceStatus = true;
+					}
+					var request = rpc("snapshot", payload)
 						.then(function (result) {
 							if (result && result.ok === true) {
 								outcome.ok = true;
-								if (seq < applied) return;
+								if (seq < applied) return false;
 								applied = seq;
+								var value = result.value;
+								var changed = false;
+								if (asked !== null && value.current !== undefined && value.current !== null) {
+									if (!sameJson(state.current[asked], value.current)) {
+										state.current = Object.assign({}, state.current);
+										state.current[asked] = value.current;
+										changed = true;
+									}
+								}
+								var entries = value.worktrees || [];
 								var decorations = {};
-								var entries = result.value.worktrees || [];
 								for (var entry of entries) {
 									if (!entry || typeof entry.sessionId !== "string" || !entry.decoration) continue;
 									var decoration = stableDecoration(state.decorations[entry.sessionId], entry.decoration);
@@ -218,26 +254,43 @@ window.__ModuleLoader__.load({
 									// `targetSessionId`.
 									if (typeof entry.targetSessionId === "string") decorations[entry.targetSessionId] = decoration;
 								}
-								state = Object.assign({}, state, {
-									decorations: decorations,
-									entries: entries,
-									capabilities: result.value.capabilities || {},
-									at: result.value.at,
-									error: null,
-									ready: true,
-								});
-							} else {
-								outcome.error = failureOf(result, "snapshot failed");
-								if (seq > applied) state = Object.assign({}, state, { error: outcome.error, ready: true });
+								var capabilities = value.capabilities || {};
+								if (!state.ready || state.error !== null || !sameJson(state.entries, entries) || !sameJson(state.capabilities, capabilities)) changed = true;
+								if (changed) {
+									state = Object.assign({}, state, {
+										decorations: decorations,
+										entries: entries,
+										capabilities: capabilities,
+										at: value.at,
+										error: null,
+										ready: true,
+									});
+								}
+								// A host that sends no `current` does not answer for the session
+								// on screen; ask for it with `status`.
+								if (asked !== null && value.current === undefined) return legacyStatus(asked, force === true).then(function (moved) { return changed || moved; });
+								return changed;
 							}
+							outcome.error = failureOf(result, "snapshot failed");
+							if (seq > applied) state = Object.assign({}, state, { error: outcome.error, ready: true });
+							return true;
 						})
 						.catch(function (error) {
 							outcome.error = String((error && error.message) || error);
 							if (seq > applied) state = Object.assign({}, state, { error: outcome.error, ready: true });
+							return true;
 						});
-					return Promise.all([current, snapshot]).then(emit).then(function () {
+					var done = request.then(function (changed) {
+						if (changed) emit();
 						return outcome;
 					});
+					if (plain) {
+						inflight = done;
+						inflightTracked = asked;
+						var clear = function () { if (inflight === done) { inflight = null; inflightTracked = null; } };
+						done.then(clear, clear);
+					}
+					return done;
 				},
 			};
 		}
@@ -1329,13 +1382,44 @@ window.__ModuleLoader__.load({
 			var services = servicesOf(ctx);
 			ctx.effect(function () { return installStyles(); }, "dsh-better-git-worktree: styles");
 
+			// A refresh every 10 s keeps the badges honest against changes made outside
+			// the page, but only while the page can be seen: a hidden tab stops asking,
+			// and asks again the moment it is shown.
+			var POLL_MS = 10000;
+			var pollTimer = null;
+			var lastPollAt = 0;
+			function pageHidden() {
+				return !!(document && document.hidden === true);
+			}
+			function pollNow() {
+				lastPollAt = Date.now();
+				void statusStore.refresh(false);
+			}
+			function startPolling() {
+				if (pollTimer !== null) return;
+				pollTimer = setInterval(pollNow, POLL_MS);
+			}
+			function stopPolling() {
+				if (pollTimer === null) return;
+				clearInterval(pollTimer);
+				pollTimer = null;
+			}
+			function onVisibility() {
+				if (pageHidden()) {
+					stopPolling();
+					return;
+				}
+				if (Date.now() - lastPollAt >= POLL_MS) pollNow();
+				startPolling();
+			}
+			lastPollAt = Date.now();
 			void statusStore.refresh(true);
-			var pollTimer = setInterval(function () {
-				void statusStore.refresh(true);
-			}, 10000);
+			if (!pageHidden()) startPolling();
+			if (document && typeof document.addEventListener === "function") document.addEventListener("visibilitychange", onVisibility);
 			ctx.effect(function () {
 				return function () {
-					clearInterval(pollTimer);
+					stopPolling();
+					if (document && typeof document.removeEventListener === "function") document.removeEventListener("visibilitychange", onVisibility);
 				};
 			}, "dsh-better-git-worktree: status polling");
 			ctx.effect(function () { return activationWatcher(ctx); }, "dsh-better-git-worktree: activation watcher");
