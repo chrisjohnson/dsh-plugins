@@ -14,11 +14,26 @@
  * @param {{provider:string, model?:string, sessionId?:string, purpose?:string, signal?:AbortSignal}} options
  * @param {() => AsyncIterable<unknown>} next
  * @param {boolean} enabled
+ * @param {((lease: object, chunk: unknown) => void) | null} [tap] observes every chunk the
+ *   stream yields; a throwing tap never affects the stream.
  * @returns {AsyncIterable<unknown>}
  */
-export async function* gatedStream(manager, options, next, enabled = true) {
+export async function* gatedStream(manager, options, next, enabled = true, tap = null) {
   if (!enabled) {
-    yield* next();
+    if (tap === null) {
+      yield* next();
+      return;
+    }
+    // Inert gate: no slot to hold, but the call still counts toward the rates.
+    const unleased = { provider: options.provider, model: options.model ?? null };
+    for await (const chunk of next()) {
+      try {
+        tap(unleased, chunk);
+      } catch {
+        // Metering must never break a model call.
+      }
+      yield chunk;
+    }
     return;
   }
   const lease = await manager.acquire({
@@ -29,7 +44,18 @@ export async function* gatedStream(manager, options, next, enabled = true) {
     signal: options.signal,
   });
   try {
-    yield* next();
+    if (tap === null) {
+      yield* next();
+    } else {
+      for await (const chunk of next()) {
+        try {
+          tap(lease, chunk);
+        } catch {
+          // Metering must never break a model call.
+        }
+        yield chunk;
+      }
+    }
   } finally {
     lease.release();
   }

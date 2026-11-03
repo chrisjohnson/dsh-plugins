@@ -3,6 +3,35 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.5.0
+
+### Added
+
+- **Realtime throughput on the Activity page.** Concurrent output tokens per second
+  across every model call in the DSH instance: a live figure (trailing 3 s, with a
+  sparkline) and 1 minute, 5 minute and 1 hour averages, plus a now and 1-minute
+  figure on each provider card and a live rate on each active call card. Counted
+  from the streamed chunks (estimated while streaming, corrected to the provider's
+  own output-token count when its usage chunk arrives) into a fixed ring of
+  one-second buckets: constant work per chunk, bounded memory. Prompt-processing
+  rates are not included.
+- A `stream` route under `/api/modelCapacity/` that pushes snapshots to the browser
+  as newline-delimited JSON, and `rates` and `waitSeq` in the snapshot.
+
+### Changed
+
+- The sidebar pills, composer dock, Activity page and per-turn wait cards share one
+  long-lived stream, opened only while something is shown and the tab is visible.
+  Capacity events (promotion, hand-over, cancel) reach the page within about 150 ms.
+  A hidden tab makes no requests. If the stream cannot be held the page polls
+  `snapshot` every 2 s and retries the stream with back-off.
+- The per-turn wait cards share one `sessionWaits` request per session and refetch
+  only when a new wait has been recorded.
+- On the Host, session titles and workspaces are refreshed on demand (at most every
+  10 s, only while a snapshot is being read), and an unchanged idle snapshot is not
+  re-sent.
+- Fixed React "unique key" warnings from the status pill and section headers.
+
 ## 0.4.0
 
 ### Removed
