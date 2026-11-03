@@ -430,6 +430,7 @@ var CSS =
 		var POLL_BASE_MS = 3000;
 		var POLL_MAX_MS = 30000;
 		var POLL_FAST_POLLS = 3;
+		var POLL_FAILURES_SHOWN = 2;
 		var RETRY_BASE_MS = 2000;
 		var RETRY_MAX_MS = 30000;
 		var CLOCK_MS = 3000;
@@ -521,6 +522,7 @@ var CSS =
 			var retryTimer = null;
 			var stallTimer = null;
 			var failures = 0;
+			var pollFailures = 0;
 			var unchangedRun = 0;
 			var generation = 0;
 			var held = 0;
@@ -577,17 +579,28 @@ var CSS =
 					if (res && res.ok && res.value) {
 						if (!res.value.unchanged) changed = ingest(res.value);
 						unchangedRun = changed ? 0 : unchangedRun + 1;
-						if (state.error !== null) set({ error: null });
-					} else if (res && res.error) {
-						set({ error: res.error.message });
+						pollSucceeded();
+					} else {
+						pollFailed(res && res.error ? res.error.message : "Could not reach the Host.");
 					}
 					schedulePoll();
 				}, function () {
 					if (mine !== generation || state.mode !== "poll") return;
-					set({ error: "Could not reach the Host." });
-					unchangedRun += 1;
+					pollFailed("Could not reach the Host.");
 					schedulePoll();
 				});
+			}
+			// A failed ask is said out loud only when the next one fails too, so a
+			// single dropped request never flashes a banner; every failure slows the
+			// asking down, and the first success clears the banner and the slowdown.
+			function pollFailed(text) {
+				pollFailures += 1;
+				unchangedRun += 1;
+				if (pollFailures >= POLL_FAILURES_SHOWN && state.error !== text) set({ error: text });
+			}
+			function pollSucceeded() {
+				pollFailures = 0;
+				if (state.error !== null) set({ error: null });
 			}
 			function schedulePoll() {
 				if (state.mode !== "poll" || pollTimer !== null) return;
@@ -649,6 +662,7 @@ var CSS =
 								if (pollTimer !== null) { env.clearTimeout(pollTimer); pollTimer = null; }
 								if (retryTimer !== null) { env.clearTimeout(retryTimer); retryTimer = null; }
 								failures = 0;
+								pollSucceeded();
 								if (state.mode !== "stream") set({ mode: "stream" });
 								ingest(frame);
 							}
@@ -2570,6 +2584,8 @@ var CSS =
 			var detail = det[0], setDetail = det[1];
 			var n = React.useState(null);
 			var notice = n[0], setNotice = n[1];
+			var dpState = React.useState(null);
+			var detailProblem = dpState[0], setDetailProblem = dpState[1];
 			var c = React.useState(false);
 			var creating = c[0], setCreating = c[1];
 			var v = React.useState("board");
@@ -2633,9 +2649,31 @@ var CSS =
 
 			// The board arrives by itself (see the live board store); this asks for
 			// it right now, after something this page did or on request.
-			function loadBoard() {
-				boardStore.refresh().then(function (problem) { if (problem) setNotice(problem); });
+			// A reload the person asked for (the Refresh button) also clears whatever
+			// notice is up when it works.
+			function loadBoard(asked) {
+				boardStore.refresh().then(function (problem) {
+					if (problem) setNotice(problem);
+					else if (asked === true) setNotice(null);
+				});
 			}
+			// A notice that polling set is cleared by the next poll that works, and
+			// by moving to another ticket or view; one a user action set stays until
+			// the next action that works.
+			var detailFailures = React.useRef(0);
+			function detailPollOk() {
+				detailFailures.current = 0;
+				setDetailProblem(null);
+			}
+			function detailPollFailed(text) {
+				detailFailures.current += 1;
+				if (detailFailures.current >= POLL_FAILURES_SHOWN) setDetailProblem(text);
+			}
+			React.useEffect(function () {
+				setNotice(null);
+				detailFailures.current = 0;
+				setDetailProblem(null);
+			}, [selectedId, view]);
 			// The ticket on screen. The Host is told which version this page holds
 			// and answers "unchanged" in a line when nothing moved. The event log is
 			// not part of it: its tab asks for it itself.
@@ -2645,10 +2683,15 @@ var CSS =
 				rpc("ticket", { id: id, since: since, events: false }).then(function (res) {
 					if (selectedRef.current !== id) return;
 					if (res && res.ok) {
+						detailPollOk();
 						if (res.value && res.value.unchanged) return;
 						if (res.value && res.value.ticket) res.value.ticket.readAt = Date.now();
 						setDetail(res.value);
-					} else if (res && res.error) { setNotice(res.error.message); }
+					} else {
+						detailPollFailed(res && res.error ? res.error.message : "Could not reach the Host.");
+					}
+				}, function () {
+					if (selectedRef.current === id) detailPollFailed("Could not reach the Host.");
 				});
 			}
 			// The workspace and preset lists are read when the page opens and again
@@ -2715,12 +2758,12 @@ var CSS =
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
-						h("button", { className: "kb-btn", onClick: function () { loadBoard(); }, children: "Refresh" }),
+						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
 					)
 				),
 				h("div", { className: "kb-body", ref: bodyRef },
-					notice || live.error ? h("div", { className: "kb-notice" }, notice || live.error) : null,
+					notice || live.error || detailProblem ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem) : null,
 					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
 					selectedId ? h(TicketDetail, {
 						detail: detail,

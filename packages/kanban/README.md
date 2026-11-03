@@ -643,8 +643,27 @@ red card whose session is paused mid-turn on a person says so in its badge —
 **Awaiting approval** for an unanswered approval prompt, **Waiting on you** for
 an unanswered question — in any phase, not only in approval.
 
+### How the board stays current
+
+A visible board holds one long-lived `POST /api/kanban/stream` response of
+newline-delimited JSON frames, shared by the sidebar badges and the page. A frame
+carries the compact board (Done and Discarded once, in `closed`) with `seq`,
+`boot`, `token` and `asOf`; a change that leaves the board alone sends `{token}`
+only, which tells an open ticket page to look again. A quiet board sends a
+keep-alive every 15 seconds and nothing else. A hidden tab holds no stream and
+sends no request. If the stream cannot be held, the page asks `board` with
+`{compact, since: <token>}` instead; an unchanged board is answered
+`{unchanged: true}`, and the asking slows from 3 to 30 seconds while nothing
+changes or the Host is down. `ticket` takes `{since, events}` the same way:
+`unchanged` when nothing about the ticket moved, and `events: false` leaves the
+lifecycle log out (the Events tab reads it from `events`). The ticket payload no
+longer carries `spanTree` or a second copy of each artifact (they ride on their
+timeline steps). A working time that is still growing is carried forward by the
+page between frames (`accruing`). The "Could not reach the Host." banner needs two
+failed polls in a row and clears on the first poll that works.
+
 Clicking a card opens the ticket detail. Nothing in the board ever opens a
-session by itself: watching the poll, or clicking through a ticket that is
+session by itself: watching the board, or clicking through a ticket that is
 planning, building or reviewing, never navigates you out of the board. The
 explicit buttons still do — **Open build session** on the approval panel,
 **Open session** in the detail hero while a mid-turn wait is pending (it lands
