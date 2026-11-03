@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -267,6 +267,19 @@ const V6 = `
 ALTER TABLE tickets ADD COLUMN worktree INTEGER NOT NULL DEFAULT 0 CHECK (worktree IN (0, 1));
 `;
 
+const V7 = `
+-- KAN-31: one definition of done that the plan, the build and the review all
+-- read the same way. A condition may be marked deferred — it is real work that
+-- only a human can evidence (merging a release, restarting a service), so the
+-- review gate must be able to pass a ticket whose only unmet conditions are
+-- deferred ones, and hand those to the approval prompt instead of burning an
+-- implement attempt on them. human_evidence says what the human is asked to
+-- check, so the park explains itself. Additive ALTERs only: every existing row
+-- reads deferred = 0 with no evidence and behaves exactly as it did.
+ALTER TABLE conditions ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0 CHECK (deferred IN (0,1));
+ALTER TABLE conditions ADD COLUMN human_evidence TEXT NOT NULL DEFAULT '';
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -301,5 +314,10 @@ export const MIGRATIONS = [
     version: 6,
     name: 'lazy-worktree-intent',
     sql: V6,
+  },
+  {
+    version: 7,
+    name: 'deferred-conditions',
+    sql: V7,
   },
 ];

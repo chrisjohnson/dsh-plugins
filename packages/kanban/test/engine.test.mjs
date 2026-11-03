@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -41,15 +42,21 @@ const REVIEW_FAIL = {
   scope_drift: 'none',
   acceptance_coverage: [],
 }
+// KAN-31: the no-progress signature records the ids the review named unmet, so a
+// fail that actually lists them is the case the guard is built for.
+const REVIEW_FAIL_ROW = {
+  ...REVIEW_FAIL,
+  done_when: [{ id: 'notes', met: false, confidence: 0.9, evidence: 'notes.txt does not exist' }],
+}
 
 const PROMPTS = {
   bodies: {
     'plan-human': 'plan {{ticket_state}}',
     'plan-self': 'plan self {{ticket_state}}',
-    implement: 'implement {{plan}} {{done_when}}',
-    rework: 'rework {{review}}',
-    review: 'review {{diff}}',
-    approval: 'approval {{plan}} {{review}}',
+    implement: 'implement {{plan}} {{done_when}} {{release_scope}}',
+    rework: 'rework {{review}} {{release_scope}}',
+    review: 'review {{diff}} {{done_when}}',
+    approval: 'approval {{plan}} {{review}}{{deferred}}',
   },
   hashes: { plan: 'h' },
 }
@@ -160,6 +167,22 @@ function setup(queues = {}, options = {}) {
   }
   const engine = new Engine({ ctx, store, driver, getConfig: () => config, getPrompts: () => PROMPTS, log })
   return { store, driver, engine, config, lookups }
+}
+
+/**
+ * A scratch git repo with one commit. KAN-31's no-progress guard reads the real
+ * working tree, so the test that exercises it needs a real tree to read.
+ */
+function gitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'kanban-engine-git-'))
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore' })
+  git('init', '-q')
+  git('config', 'user.email', 'test@example.com')
+  git('config', 'user.name', 'test')
+  writeFileSync(join(dir, 'README.md'), 'seed\n')
+  git('add', 'README.md')
+  git('commit', '-q', '-m', 'seed')
+  return dir
 }
 
 function pickedUp(store, extra = {}) {
@@ -290,12 +313,11 @@ test('review failure returns to implement in the same build session', async () =
   assert.equal([...driver.ticketSessions.keys()].filter((key) => key.includes(':build')).length, 1)
 })
 
-test('a passing review missing planned evidence returns to implement', async () => {
+test('a passing review missing planned evidence goes back to the reviewer, not the build', async () => {
+  // KAN-31: an empty done_when is a defect in the review submission. It used to
+  // cost an implement round; now the reviewer is asked once to fix its own answer
+  // and the build keeps its attempt.
   const { store, engine } = setup({
-    implement: [
-      { type: 'implementation', value: IMPLEMENTATION },
-      { type: 'implementation', value: IMPLEMENTATION },
-    ],
     review: [
       { type: 'review', value: { ...REVIEW_PASS, done_when: [] } },
       { type: 'review', value: REVIEW_PASS },
@@ -303,8 +325,10 @@ test('a passing review missing planned evidence returns to implement', async () 
   })
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
-  assert.equal(store.getTicket(ticket.id).phase, 'verify')
-  assert.equal(store.getTicket(ticket.id).attemptCount, 2)
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'verify')
+  assert.equal(parked.needsAttentionReason, 'Awaiting human approval')
+  assert.equal(parked.attemptCount, 1, 'no implement round was spent on a review-shape gap')
 })
 
 test('approval can submit a follow-up plan for another round', async () => {
@@ -1019,4 +1043,247 @@ test('the plan prompt carries the build session write mode and workspace root', 
     cwd: ticket.workspaceCwd ?? CWD,
   })
   assert.equal(rendered, 'mode=danger-full-access cwd=' + CWD)
+})
+
+// ---------------------------------------------------------- KAN-31 review gate
+//
+// The gate now splits what the build must fix from what the reviewer must fix,
+// hands a deferred condition to approval instead of burning a round on it, and
+// refuses to spend an attempt re-running a rework against an unchanged tree.
+
+const DEFERRED_PLAN = {
+  summary: 'write the file; the human lands the release',
+  steps: ['create notes.txt'],
+  release_scope: 'stop_before_merge',
+  done_when: [
+    { id: 'notes', statement: 'note exists', how_verified: 'test -f notes.txt' },
+    {
+      id: 'release-landed',
+      statement: 'merged to main and tagged',
+      how_verified: 'git ls-remote origin refs/tags/v1 prints a sha',
+      deferred: true,
+      human_evidence: 'git ls-remote origin refs/tags/v1 prints a sha',
+    },
+  ],
+}
+const IMPLEMENT_DEFERRED = {
+  status: 'complete',
+  summary: 'created notes.txt',
+  changed_files: ['notes.txt'],
+  done_when: [
+    { id: 'notes', met: true, confidence: 0.95, evidence: 'notes.txt:1 hello' },
+    { id: 'release-landed', met: false, confidence: 0.95, evidence: 'not merged — the plan defers the release to approval' },
+  ],
+}
+const REVIEW_DEFERRED = {
+  verdict: 'pass',
+  reasons: ['the code round is complete'],
+  scope_drift: 'none',
+  done_when: [
+    { id: 'notes', met: true, confidence: 0.95, evidence: 'notes.txt:1 hello' },
+    { id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it: git ls-remote origin refs/tags/v1' },
+  ],
+  acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
+}
+
+function deferredQueues(extra = {}) {
+  return {
+    plan: [{ type: 'plan', value: DEFERRED_PLAN }],
+    implement: [{ type: 'implementation', value: IMPLEMENT_DEFERRED }],
+    review: [{ type: 'review', value: REVIEW_DEFERRED }],
+    ...extra,
+  }
+}
+
+test('a pass whose only unmet condition is deferred goes to approval and spends no attempt', async () => {
+  const { store, engine } = setup(deferredQueues())
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'verify')
+  assert.equal(parked.needsAttentionReason, 'Awaiting human approval')
+  assert.equal(parked.attemptCount, 1, 'the deferred condition cost no implement round')
+  const requested = store.listEvents(ticket.id).find((event) => event.kind === 'approval_requested')
+  assert.deepEqual(requested.payload.deferred, ['release-landed'])
+  // The marker really is stored, so the board, the prompts and the gate agree.
+  const stored = store.listConditions(ticket.id)
+  assert.equal(stored.find((c) => c.id === 'release-landed').deferred, true)
+  assert.equal(stored.find((c) => c.id === 'release-landed').humanEvidence, 'git ls-remote origin refs/tags/v1 prints a sha')
+  assert.equal(stored.find((c) => c.id === 'notes').deferred, false)
+})
+
+test('the approval prompt names each deferred condition and what the human checks', async () => {
+  const { store, engine } = setup(deferredQueues())
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const prompt = store.latestArtifact(ticket.id, 'approver_prompt_approval').content
+  assert.match(prompt, /release-landed/)
+  assert.match(prompt, /deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha/)
+  assert.match(prompt, /the human evidences these, not you/)
+})
+
+test('the implement prompt carries the release scope and marks the deferred condition', async () => {
+  const { store, engine } = setup(deferredQueues())
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const prompt = store.latestArtifact(ticket.id, 'implementer_prompt_implement').content
+  assert.match(prompt, /Release scope: this plan stops before the release/)
+  assert.match(prompt, /\(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
+  // The plan artifact carries the scope, so a reopened session re-reads it.
+  assert.equal(JSON.parse(store.latestArtifact(ticket.id, 'plan').content).releaseScope, 'stop_before_merge')
+})
+
+test('a review prompt marks the deferred condition for the reviewer', async () => {
+  const { store, engine } = setup(deferredQueues())
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const prompt = store.latestArtifact(ticket.id, 'reviewer_prompt_review').content
+  assert.match(prompt, /`release-landed` — merged to main and tagged \(deferred to approval/)
+})
+
+test('a fail whose only unmet conditions are deferred is routed like a pass', async () => {
+  const failedButDeferred = { ...REVIEW_DEFERRED, verdict: 'fail', reasons: ['the release is not landed'], instruction: 'nothing for the build to do' }
+  const { store, engine } = setup(deferredQueues({ review: [{ type: 'review', value: failedButDeferred }] }))
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'verify')
+  assert.equal(parked.attemptCount, 1)
+  const requested = store.listEvents(ticket.id).find((event) => event.kind === 'approval_requested')
+  assert.deepEqual(requested.payload.deferred, ['release-landed'])
+})
+
+test('a cosmetic gap gets exactly one retry turn, in the review session, quoting the gap', async () => {
+  const { store, engine, driver } = setup({
+    review: [
+      { type: 'review', value: { ...REVIEW_PASS, done_when: [] } },
+      { type: 'review', value: REVIEW_PASS },
+    ],
+  })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  // plan, implement, review, review-retry, approval — all in the one build session.
+  assert.deepEqual(driver.turns, [driver.ticketSessions.get(`${ticket.id}:plan`), buildId, buildId, buildId, buildId])
+  const retry = store.latestArtifact(ticket.id, 'reviewer_prompt_review-retry').content
+  assert.match(retry, /done_when\.notes is missing from the review/)
+  assert.match(retry, /The plan's condition ids are exactly: `notes`/)
+  assert.match(retry, /"note exists"/, 'the stored acceptance statements are spelled out')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 1)
+})
+
+test('a second cosmetic gap parks the review instead of returning to the build', async () => {
+  const { store, engine, driver } = setup({
+    review: [
+      { type: 'review', value: { ...REVIEW_PASS, done_when: [] } },
+      { type: 'review', value: { ...REVIEW_PASS, acceptance_coverage: [{ condition: 'notes', acceptance: 'a sentence from the body' }] } },
+    ],
+  })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'review', 'the ticket never left review — the work was not what was in question')
+  assert.match(parked.needsAttentionReason, /Review cannot be code-verified/)
+  assert.match(parked.needsAttentionReason, /asked once to fix its own submission/)
+  assert.equal(parked.attemptCount, 1)
+  // plan, implement, review, review-retry — and no second build round.
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  assert.deepEqual(driver.turns, [driver.ticketSessions.get(`${ticket.id}:plan`), buildId, buildId, buildId])
+  assert.equal(store.listSpans(ticket.id).filter((span) => span.name === 'implement').length, 1)
+})
+
+test('a substantive gap on a passing review still returns to implement', async () => {
+  const unmet = {
+    ...REVIEW_PASS,
+    done_when: [{ id: 'notes', met: false, confidence: 0.9, evidence: 'notes.txt does not exist' }],
+  }
+  const { store, engine } = setup({
+    implement: [
+      { type: 'implementation', value: IMPLEMENTATION },
+      { type: 'implementation', value: IMPLEMENTATION },
+    ],
+    review: [{ type: 'review', value: unmet }, { type: 'review', value: REVIEW_PASS }],
+  })
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 2, 'a real gap still costs a round')
+})
+
+test('the exhausted-budget park names the fresh budget a human retry grants', async () => {
+  const { store, engine } = setup(
+    {
+      implement: [
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+      ],
+      review: [{ type: 'review', value: REVIEW_FAIL }, { type: 'review', value: REVIEW_FAIL }],
+    },
+    { config: { maxAttempts: 1 } },
+  )
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.attemptCount, 1)
+  assert.match(parked.needsAttentionReason, /attempt budget exhausted \(1\) — a human Retry with instruction grants a fresh budget/)
+})
+
+test('a rework round against an unchanged working tree parks with no progress', async () => {
+  const cwd = gitRepo()
+  const { store, engine } = setup(
+    {
+      implement: [
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+      ],
+      review: [{ type: 'review', value: REVIEW_FAIL_ROW }, { type: 'review', value: REVIEW_FAIL_ROW }],
+    },
+    {},
+  )
+  const ticket = pickedUp(store, { workspaceCwd: cwd })
+  await engine.advance(store.getTicket(ticket.id))
+  // Round one runs, the review fails, round two runs and changes nothing, the
+  // review fails again — and the third round is never paid for.
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.attemptCount, 2, 'the wasted third round was not spent')
+  assert.match(parked.needsAttentionReason, /no progress: the working tree is unchanged/)
+  assert.match(parked.needsAttentionReason, /notes/, 'the reason names the condition still failing')
+  const signature = JSON.parse(store.latestArtifact(ticket.id, 'rework_signature').content)
+  assert.deepEqual(signature.failingIds, ['notes'])
+})
+
+test('a rework round that moves the tree is not called no-progress', async () => {
+  const cwd = gitRepo()
+  const { store, engine, driver } = setup(
+    {
+      implement: [
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+      ],
+      review: [
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_PASS },
+      ],
+    },
+    {},
+  )
+  const ticket = pickedUp(store, { workspaceCwd: cwd })
+  // Stand in for an implementer that actually changed the working tree in its
+  // round: the file appears when the second build turn is prompted.
+  let buildTurns = 0
+  const sendTurn = driver.sendTurn.bind(driver)
+  driver.sendTurn = async (input) => {
+    if (driver.sessions.get(input.sessionId)?.role === 'implementer') {
+      buildTurns += 1
+      if (buildTurns === 2) writeFileSync(join(cwd, 'notes.txt'), 'hello\n')
+    }
+    return sendTurn(input)
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(buildTurns, 3, 'the third round ran because the tree had moved')
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 3)
 })

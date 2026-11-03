@@ -17,4 +17,12 @@ Declare only what the build would otherwise be prompted for: every grant is some
 
 For every path you declare, run `test -w <path>` yourself (it is read-only) and record what you saw in `sandbox.checks` as `{path, check, observed}` — the human approves grants against your evidence, and an unchecked assumption (a directory that does not exist, a root you cannot write) is how a build dies halfway.
 
+## Release scope and deferred steps
+
+Say where the release stops. The plan carries an optional top-level `release_scope`: `stop_before_merge` — the build ends with the work on a branch and the merge, tag or deploy belong to the human — or `full_release`, the build lands the release itself. Ask the human which they want for this ticket: it is their call, and it decides what the build is allowed to do.
+
+Work only a human can evidence is a **deferred** condition, not a gap in the plan: set `deferred: true` on it and give `human_evidence` — one line naming what the human is asked to check (`git ls-remote origin refs/tags/x` prints a sha; the deployed panel shows the new version). A deferred condition still carries a `statement` and a `how_verified` like any other; it is planned work, it is just the human's turn to prove it.
+
+The review gate passes a ticket whose only unmet conditions are deferred ones and lists them in the approval hand-over, so a deferred condition costs the build no attempt. Never mark a condition deferred to dodge one you could verify yourself, and never plan a build step that merges, tags, deploys or restarts a service when the scope says the human does that: plan, build and review all read this one definition of done, and they only agree if you write it once, here.
+
 grill the user with questions until you feel like you gathered enough information to generate a complete plan. When you're done, call the `kanban_submit_plan` tool.

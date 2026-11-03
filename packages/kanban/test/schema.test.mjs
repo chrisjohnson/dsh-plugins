@@ -105,7 +105,7 @@ test('v5 adds nullable preset and write_mode; migrated rows keep NULL', () => {
 
 test('v6 adds tickets.worktree and every pre-existing row reads 0', () => {
   const db = v3Database()
-  assert.equal(migrate(db), 6)
+  assert.equal(migrate(db), SCHEMA_VERSION)
   const column = db.prepare('PRAGMA table_info(tickets)').all().find((row) => row.name === 'worktree')
   assert.ok(column, 'tickets.worktree exists')
   assert.equal(column.notnull, 1, 'NOT NULL')
@@ -164,4 +164,52 @@ test('v6 on a v5 fixture: existing rows gain worktree 0 and keep their workspace
   assert.equal(row.workspace_cwd, '/home/me/.dsh-worktrees/brave-forge', 'and keeps the copy it already points at')
   assert.equal(row.preset, 'standard')
   assert.equal(row.write_mode, 'workspace-write')
+})
+
+// ---------------------------------------------------------------- KAN-31 v7
+
+test('v7 applies to a v6 database and every pre-existing condition reads not-deferred', () => {
+  const db = new DatabaseSync(':memory:')
+  applyUpTo(db, 6)
+  const at = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at)
+     VALUES ('id-v6', 'KAN-31', 'deferred gate', 'working', 'implement', 'at_pickup', 'interactive', ?, ?)`,
+  ).run(at, at)
+  db.prepare(
+    `INSERT INTO conditions (ticket_id, plan_version, ordinal, condition_id, statement, how_verified, source, created_at)
+     VALUES ('id-v6', 1, 1, 'unit-tests', 'the suites pass', 'node --test', 'plan', ?)`,
+  ).run(at)
+  assert.equal(migrate(db), SCHEMA_VERSION)
+  const columns = db.prepare('PRAGMA table_info(conditions)').all().map((row) => row.name)
+  assert.ok(columns.includes('deferred'), 'conditions.deferred exists')
+  assert.ok(columns.includes('human_evidence'), 'conditions.human_evidence exists')
+  // The additive ALTERs backfill, they do not reinterpret: a condition written
+  // before 0.17.0 was never deferred and must not start riding to approval.
+  const row = db.prepare("SELECT deferred, human_evidence FROM conditions WHERE condition_id = 'unit-tests'").get()
+  assert.equal(row.deferred, 0)
+  assert.equal(row.human_evidence, '')
+  // Nothing else about the row moved.
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM conditions').get().n, 1)
+  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+})
+
+test('v7 deferred CHECK accepts 0 and 1 and rejects anything else', () => {
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  const at = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO tickets (id, key, title, col, phase, plan_timing, plan_questions, created_at, updated_at)
+     VALUES ('id-v7', 'KAN-32', 'v7 check', 'working', 'implement', 'at_pickup', 'interactive', ?, ?)`,
+  ).run(at, at)
+  const insert = (value, evidence = '') =>
+    db.prepare(
+      `INSERT INTO conditions (ticket_id, plan_version, ordinal, condition_id, statement, how_verified, source, created_at, deferred, human_evidence)
+       VALUES ('id-v7', 1, ?, ?, 's', 'v', 'plan', ?, ?, ?)`,
+    ).run(value, `c-${value}-${evidence.length}`, at, value, evidence)
+  insert(0)
+  insert(1, 'git ls-remote prints a sha')
+  assert.throws(() => insert(2), /CHECK constraint failed/)
+  // NOT NULL: a deferred flag that is not there is 0, never missing.
+  assert.throws(() => insert(null), /CHECK constraint failed|NOT NULL constraint failed/)
 })

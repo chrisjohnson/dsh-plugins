@@ -5,6 +5,57 @@
 
 ## Unreleased
 
+## 0.17.0
+
+### Fixed
+
+- **The review gate no longer burns an implement attempt on a human-gated step**
+  (KAN-31). A plan can now mark a condition `deferred: true` with the
+  `human_evidence` the human is asked to check, and declare a top-level
+  `release_scope` of `stop_before_merge` or `full_release`. The review gate
+  accepts an unmet deferred row as a pass and routes the ticket straight to
+  approval with those conditions listed in the hand-over and in the
+  `approval_requested` event, so "merged to main and tagged" costs the build no
+  round. A fail verdict whose only unmet conditions are deferred ones is routed
+  the same way.
+- **A malformed review no longer costs the build a round.** `verifyReview` splits
+  its gaps into substantive ones (a non-deferred condition unmet, under-confident
+  or unevidenced — the build's problem, back to implement as before) and cosmetic
+  ones (a missing, duplicated or invented `done_when` id, a malformed coverage
+  row, an uncovered statement — the reviewer's problem). Cosmetic-only gaps get
+  exactly one retry turn in the same session carrying the exact gap text, the
+  plan's condition ids and the stored acceptance statements; a second cosmetic
+  failure parks the ticket in review with that text instead of spending an
+  attempt. The review-retry budget is now structurally separate from the
+  implement-attempt budget.
+- **Invented acceptance rows are ignored, not rejected.** `acceptance_coverage`
+  is compared against the stored acceptance only. A row quoting a sentence from
+  the ticket body — what a reviewer does when the ticket stored nothing — no
+  longer fails a review that was fine. Every stored statement still has to be
+  covered.
+- **A human "Retry with instruction" grants the fresh budget the park promises.**
+  The exhausted-attempt park now says so, and both retry endpoints reset the
+  counter to a fresh budget and record a `budget_reset` event, instead of parking
+  again on the next round with the counter still spent.
+- **A rework round that changes nothing is no longer paid for.** Each rework round
+  records the working tree it started from (`rework_signature`: diff hash plus the
+  condition ids the review left failing). A later rework round that starts from
+  that same tree parks with a no-progress reason naming those ids, rather than
+  burning the attempt re-running an instruction against an unchanged tree.
+- **The board no longer prints "5 / 3".** The ticket detail carries the real
+  configured `maxAttempts` and the Overview reads it.
+
+### Added
+
+- `release_scope` and per-condition `deferred` / `human_evidence` in the plan
+  protocol (`validatePlan`, `normalizePlan`, `kanban_submit_plan`), stored on the
+  condition rows (schema v7, additive `ALTER`s), rendered into the plan, build,
+  rework, review and approval prompts, and shown on the ticket's condition table.
+- Both plan prompts gained a "Release scope and deferred steps" section, so the
+  plan, the build and the review are coached on one definition of done. The
+  KAN-19 agent-verifiable rule and the KAN-30 sandbox section are unchanged.
+
+
 ## 0.16.3
 
 ### Fixed

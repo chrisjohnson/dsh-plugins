@@ -195,6 +195,18 @@ export function gateImplement({ value, conditions, threshold }) {
   return { decision: 'adjudicate', gaps, conditions: detail, schemaErrors: [], reason: 'conditions' };
 }
 
+const RELEASE_SCOPES = new Set(['stop_before_merge', 'full_release']);
+
+/**
+ * KAN-31: what a plan may say about where the release stops. `stop_before_merge`
+ * means the build ends with the work on a branch and the merge, tag or deploy as
+ * deferred conditions; `full_release` means the build itself lands it. Absent
+ * means the plan has no opinion, which is every plan written before 0.17.0.
+ */
+export function isReleaseScope(value) {
+  return typeof value === 'string' && RELEASE_SCOPES.has(value);
+}
+
 /** Validate a plan: at least one individually checkable condition. */
 export function validatePlan(value) {
   const errors = [];
@@ -211,9 +223,25 @@ export function validatePlan(value) {
       else seen.add(item.id);
       if (!isNonEmptyString(item.statement)) errors.push(`${at}.statement is required`);
       if (!isNonEmptyString(item.how_verified ?? item.howVerified)) errors.push(`${at}.how_verified is required`);
+      // KAN-31: a deferred condition is the honest way to plan work only a human
+      // can evidence. It is still a condition — it just gets its evidence from
+      // the approval step — so it has to say what the human is being asked.
+      if (item.deferred !== undefined && typeof item.deferred !== 'boolean') errors.push(`${at}.deferred must be a boolean`);
+      if (item.deferred === true && !isNonEmptyString(item.human_evidence ?? item.humanEvidence)) {
+        errors.push(`${at}.human_evidence is required when deferred is true`);
+      }
+      // A non-deferred row carrying human_evidence is not an error: the field is
+      // simply inert, and rejecting a plan over an inert field is how a gate
+      // starts losing plans it should have kept.
+      if (item.deferred !== true && item.human_evidence !== undefined && typeof item.human_evidence !== 'string') {
+        errors.push(`${at}.human_evidence must be a string`);
+      }
     });
   }
   if (value.summary !== undefined && typeof value.summary !== 'string') errors.push('summary must be a string');
+  if (value.release_scope !== undefined && !isReleaseScope(value.release_scope)) {
+    errors.push('release_scope must be stop_before_merge or full_release');
+  }
   // KAN-30: the optional sandbox section. Every rejection here is the plan
   // session being told, before a human ever sees it, that a grant it declared
   // is unusable — a relative path cannot contain anything, and a denylisted
@@ -230,12 +258,22 @@ export function normalizePlan(value) {
   const plan = {
     summary: typeof value.summary === 'string' ? value.summary : '',
     steps: Array.isArray(value.steps) ? value.steps.filter((s) => typeof s === 'string') : [],
-    conditions: conditions.map((c, index) => ({
-      id: String(c.id),
-      statement: String(c.statement),
-      howVerified: String(c.how_verified ?? c.howVerified),
-      ordinal: index,
-    })),
+    conditions: conditions.map((c, index) => {
+      const condition = {
+        id: String(c.id),
+        statement: String(c.statement),
+        howVerified: String(c.how_verified ?? c.howVerified),
+        ordinal: index,
+      };
+      // KAN-31: a plain condition normalizes to exactly the shape it had before,
+      // so an unchanged plan keeps a byte-identical artifact. The deferred keys
+      // appear only on a condition that asked for the treatment.
+      if (c.deferred === true) {
+        condition.deferred = true;
+        condition.humanEvidence = String(c.human_evidence ?? c.humanEvidence);
+      }
+      return condition;
+    }),
   };
   // The validated sandbox rides along in the plan artifact, so the grant
   // approver reads the exact shape the human approved — and a plan without one
@@ -244,6 +282,9 @@ export function normalizePlan(value) {
     const { sandbox } = validateSandbox(value.sandbox);
     if (sandbox !== null) plan.sandbox = sandbox;
   }
+  // Same rule for the release scope: declared, it is part of the contract every
+  // later phase reads; absent, the artifact does not change.
+  if (isReleaseScope(value.release_scope)) plan.releaseScope = value.release_scope;
   return plan;
 }
 
@@ -310,12 +351,53 @@ export function validateReview(value) {
 }
 
 /**
+ * The gap shapes that mean "the implementation is not there yet". Everything
+ * else verifyReview can report is a gap in the *review submission* — a missing,
+ * duplicated or invented id, a malformed coverage row, an uncovered statement —
+ * which the reviewer can fix in its own session without costing the build an
+ * attempt. That distinction is the whole point of KAN-31: a bookkeeping slip in a
+ * pass used to send the ticket back to implement and spend a round on it.
+ */
+const SUBSTANTIVE_GAP = [/^done_when\.\S+ is not met/, /^done_when\.\S+ confidence is below/, /^done_when\.\S+ has no evidence/, /^review is not an object$/];
+
+/**
+ * Split review gaps into the ones that mean the work is unfinished and the ones
+ * that mean the review is malformed. An unrecognised shape counts as cosmetic:
+ * it is not a gap we have decided the build is responsible for, and the retry
+ * path ends with the exact text in front of a human rather than in a spent
+ * attempt — nothing is ever approved by being called cosmetic.
+ *
+ * @returns {{substantive: string[], cosmetic: string[]}}
+ */
+export function classifyGaps(gaps) {
+  const substantive = [];
+  const cosmetic = [];
+  for (const gap of Array.isArray(gaps) ? gaps : []) {
+    if (SUBSTANTIVE_GAP.some((pattern) => pattern.test(gap))) substantive.push(gap);
+    else cosmetic.push(gap);
+  }
+  return { substantive, cosmetic };
+}
+
+/**
  * Check that a passing review actually covers the plan and acceptance with
- * the same condition ids the plan produced. Returns human-readable gaps.
+ * the same condition ids the plan produced.
+ *
+ * KAN-31 changed two things here. A `deferred` condition is expected to be unmet:
+ * it is work only a human can evidence, so an unmet row with evidence of what the
+ * human must check is collected into `deferred` instead of reported as a gap, and
+ * the gate can pass a ticket whose only unmet conditions are deferred ones. And
+ * `acceptance_coverage` is compared against the stored acceptance only — a row
+ * quoting a sentence from the ticket body is not a stored statement, so it is
+ * ignored rather than rejected, because the reviewer cannot invent an acceptance
+ * row the human never wrote and that is not the build's fault either.
+ *
+ * @returns {{gaps: string[], deferred: string[]}}
  */
 export function verifyReview(value, conditions, acceptance, threshold = 0.7) {
   const gaps = [];
-  if (!isObject(value)) return ['review is not an object'];
+  const deferred = [];
+  if (!isObject(value)) return { gaps: ['review is not an object'], deferred };
   const rows = Array.isArray(value.done_when) ? value.done_when : [];
   const byId = new Map();
   for (const row of rows) {
@@ -333,12 +415,22 @@ export function verifyReview(value, conditions, acceptance, threshold = 0.7) {
       gaps.push(`done_when.${condition.id} is missing from the review`);
       continue;
     }
+    if (condition.deferred === true) {
+      // Deferred to approval: met is fine, unmet-with-evidence is the normal
+      // answer, and unmet-without-evidence is a review the reviewer can complete.
+      if (row.met === true) continue;
+      const evidence = typeof row.evidence === 'string' ? row.evidence.trim() : '';
+      if (evidence === '') gaps.push(`done_when.${condition.id} is deferred and the review names no human evidence`);
+      else deferred.push(condition.id);
+      continue;
+    }
     if (row.met !== true) gaps.push(`done_when.${condition.id} is not met`);
     if (typeof row.confidence !== 'number' || row.confidence < threshold) gaps.push(`done_when.${condition.id} confidence is below ${threshold}`);
     if (typeof row.evidence !== 'string' || row.evidence.trim() === '') gaps.push(`done_when.${condition.id} has no evidence`);
   }
   for (const id of byId.keys()) if (!ids.has(id)) gaps.push(`done_when.${id} is not a planned condition`);
 
+  const stored = new Set(acceptance.map((item) => item.statement));
   const coverage = Array.isArray(value.acceptance_coverage) ? value.acceptance_coverage : [];
   const covered = new Set();
   for (const row of coverage) {
@@ -346,13 +438,17 @@ export function verifyReview(value, conditions, acceptance, threshold = 0.7) {
       gaps.push('acceptance_coverage contains a malformed row');
       continue;
     }
+    // Not a stored acceptance statement: the reviewer quoted the ticket body or
+    // made one up. Ignored, not rejected — coverage is judged against what the
+    // human actually stored.
+    if (!stored.has(row.acceptance)) continue;
     covered.add(row.acceptance);
     if (!ids.has(row.condition)) gaps.push(`acceptance_coverage.${row.condition} is not a planned condition`);
   }
   for (const item of acceptance) {
     if (!covered.has(item.statement)) gaps.push(`acceptance is not covered: ${item.statement}`);
   }
-  return gaps;
+  return { gaps, deferred };
 }
 
 /** Validate the griller's JSON. */

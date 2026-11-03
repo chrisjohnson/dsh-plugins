@@ -505,3 +505,51 @@ config write. KAN-30 moves that decision to where the human actually is.
   does not exist or is not writable is a mid-build failure wearing a
   permission's clothes). The engine records the `{path, check, observed}` rows
   and shows them to the human; it does not re-run them.
+
+## 2026-11-03 — the review gate may not spend an attempt on a human step (0.17.0, KAN-31)
+
+KAN-16 and KAN-30 both ended the same way: a build that was functionally done was
+sent back to implementation because the gate could not tell "the work is
+unfinished" from "the review is malformed" or "this step belongs to a human".
+Each confusion cost a real implement attempt, and the attempt budget is the only
+thing that stops a runaway board.
+
+- **One definition of done, written once.** `release_scope` and per-condition
+  `deferred` / `human_evidence` live in the plan artifact and are read from there
+  by the build prompt, the review gate and the approval hand-over. The
+  alternative — coaching each prompt separately — is how 0.16.x ended up with a
+  plan rule (KAN-19: never plan a human-only condition) that the review gate then
+  punished the build for failing to evidence.
+- **Deferred is a condition, not a skip.** It still needs `statement`,
+  `how_verified` and a non-empty `human_evidence`, it is listed to the human by
+  id in the approval prompt and the `approval_requested` event, and it is marked
+  on the board. What it changes is only who is allowed to leave it unmet. A plan
+  that marks verifiable work deferred is visible as exactly that, which is the
+  control against using the field to dodge the hard part.
+- **The retry budget is separate from the attempt budget, on purpose.** A
+  cosmetic gap gets one retry turn in the reviewer's own session and then parks
+  with the gap text; it never transitions to implement. Routing a malformed review
+  back to the build was the bug — the builder cannot fix the reviewer's JSON, and
+  the round it spent is gone. Unknown gap shapes are treated as cosmetic for the
+  same reason: the retry path ends in front of a human with the exact text, so
+  nothing can be approved by being misclassified, while the substantive path can
+  and did burn attempts on a shape nobody had looked at.
+- **`acceptance_coverage` is judged against stored acceptance only.** A reviewer
+  that invents rows from ticket-body prose (the KAN-30 observation) is describing
+  something the human never asked for. Ignoring such a row is honest — every
+  statement the human did store still has to be covered — where rejecting it
+  punished the build for the reviewer's guess.
+- **The no-progress signature is recorded at the start of a rework round, not at
+  the review transition.** The plan for this release said the transition should
+  write it, and that does not work: nothing runs between the review that failed
+  and the next round's first step, so the tree is by definition identical and the
+  first rework would have parked every time. Recorded at the round's start, the
+  comparison spans exactly one round of work, which is the thing worth detecting.
+  The guard also stands down when git cannot read the tree — an unreadable tree is
+  never evidence of no progress — and a human retry resets the counter, so the
+  guard cannot lock out the retry that exists to override it.
+- **A fresh budget on a human retry is the only coherent reading.** The park says
+  "a human Retry with instruction grants a fresh budget"; before this it granted
+  one more round of a budget already spent, and the ticket parked again on the
+  next tick. The reset is an event (`budget_reset`, with the `from` count) so the
+  attempt ledger stays honest about which rounds were machine-paid.

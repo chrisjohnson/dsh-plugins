@@ -60,7 +60,7 @@ test('approval is a phase of the build session, not a session of its own', async
   assert.equal(/action === 'approvalSession'/.test(files['host.mjs']), false, 'host still routes an approval-session action')
   assert.equal(/liveTicketSession\(ticket\.id, 'approval'\)/.test(files['engine.mjs']), false)
   // The review-pass path hands its own session to the approval phase.
-  assert.match(files['engine.mjs'], /enterApproval\(ticket, turn\.sessionId\)/)
+  assert.match(files['engine.mjs'], /enterApproval\(ticket, turn\.sessionId, \{ deferred: decision\.deferred \}\)/)
   assert.match(files['engine.mjs'], /role: 'approver', purpose: 'build'/)
   assert.match(files['dispatch.mjs'], /role === 'approver'\) return 'build'/)
 })
@@ -220,7 +220,7 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ sortOrder \}, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
-  assert.match(host, /store\.updateTicket\(ticket\.id, p\.patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
 })
 
 // --------------------------------------------------------------- KAN-7
@@ -573,4 +573,55 @@ test('the plan-ready park and the Approve-plan button agree on the prefix', asyn
   assert.match(client, /Sandbox grants/)
   assert.match(client, /d\.plan\.sandbox\.grants/)
   assert.match(client, /d\.plan\.sandbox\.checks/)
+})
+
+// ------------------------------------------------------------------- KAN-31
+
+test('the detail payload carries the real attempt cap', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  // The client used to hard-code 3 and print "5 / 3". The cap is configuration,
+  // so the host now sends the one the engine is enforcing.
+  assert.match(host, /maxAttempts: getConfig\(\)\.maxAttempts/)
+  const detail = host.slice(host.indexOf('const detail = (id) =>'))
+  assert.ok(detail.indexOf('maxAttempts: getConfig().maxAttempts') < detail.indexOf('awaitingQuestion,'), 'the cap rides on the detail payload')
+  const client = files['client.mjs']
+  assert.match(client, /t\.attemptCount \+ " \/ " \+ \(d\.maxAttempts \|\| 3\)/, 'the attempts row reads the cap from the detail')
+  assert.equal(/props\.maxAttempts/.test(client), false, 'the never-passed prop is gone')
+})
+
+test('a human retry resets the attempt budget on both endpoints and records it', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  // One shared path, wired on both endpoints, so the reset cannot be forgotten.
+  assert.equal((host.match(/retryWithFreshBudget\(/g) || []).length, 2, 'one definition, two call sites')
+  assert.match(host, /const retryWithFreshBudget = \(ticket, \{ instruction, patch \} = \{\}\) => \{/)
+  assert.match(host, /store\.setAttempt\(ticket\.id, 0, 0\)/)
+  assert.match(host, /'budget_reset'/)
+  assert.match(host, /from: ticket\.attemptCount,\s*to: 0, reason: 'human retry'/)
+  // The reset happens before the phase transition, so the next round is round one.
+  const body = host.slice(host.indexOf('const retryWithFreshBudget'), host.indexOf("case 'action'"))
+  assert.ok(body.indexOf('setAttempt') < body.indexOf("transitionTicket"), 'the budget is reset before the ticket moves')
+  const engine = files['engine.mjs']
+  assert.match(engine, /a human Retry with instruction grants a fresh budget/)
+})
+
+test('the plan and review tool schemas carry the KAN-31 fields', async () => {
+  const files = await sources()
+  const actions = files['actions.mjs']
+  assert.match(actions, /release_scope: \{/)
+  assert.match(actions, /enum: \['stop_before_merge', 'full_release'\]/)
+  assert.match(actions, /deferred: \{ type: 'boolean'/)
+  assert.match(actions, /human_evidence: \{ type: 'string'/)
+  assert.match(actions, /One row per stored acceptance statement only/)
+  assert.match(actions, /submit an empty array when the ticket has no stored acceptance/)
+  // kanban_plan re-reads the contract, so it has to carry the scope and the marker.
+  assert.match(actions, /release_scope: plan\.releaseScope/)
+  assert.match(actions, /deferred: true, human_evidence: String\(condition\.humanEvidence/)
+})
+
+test('the board marks a deferred condition', async () => {
+  const files = await sources()
+  const client = files['client.mjs']
+  assert.match(client, /c\.deferred \? h\("span", \{ className: "kb-hint", children: " \(deferred to approval\)" \}\)/)
 })

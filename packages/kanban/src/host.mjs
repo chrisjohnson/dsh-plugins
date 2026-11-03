@@ -161,6 +161,38 @@ export default async function kanban(ctx, config = {}) {
     };
 
     /**
+     * KAN-31: a human retry is a fresh budget, not one more round of a budget the
+     * engine already spent. Without this the counter only ever climbs, so the
+     * second park after an exhausted run says "retry grants a fresh budget" while
+     * the code would refuse the very next attempt. Both retry endpoints share this
+     * one path so the reset cannot be forgotten by one of them.
+     */
+    const retryWithFreshBudget = (ticket, { instruction, patch } = {}) => {
+      if (typeof instruction === 'string' && instruction.trim() !== '') {
+        store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${instruction}`);
+      }
+      if (patch !== undefined && patch !== null && typeof patch === 'object') {
+        store.updateTicket(ticket.id, patch, { actor: 'human', reason: 'needs_attention resolution' });
+      }
+      const resumePhase = engineRef.current.retryPhase(ticket);
+      store.setAttempt(ticket.id, 0, 0);
+      store.appendEvent(ticket.id, 'budget_reset', {
+        phaseFrom: ticket.phase,
+        phaseTo: resumePhase,
+        actor: 'human',
+        payload: { from: ticket.attemptCount, to: 0, reason: 'human retry' },
+      });
+      // Retry lifts the park and relaunches the ticket in the column it
+      // is in: a Working ticket runs again immediately; a Backlog one
+      // waits idle until it is dragged to Working (or plans in place if
+      // it is a plan-now ticket back at the plan phase).
+      store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
+      const updated = store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
+      void engineRef.current.tick();
+      return updated;
+    };
+
+    /**
      * True while any session of this ticket is paused mid-turn on an unanswered
      * ask_user_question — in any phase, on an engine- or a human-driven turn
      * (KAN-17 generalized what used to be a plan-phase-only waiter scan).
@@ -227,6 +259,10 @@ export default async function kanban(ctx, config = {}) {
             : ticket),
           editable,
         },
+        // KAN-31: the client used to render "5 / 3" because it had the attempt
+        // count and a hard-coded cap. The cap is configuration; the detail payload
+        // is where the client can read the one the engine is actually enforcing.
+        maxAttempts: getConfig().maxAttempts,
         awaitingQuestion,
         awaitingApproval,
         status: statusOf(ticket),
@@ -443,21 +479,7 @@ export default async function kanban(ctx, config = {}) {
               return { ok: true, value: { attached } };
             }
             if (action === 'retry') {
-              if (typeof p.instruction === 'string' && p.instruction.trim() !== '') {
-                store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${p.instruction}`);
-              }
-              if (p.patch !== undefined && typeof p.patch === 'object') {
-                store.updateTicket(ticket.id, p.patch, { actor: 'human', reason: 'needs_attention resolution' });
-              }
-              const resumePhase = engineRef.current.retryPhase(ticket);
-              // Retry lifts the park and relaunches the ticket in the column it
-              // is in: a Working ticket runs again immediately; a Backlog one
-              // waits idle until it is dragged to Working (or plans in place if
-              // it is a plan-now ticket back at the plan phase).
-              store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
-              const updated = store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
-              void engineRef.current.tick();
-              return { ok: true, value: { ticket: updated } };
+              return { ok: true, value: { ticket: retryWithFreshBudget(ticket, { instruction: p.instruction, patch: p.patch }) } };
             }
             return fail('bad_request', `unknown resolution action ${action}`);
           }
@@ -489,6 +511,13 @@ export default async function kanban(ctx, config = {}) {
               if (typeof p.sessionId !== 'string') return fail('bad_request', 'sessionId is required');
               const attached = await driver.attachExistingSession(p.sessionId);
               return { ok: true, value: { attached } };
+            }
+            // KAN-31: the same fresh-budget retry the resolve endpoint performs,
+            // for callers that act on a ticket without reading its park state.
+            // One shared path, so both endpoints reset the budget identically.
+            if (action === 'retry') {
+              if (!ticket.needsAttentionReason) return fail('bad_request', 'ticket is not parked for attention');
+              return { ok: true, value: { ticket: retryWithFreshBudget(ticket, { instruction: p.instruction, patch: p.patch }) } };
             }
             if (action === 'startPlanning') {
               // KAN-16: plan this Backlog ticket in place. The decision, and

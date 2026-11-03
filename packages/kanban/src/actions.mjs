@@ -34,8 +34,21 @@ const PLAN_PARAMETERS = {
         id: { type: 'string', required: true, description: 'Short kebab-case identifier, unique in this plan.' },
         statement: { type: 'string', required: true, description: 'One observable fact that must be true.' },
         how_verified: { type: 'string', required: true, description: 'Exact command or observable a verifier can check.' },
+        // KAN-31: the honest way to plan work only a human can evidence. It stays
+        // a condition — the review names it, the approval prompt lists it — and it
+        // costs the build no attempt.
+        deferred: { type: 'boolean', description: 'True when only a human can evidence this at approval (a merge, a tag, a deploy, a restart). The review gate passes a ticket whose only unmet conditions are deferred ones.' },
+        human_evidence: { type: 'string', description: 'Required when deferred is true: what the human is asked to check, in one line — name the command or the observable (e.g. `git ls-remote origin refs/tags/x` prints a sha).' },
       },
     },
+  },
+  // KAN-31: where the release stops. One declaration the plan, the build prompt
+  // and the review all read, so a build never has to guess whether landing the
+  // work includes landing the release.
+  release_scope: {
+    type: 'string',
+    enum: ['stop_before_merge', 'full_release'],
+    description: 'Optional. "stop_before_merge" — the build ends with the work on a branch and the merge/tag/deploy are deferred conditions for the human at approval. "full_release" — the build itself lands the release. Omit when it makes no difference to the conditions.',
   },
   // KAN-30: the plan-time sandbox grant. Declaring grants parks the plan for a
   // one-time human approval; omitting it builds immediately, exactly as before.
@@ -109,6 +122,7 @@ const REVIEW_PARAMETERS = {
   scope_drift: { type: 'string', description: 'Any work outside the ticket/plan scope.' },
   acceptance_coverage: {
     type: 'array',
+    description: 'One row per stored acceptance statement only — do not invent rows for ticket-body text; submit an empty array when the ticket has no stored acceptance. A row quoting anything the human did not store is ignored, not rejected.',
     items: {
       type: 'object',
       additionalProperties: true,
@@ -120,7 +134,7 @@ const REVIEW_PARAMETERS = {
   },
   done_when: {
     type: 'array',
-    description: 'One row for every plan done_when id, using the same ids, with met/confidence/evidence.',
+    description: 'One row for every plan done_when id, using the same ids, with met/confidence/evidence. A condition marked deferred is the human step: report it met:false with evidence naming what the human checks, and if the only unmet conditions are deferred, the verdict is pass.',
     items: {
       type: 'object',
       additionalProperties: true,
@@ -205,6 +219,11 @@ function planConditionObjects(store, ticketId) {
       id: String(condition.id),
       statement: String(condition.statement),
       how_verified: String(condition.howVerified ?? condition.how_verified ?? ''),
+      // KAN-31: a session re-reading its contract has to see which conditions are
+      // the human's, or it will spend a round trying to evidence one.
+      ...(condition.deferred === true
+        ? { deferred: true, human_evidence: String(condition.humanEvidence ?? '') }
+        : {}),
     }));
   } catch {
     return [];
@@ -365,6 +384,10 @@ export function registerActionTools({ ctx, sessionId, liveRef, driver, store }) 
             summary: plan.summary ?? '',
             steps: plan.steps ?? [],
             done_when: conditions,
+            // KAN-31: the release scope is part of the contract the build and the
+            // review share, so a session that re-reads it gets the same answer the
+            // prompt carried. Absent when the plan declared none.
+            ...(typeof plan.releaseScope === 'string' ? { release_scope: plan.releaseScope } : {}),
             // KAN-30: the approved grants ride in the plan artifact, so a build
             // session re-reading its contract sees exactly what it may do
             // outside the sandbox without asking again.

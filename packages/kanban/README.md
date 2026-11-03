@@ -27,7 +27,8 @@ build session
   kanban_submit_review
   fail → implement again in the same session
       ↓ review pass with one done_when row per plan id
-      ↓ and acceptance_coverage for every acceptance statement
+      ↓ and acceptance_coverage for every stored acceptance
+      ↓ (a pass whose only unmet rows are deferred ones passes)
   approval — the same session, flipped to the approver phase (attention card)
   the agent hands the work over and asks; kanban_approve, kanban_discard,
   kanban_submit_plan
@@ -186,6 +187,80 @@ observed}` in `sandbox.checks`, so the human approves against what was
 actually observed rather than an assumption (the KAN-17 `~/dsh-lab` and
 KAN-29 `/tmp` classes of surprise). Platform temp areas are already writable
 under `workspace-write` and need no grant.
+
+## Release scope and deferred conditions (0.17.0)
+
+A ticket's definition of done is written once, in the plan, and read the same way
+by the build prompt, the review gate and the approval hand-over. Two additions to
+the plan protocol make that possible without pretending an agent can do a human's
+step.
+
+`release_scope` says where the release stops:
+
+- `stop_before_merge` — the build ends with the work on a branch. Merging,
+  tagging and deploying are the human's, and the plan lists them as deferred
+  conditions.
+- `full_release` — the build lands the release itself.
+- absent — the plan has no opinion, exactly like every plan written before 0.17.0.
+
+A **deferred** condition is a real condition that only a human can evidence:
+
+```json
+"done_when": [
+  { "id": "unit-tests", "statement": "the suites pass", "how_verified": "node --test exits 0" },
+  {
+    "id": "release-landed",
+    "statement": "merged to main and tagged",
+    "how_verified": "git ls-remote origin refs/tags/v1 prints a sha",
+    "deferred": true,
+    "human_evidence": "git ls-remote origin refs/tags/v1 prints a sha"
+  }
+]
+```
+
+- The review reports it `met: false` with evidence naming what the human checks.
+  A pass whose only unmet conditions are deferred ones **is a pass**: the ticket
+  goes straight to approval, the deferred ids ride in the `approval_requested`
+  event and in the hand-over prompt, and the build spends no extra attempt. A
+  `fail` verdict that marks every non-deferred condition met is routed the same
+  way.
+- Marking a condition deferred is not a way to dodge work an agent could verify.
+  It needs `human_evidence`, it is listed to the human by name, and the board
+  shows it as `(deferred to approval)`.
+
+### What the review gate can and cannot blame on the build
+
+`verifyReview` splits its findings in two:
+
+- **substantive** — a non-deferred condition unmet, below the confidence
+  threshold, or with no evidence. That is the build's problem and it goes back to
+  implementation, costing a round, exactly as before.
+- **cosmetic** — a missing, duplicated or invented `done_when` id, a malformed
+  coverage row, an uncovered stored statement. That is a defect in the *review*,
+  so the reviewer gets exactly one retry turn in its own session with the exact
+  gap text, the plan's condition ids and the stored acceptance statements. If the
+  second submission is still malformed the ticket parks in review with that text
+  for a human. The review-retry budget is separate from the implement-attempt
+  budget: a bookkeeping slip in a pass can never spend a build round again.
+
+`acceptance_coverage` is judged against the **stored** acceptance statements only.
+A row quoting a sentence from the ticket body is ignored rather than rejected —
+the reviewer cannot cover an acceptance the human never wrote — while every
+stored statement still has to be covered.
+
+### Attempts, retries and no-progress
+
+- The attempt park says what it now means:
+  `attempt budget exhausted (N) — a human Retry with instruction grants a fresh
+  budget`, and the retry really does that: both retry endpoints reset the counter
+  and record a `budget_reset` event.
+- Each rework round records the working tree it started from (`rework_signature`:
+  the diff hash plus the condition ids the review left failing). A later rework
+  round that starts from that same tree would repeat the previous one, so it parks
+  with `no progress: the working tree is unchanged since the round that last
+  failed <ids>` and the attempt is not spent.
+- The ticket detail carries the configured `maxAttempts`, so the board shows the
+  real cap instead of a hard-coded 3.
 
 ## Config
 
