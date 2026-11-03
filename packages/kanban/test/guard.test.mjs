@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 
+import { isInsideLiveCheckout, MANAGED_WORKTREES_DIR } from '../src/live-checkout.mjs'
 import { migrate } from '../src/db.mjs'
 import { KanbanStore } from '../src/store.mjs'
 import { resolveConfig } from '../src/config.mjs'
@@ -115,6 +116,50 @@ test('a nested path of the own workspace is not another tickets even if its pare
 })
 
 // ------------------------------------------------------------ live checkout --
+
+const WT = `${LIVE}/${MANAGED_WORKTREES_DIR}`
+const OWN = `${WT}/kan5-plugins`
+const inOwn = { ticket: A, tickets: TICKETS, cwd: OWN }
+
+test('a build session works freely in its own worktree under the live checkout', () => {
+  assert.equal(judge('write', { file_path: `${OWN}/src/x.mjs` }, inOwn).deny, false)
+  assert.equal(judge('edit', { file_path: `${OWN}/package.json` }, inOwn).deny, false)
+  for (const command of [
+    `cd ${OWN} && git status`,
+    `cd ${OWN} && git commit -am x && git push`,
+    `cd ${OWN} && pnpm install && pnpm add x`,
+    `git -C ${OWN} reset --hard`,
+    `echo hi > ${OWN}/notes.txt`,
+    `echo hi | tee ${OWN}/notes.txt`,
+    `rm -rf ${OWN}/node_modules`,
+  ]) assert.equal(judge('bash', { command }, inOwn).deny, false, command)
+})
+
+test('the live checkout and its profile stay protected beside the worktrees directory', () => {
+  assert.equal(write(`${LIVE}/package.json`, inOwn).kind, 'live_checkout')
+  assert.equal(write(`${LIVE}/.dsh/profiles/web/cordis.patch.yml`, inOwn).kind, 'live_checkout')
+  assert.equal(judge('bash', { command: `git -C ${LIVE} reset --hard` }, inOwn).kind, 'live_checkout')
+  assert.equal(judge('bash', { command: `cd ${LIVE} && pnpm add x` }, inOwn).kind, 'live_checkout')
+  assert.equal(judge('bash', { command: `cd ${OWN} && cd ${LIVE} && pnpm add x` }, inOwn).kind, 'live_checkout')
+})
+
+test('only the directory directly under the live root counts as the worktrees directory', () => {
+  for (const path of [`${LIVE}/.dsh-worktrees-evil/x`, `${LIVE}/x/.dsh-worktrees/y`, `${LIVE}/.dsh-worktrees-evil/.dsh-worktrees/y`]) {
+    assert.equal(write(path, inOwn).kind, 'live_checkout', path)
+    assert.equal(judge('bash', { command: `touch ${path}` }, inOwn).kind, 'live_checkout', path)
+  }
+  assert.equal(isInsideLiveCheckout(LIVE, `${WT}/z`), false)
+  assert.equal(isInsideLiveCheckout(LIVE, WT), true)
+  assert.equal(isInsideLiveCheckout(LIVE, LIVE), true)
+  assert.equal(isInsideLiveCheckout(LIVE, `${LIVE}/../x`), false)
+})
+
+test('another open ticket worktree under the live checkout is still cross-ticket denied', () => {
+  const verdict = write(`${WT}/kan6-plugins/x`, inOwn)
+  assert.equal(verdict.kind, 'cross_ticket')
+  assert.equal(verdict.owner, 'KAN-6')
+  assert.equal(judge('bash', { command: `cd ${WT}/kan6-plugins && git status` }, inOwn).kind, 'cross_ticket')
+})
 
 test('writes to the live checkout are denied', () => {
   assert.equal(write(`${LIVE}/package.json`).kind, 'live_checkout')
