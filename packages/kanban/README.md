@@ -123,6 +123,12 @@ is a ticket sitting idle. The Questions choice decides who answers:
   option — the model's own recommendation, taken back from it — and nothing else.
   A question with no options is the model saying it does not know, and that stays
   with a person in every phase and every mode.
+- **A question with a presentation `intent` is never answered from.** An intent
+  means a UI recognises the ask as a specific kind of decision, not a free choice
+  between labels — `exit_plan_mode` asks through this same seam with
+  `kind: 'plan-review'` and *Approve* as its first option, so taking the first
+  label there would approve a plan with nobody in the room. The intent is the ask
+  saying it is not a recommendation, and it vetoes the whole batch.
 - **Every auto-answer is audited.** A `question_answered_autonomously` ticket
   event carries the call id and the exact `{id, selected}` batch, written
   *before* the answer is claimed. If that write fails the engine does not answer:

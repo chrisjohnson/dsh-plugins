@@ -46,6 +46,21 @@ test('a first option with no label is not an answer', () => {
   assert.equal(recommendedAnswer([{ id: 'x', question: 'q', options: [{ label: '   ' }] }]), null)
 })
 
+test('a question carrying a presentation intent is never answered from', () => {
+  // exit_plan_mode asks through this same seam with kind 'plan-review' and
+  // *Approve* as its first option. Taking the first label there would approve
+  // a plan with no human, which is the one decision this board must not take.
+  const planReview = [{
+    id: 'plan-review',
+    question: 'Approve this plan and leave plan mode?',
+    detail: '# the plan',
+    options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+    intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-1' },
+  }]
+  assert.equal(recommendedAnswer(planReview), null)
+  assert.equal(recommendedAnswer([BATCH[0], planReview[0]]), null, 'one intent anywhere vetoes the whole batch')
+})
+
 test('malformed batches answer nothing', () => {
   assert.equal(recommendedAnswer(undefined), null)
   assert.equal(recommendedAnswer(null), null)
@@ -105,6 +120,24 @@ test('a review-phase batch follows the same rule as implement', () => {
   assert.notEqual(auto.ask(), auto.fell)
   const interactive = harness({ ticket: ticket({ phase: 'review', planQuestions: 'interactive' }) })
   assert.equal(interactive.ask(), interactive.fell)
+})
+
+test('a plan-mode exit review reaches the human even on an autonomous ticket', () => {
+  // The guard that matters: this ask has options and a recommended first label,
+  // so the option rule alone would answer it and approve the plan with nobody
+  // in the room.
+  const h = harness({
+    ticket: ticket({ phase: 'implement', planQuestions: 'autonomous' }),
+    questions: [{
+      id: 'plan-review',
+      question: 'Approve this plan and leave plan mode?',
+      detail: '# the plan',
+      options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+      intent: { kind: 'plan-review', approve: 'Approve' },
+    }],
+  })
+  assert.equal(h.ask(), h.fell)
+  assert.equal(h.events.length, 0)
 })
 
 test('the approval phase never answers: wrapping up is the human conversation', () => {

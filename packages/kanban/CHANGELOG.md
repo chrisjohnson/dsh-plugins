@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.19.1
+
+### Fixed
+
+- **A plan-mode exit could be approved with no human in the room** (KAN-32
+  review). `exit_plan_mode` asks through the same `user-questions/request` seam
+  the 0.18.0 auto-answer listens on, and its ask carries options whose *first*
+  label is Approve — so on an autonomous ticket, or in any plan session, the
+  engine would have taken it and left plan mode with the plan approved. A
+  question carrying a presentation `intent` is now never answered from, in any
+  phase or mode: an intent is the ask saying it is a specific kind of human
+  decision, not a recommendation being offered. Tests cover the single-intent
+  batch, a mixed batch (one intent vetoes the whole batch), and the listener
+  path end to end.
 ## 0.19.0
 
 ### Added
