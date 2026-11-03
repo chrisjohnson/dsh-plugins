@@ -22,6 +22,7 @@ import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredPro
 import { countGrants, grantAdvisory, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 import { endedOnQuestion, questionParkReason, recoverySummary, restartResumeAllowed } from './recovery.mjs';
+import { detectNoNewPrivsSudo, sudoDeadEnd, sudoParkReason } from './sudo-guard.mjs';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
@@ -589,6 +590,17 @@ export class Engine {
     });
   }
 
+  /**
+   * KAN-59: the park for a build turn whose sudo was refused by the sandbox
+   * itself. The reason is one actionable line: it names the mode the session ran
+   * under and the change only a human can make — the ticket's write mode.
+   */
+  sudoBlocked(ticket, hit) {
+    const mode = ticket.writeMode ?? 'workspace-write';
+    this.log.warn('ticket %s: build could not run sudo under the %s sandbox: %s', ticket.key, mode, hit?.text ?? '');
+    return this.needsAttention(ticket, sudoParkReason(mode), { sudoBlocked: hit?.text ?? null, writeMode: mode });
+  }
+
   async plan(ticket) {
     if (this.stopped(ticket.id)) return { kind: 'stopped' };
     const route = this.resolveRoute('planner', 1);
@@ -787,6 +799,9 @@ export class Engine {
       clone_names: cloneNamesLine(ticket),
       release_scope: releaseScopeLine(planValue),
       question_note: questionNote(ticket, 'kanban_submit_implementation'),
+      // The builder has to know which wall it is standing against: in any mode
+      // but Full access, sudo is unreachable here and no grant changes that.
+      write_mode: ticket.writeMode ?? 'workspace-write',
     });
     const prompt = this.composePrompt(sessionNote, rendered, this.pendingInstruction(ticket, 'implementer'));
     const runId = this.ensureRun(ticket);
@@ -794,6 +809,12 @@ export class Engine {
     if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'implement')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'implement');
     if (turn.action === null || turn.action.type !== 'implementation') {
+      // KAN-59: a build that ended without submitting because every sudo it
+      // tried was refused by the sandbox is not a builder that forgot to
+      // submit — it is a ticket in the wrong write mode, and only a human can
+      // move it. Park on that, with the mode named, not on the generic failure.
+      const sudo = sudoDeadEnd(turn, ticket.writeMode);
+      if (sudo !== null) return this.sudoBlocked(ticket, sudo);
       return this.endedWithoutSubmission(ticket, turn, 'build', 'implementer ended without calling kanban_submit_implementation');
     }
     const value = turn.action.value;
@@ -1765,16 +1786,20 @@ export class Engine {
     const durationMs = Number(process.hrtime.bigint() - startedMono) / 1e6;
     this.recordToolSpans(ticket, span, turn.events ?? []);
     this.recordTurnUsage(ticket, span, route, turn.usage);
+    // A build that spent its turn hitting a wall nobody can grant its way out of
+    // says so in sudo's own words; carry that up so the phase can park on the
+    // fix instead of on a generic non-submission.
+    const sudoBlocked = detectNoNewPrivsSudo(turn.events);
     if (turn.status === 'ok') {
       this.store.endSpan(span.id, { status: 'ok', durationMs });
-      return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId, spanId: span.id, turn: turn.turn ?? null };
+      return { kind: 'ok', action: turn.action ?? null, finalText: turn.finalText, usage: turn.usage, sessionId, spanId: span.id, turn: turn.turn ?? null, sudoBlocked };
     }
     if (turn.status === 'stalled') {
       this.store.endSpan(span.id, { status: 'abandoned', error: 'stalled', durationMs });
-      return { kind: 'failed', error: 'turn stalled', sessionId, spanId: span.id, turn: turn.turn ?? null };
+      return { kind: 'failed', error: 'turn stalled', sessionId, spanId: span.id, turn: turn.turn ?? null, sudoBlocked };
     }
     this.store.endSpan(span.id, { status: 'failed', error: turn.error ?? turn.status, durationMs });
-    return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id, turn: turn.turn ?? null };
+    return { kind: 'failed', error: turn.error ?? turn.status, sessionId, spanId: span.id, turn: turn.turn ?? null, sudoBlocked };
   }
 
   async roleTurn({ ticket, role, purpose, route, prompt, spanName, attempt, runId, preparedCwd }) {

@@ -4,6 +4,8 @@ Before starting work, run `git fetch` and, if this branch is behind, bring the w
 
 Work autonomously, make the changes in the repository, and run appropriate checks. When the implementation is complete, call the `kanban_submit_implementation` tool with your result and per-condition evidence. Ending a turn without calling `kanban_submit_implementation` parks the ticket for a human, even when the work is done: always finish by calling it (with status `blocked` if you cannot continue).
 
+This session runs under the `{{write_mode}}` file sandbox. Unless that is `danger-full-access`, `sudo` cannot run here at all: the sandbox sets `no_new_privs` on every confined child and sudo refuses to run under it before it ever reads sudoers, so `sudo -n <cmd>` exits 1 with `The "no new privileges" flag is set` however the machine is configured — and `sudo` is word-denied in the plan grants, so nothing lifts it. Do not spend attempts on sudo in a sandboxed session: if the work needs it, stop and say so (an optionless question, or status `blocked`) and name the fix — set this ticket's write mode to Full access and Retry.
+
 {{question_note}}
 
 {{release_scope}}
