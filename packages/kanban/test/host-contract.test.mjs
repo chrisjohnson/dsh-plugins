@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url))
+const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url))
 
 async function sources() {
   const names = (await readdir(SRC)).filter((name) => name.endsWith('.mjs'))
@@ -637,4 +638,77 @@ test('a fail is read as a pass-equivalent only when it proves every non-deferred
   assert.match(decision, /const proven = nonDeferredProven\(value, conditions\);/)
   assert.match(decision, /if \(proven\.ok\) return \{ route: 'approval'/)
   assert.match(decision, /is not proven met by the review/)
+})
+
+// ------------------------------------------------------------------- KAN-32
+//
+// The Questions setting reaches the whole ticket through two registrations on
+// the session's own scope: the `user-questions/request` answerer, and the
+// tolerant `ask_user_question` tool that shadows the preset's copy. Both are
+// pinned here because a session that silently lacks them behaves exactly like
+// the pre-0.18 board — which is the failure mode nobody would notice.
+
+test('the question answerer is an agent-scoped waterfall listener on both session paths', async () => {
+  const dispatch = (await sources())['dispatch.mjs']
+  assert.match(dispatch, /import \{ askUserToolDefinition, makeQuestionAnswerer \} from '\.\/questions\.mjs'/)
+  assert.match(
+    dispatch,
+    /agentCtx\.on\('user-questions\/request', makeQuestionAnswerer\(\{ store: this\.store, log: this\.log \}\), \{ prepend: true \}\)/,
+  )
+  assert.equal((dispatch.match(/#registerQuestionAnswerer\(/g) || []).length, 3, 'one definition, two call sites')
+  // Plan and build sessions both get one; a verify session never does, so an
+  // approval-phase question stays the human's.
+  assert.match(dispatch, /if \(purpose === 'plan' \|\| purpose === 'build'\) \{\n\s*this\.#registerQuestionAnswerer\(agentCtx\);/)
+  assert.match(dispatch, /if \(purpose === 'plan' \|\| purpose === 'build'\) \{\n\s*this\.#registerQuestionAnswerer\(agent\.ctx\);/)
+  assert.equal(/purpose === 'verify'\) this\.#registerQuestionAnswerer/.test(dispatch), false, 'a verify session gets no answerer')
+})
+
+test('the tolerant ask_user_question is registered in the session scope and undone with it', async () => {
+  const files = await sources()
+  const dispatch = files['dispatch.mjs']
+  assert.match(dispatch, /agentCtx\.tools\.register\(\s*defineTool\(askUserToolDefinition\(\{ ask: \(request\) => service\.ask\(request\), log: this\.log \}\)\)/)
+  assert.equal((dispatch.match(/#registerTolerantAskTool\(/g) || []).length, 3, 'one definition, two call sites')
+  assert.match(dispatch, /liveRef\.questionDispose = this\.#registerTolerantAskTool\(agentCtx\)/)
+  assert.match(dispatch, /liveRef\.questionDispose = this\.#registerTolerantAskTool\(agent\.ctx\)/)
+  assert.match(dispatch, /if \(typeof live\.questionDispose === 'function'\)/, 'closing a session disposes its tool')
+  // A deployment without the question service keeps the core tool and says so once.
+  assert.match(dispatch, /this\.askToolWarned = true/)
+  assert.match(dispatch, /userQuestions service is not mounted/)
+  // The tool itself lives in the pure module, not in the wiring.
+  assert.match(files['questions.mjs'], /export function askUserToolDefinition/)
+  assert.match(files['questions.mjs'], /name: 'ask_user_question'/)
+  assert.match(files['questions.mjs'], /wait: \{ callId: exec\.callId \}/)
+})
+
+test('the questions module is a pure decision module like grants.mjs is', async () => {
+  const questions = (await sources())['questions.mjs']
+  assert.equal(/from '@deepseek-ai\//.test(questions), false, 'questions.mjs must import nothing from dsh')
+  assert.equal(/from 'node:/.test(questions), false, 'and nothing from node either')
+  assert.match(questions, /export function recommendedAnswer/)
+  assert.match(questions, /export function makeQuestionAnswerer/)
+  assert.match(questions, /export function sanitizeQuestions/)
+  // The audit event is written before the answer is claimed, and a failed write
+  // falls through to the human.
+  assert.match(questions, /'question_answered_autonomously'/)
+  const body = questions.slice(questions.indexOf('export function makeQuestionAnswerer'))
+  assert.ok(body.indexOf('appendEvent') < body.indexOf('return answer'), 'the event precedes the answer')
+  assert.match(body, /return next\(\);\n      \}\n      warn\(/, 'a failed event write falls through')
+})
+
+test('the build and review prompts carry the autonomous questions note', async () => {
+  const files = await sources()
+  const engine = files['engine.mjs']
+  assert.match(engine, /function questionNote\(ticket, submitTool\)/)
+  assert.match(engine, /question_note: questionNote\(ticket, 'kanban_submit_implementation'\)/)
+  assert.match(engine, /question_note: questionNote\(ticket, 'kanban_submit_review'\)/)
+  for (const name of ['implement.md', 'rework.md', 'review.md']) {
+    const text = await readFile(join(PACKAGE_DIR, 'prompts', name), 'utf8')
+    assert.match(text, /\{\{question_note\}\}/, `${name} must render the note`)
+  }
+  // The approval prompt is untouched: an approval-phase question is the human's.
+  const approval = await readFile(join(PACKAGE_DIR, 'prompts', 'approval.md'), 'utf8')
+  assert.equal(approval.includes('question_note'), false)
+  // And the interactive planning prompt states the auto-decide rule.
+  const planHuman = await readFile(join(PACKAGE_DIR, 'prompts', 'plan-human.md'), 'utf8')
+  assert.match(planHuman, /auto-decided by the board/)
 })

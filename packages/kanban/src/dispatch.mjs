@@ -26,10 +26,12 @@ import { mkdir } from 'node:fs/promises';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
+import { defineTool } from '@deepseek-ai/dsh-tools';
 
 import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
 import { makeGrantApprover } from './grants.mjs';
+import { askUserToolDefinition, makeQuestionAnswerer } from './questions.mjs';
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -125,6 +127,8 @@ export class SessionDriver {
     this.disposed = false;
     this.offEvent = null;
     this.offAgent = null;
+    /** Say the "no userQuestions service" warning once, not once per session. */
+    this.askToolWarned = false;
   }
 
   start() {
@@ -506,6 +510,7 @@ export class SessionDriver {
       writeMode: purpose === 'build' ? (ticket.writeMode ?? null) : null,
       routeKey: null,
       actionDispose: null,
+      questionDispose: null,
       sandboxMode: null,
       owned: true,
     };
@@ -527,6 +532,13 @@ export class SessionDriver {
         // KAN-30: only a build session carries approved grants; plan and
         // verify sessions stay read-only and never answer an escalation ask.
         if (purpose === 'build') this.#registerGrantApprover(agentCtx);
+        // KAN-32: the Questions decision covers the whole ticket now, so both
+        // the planning session and the build session answer what the ticket
+        // allows; the phase and mode check lives in questions.mjs.
+        if (purpose === 'plan' || purpose === 'build') {
+          this.#registerQuestionAnswerer(agentCtx);
+          liveRef.questionDispose = this.#registerTolerantAskTool(agentCtx);
+        }
       },
     });
     liveRef.handle = handle;
@@ -594,6 +606,82 @@ export class SessionDriver {
       // A session without the listener behaves like every pre-0.16 session:
       // each escalation asks the human. Losing grants is never losing work.
       this.log.warn('kanban grants: approver could not be registered: %s', String(error?.message ?? error));
+    }
+  }
+
+  /**
+   * KAN-32: register the ticket's Questions decision as an agent-scoped
+   * `user-questions/request` waterfall listener on one workflow session.
+   *
+   * Same seam and same reasoning as the grant approver, on the question seam
+   * core already publishes: `@deepseek-ai/dsh-user-questions` dispatches the
+   * waterfall on the requesting agent's scope, and a cordis waterfall settles
+   * on the first listener that does not call `next()`, so prepending here answers
+   * that session's asks before the human bridge is reached and nothing else's.
+   *
+   * Registered on plan and build sessions alike — the decision of *whether* to
+   * answer is the ticket's phase and mode, and it is made in `questions.mjs`
+   * where it can be tested. A verify session gets no listener: an approval-phase
+   * question is the human's conversation by definition.
+   */
+  #registerQuestionAnswerer(agentCtx) {
+    try {
+      agentCtx.on('user-questions/request', makeQuestionAnswerer({ store: this.store, log: this.log }), { prepend: true });
+    } catch (error) {
+      // Without the listener every ask reaches a human, which is the pre-0.18
+      // behavior: a missed auto-answer costs a prompt, never a wrong decision.
+      this.log.warn('kanban questions: answerer could not be registered: %s', String(error?.message ?? error));
+    }
+  }
+
+  /**
+   * The `userQuestions` service seam, looked up per call: it is published by
+   * another plugin and mount order is not fixed, and a deployment without it
+   * must still run tickets.
+   */
+  #userQuestionsService() {
+    try {
+      return this.ctx.get('userQuestions');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * KAN-32: register the tolerant `ask_user_question` in one workflow session.
+   *
+   * A scoped registration shadows the preset's global tool for this agent only,
+   * so the board's copy is free to be forgiving where core's is strict: it
+   * assigns the question ids a malformed call left out instead of losing the
+   * question, and it passes the tool call id as the card key, which is what
+   * makes a half-typed answer survive a page reload (core persists drafts under
+   * that key). If the question service is not mounted, the tool is not
+   * registered, the preset's copy stays in place, and the session says so once
+   * in the log — a session that cannot ask is a session that parks, and the
+   * warning is what explains why.
+   */
+  #registerTolerantAskTool(agentCtx) {
+    const service = this.#userQuestionsService();
+    if (service === undefined || service === null || typeof service.ask !== 'function') {
+      if (!this.askToolWarned) {
+        this.askToolWarned = true;
+        this.log.warn('kanban questions: the userQuestions service is not mounted; sessions keep the core ask_user_question tool (no id recovery, no reload-safe drafts)');
+      }
+      return;
+    }
+    try {
+      const dispose = agentCtx.tools.register(
+        defineTool(askUserToolDefinition({ ask: (request) => service.ask(request), log: this.log })),
+      );
+      // The registration lives on the agent's own scope, so disposing with the
+      // session is enough; the driver keeps the handle for symmetry with the
+      // action tools and to survive a session closed from the board.
+      return typeof dispose === 'function' ? dispose : null;
+    } catch (error) {
+      // Same fallback as a missing service: the core tool stays, the session
+      // still asks, and the log says why the tolerant copy is not there.
+      this.log.warn('kanban questions: tolerant ask_user_question could not be registered: %s', String(error?.message ?? error));
+      return null;
     }
   }
 
@@ -722,6 +810,7 @@ export class SessionDriver {
       writeMode: purpose === 'build' ? (ticket.writeMode ?? null) : null,
       routeKey: null,
       actionDispose: null,
+      questionDispose: null,
       sandboxMode: null,
       owned: false,
     };
@@ -735,6 +824,13 @@ export class SessionDriver {
     // KAN-30: a reattached build session gets its grant approver too — the
     // approved plan outlives the restart, the in-memory listener does not.
     if (purpose === 'build') this.#registerGrantApprover(agent.ctx);
+    // KAN-32: same for the Questions answerer and the tolerant ask tool. A
+    // restart used to silently turn an autonomous ticket back into one that
+    // waits for a human on every question.
+    if (purpose === 'plan' || purpose === 'build') {
+      this.#registerQuestionAnswerer(agent.ctx);
+      liveRef.questionDispose = this.#registerTolerantAskTool(agent.ctx);
+    }
     this.#applySandboxMode(liveRef);
     void this.#attachWorkspace(sessionId, ticket.workspaceCwd ?? this.getConfig().defaultWorkspaceCwd ?? process.cwd(), 0);
     this.log.info('kanban: reattached session %s to %s/%s', sessionId, ticket.key, purpose);
@@ -968,6 +1064,13 @@ export class SessionDriver {
     this.actions.delete(sessionId);
     this.humanWaits.delete(sessionId);
     if (typeof live.actionDispose === 'function') live.actionDispose();
+    if (typeof live.questionDispose === 'function') {
+      try {
+        live.questionDispose();
+      } catch {
+        // Best-effort: the agent scope teardown owns the registration anyway.
+      }
+    }
     const waiter = this.waiters.get(sessionId);
     if (waiter !== undefined) {
       this.waiters.delete(sessionId);

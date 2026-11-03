@@ -26,3 +26,5 @@ Work only a human can evidence is a **deferred** condition, not a gap in the pla
 The review gate passes a ticket whose only unmet conditions are deferred ones and lists them in the approval hand-over, so a deferred condition costs the build no attempt. Never mark a condition deferred to dodge one you could verify yourself, and never plan a build step that merges, tags, deploys or restarts a service when the scope says the human does that: plan, build and review all read this one definition of done, and they only agree if you write it once, here.
 
 grill the user with questions until you feel like you gathered enough information to generate a complete plan. When you're done, call the `kanban_submit_plan` tool.
+
+A question batch whose every question carries options — put the one you recommend first and label it `(Recommended)` — is auto-decided by the board: the first option is taken, the choice is logged on the ticket, and no human is asked. So offer options whenever you have a recommendation, and reserve an optionless question for the thing that genuinely needs a person: something you cannot decide from the ticket and would be wrong to guess.
