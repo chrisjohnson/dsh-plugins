@@ -20,18 +20,17 @@
 
 ### Changed
 
-- The page no longer polls. The sidebar pills, composer dock, Activity page and
-  per-turn wait cards share one long-lived stream, opened only while something is
-  shown and the tab is visible, and capacity events (promotion, hand-over, cancel)
-  reach the page within about 150 ms instead of up to 750 ms. A hidden tab makes no
-  requests at all. If the stream cannot be held the page falls back to a 2 s
-  snapshot poll and retries the stream with back-off.
+- The sidebar pills, composer dock, Activity page and per-turn wait cards share one
+  long-lived stream, opened only while something is shown and the tab is visible.
+  Capacity events (promotion, hand-over, cancel) reach the page within about 150 ms.
+  A hidden tab makes no requests. If the stream cannot be held the page polls
+  `snapshot` every 2 s and retries the stream with back-off.
 - The per-turn wait cards share one `sessionWaits` request per session and refetch
-  only when a new wait has been recorded, instead of one request every 2 s per card.
+  only when a new wait has been recorded.
 - On the Host, session titles and workspaces are refreshed on demand (at most every
-  10 s, only while a snapshot is being read) instead of on a timer that ran with no
-  one looking, and an unchanged idle snapshot is not re-sent.
-- Fixed React "unique key" warnings from the page's status pill and section headers.
+  10 s, only while a snapshot is being read), and an unchanged idle snapshot is not
+  re-sent.
+- Fixed React "unique key" warnings from the status pill and section headers.
 
 ## 0.4.0
 
