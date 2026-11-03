@@ -5,6 +5,16 @@
 
 ## Unreleased
 
+## 0.3.0
+
+### Added
+
+- The `betterGitWorktree` service gains `removeForPath({ path })`: a workflow that
+  created a copy can remove it when finished, by root, without a session id. It applies
+  the same guards as the sidebar's remove and never accepts a confirmation, so a copy
+  with uncommitted, unpushed or stashed work, or whose state cannot be read, is refused
+  and left alone. It never throws.
+
 ## 0.2.1
 
 ### Changed

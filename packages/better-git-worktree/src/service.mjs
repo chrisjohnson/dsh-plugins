@@ -587,6 +587,38 @@ export function createService(deps) {
     return { removed: true, managedRoot: resolved, workspaceRemoved }
   }
 
+  /**
+   * Remove the managed working copy rooted at `path`, for a caller that has no
+   * session id (a workflow that created the copy and is now finished with it).
+   *
+   * Never passes a confirmed plan: a copy that is dirty, holds unpushed commits or
+   * stashes, or whose state cannot be read is refused and left exactly as it is.
+   * Never throws.
+   *
+   * @returns {Promise<{removed: boolean, refused: boolean, reason?: string, code?: string}>}
+   *   `removed: false, refused: false` means there was nothing to do (not a managed
+   *   copy, or already gone).
+   */
+  async function removeForPath(path) {
+    try {
+      if (typeof path !== 'string' || path.trim() === '') {
+        return { removed: false, refused: false, code: 'bad-request', reason: 'removeForPath needs a path' }
+      }
+      const record = registry.findByRoot(path)
+      if (record === undefined) {
+        return { removed: false, refused: false, code: 'not-managed', reason: 'not a managed working copy' }
+      }
+      const result = await removeWorkingCopy(record)
+      if (result.refused !== undefined) {
+        return { removed: false, refused: true, code: result.refused.code, reason: result.refused.message }
+      }
+      if (result.removed === true) return { removed: true, refused: false }
+      return { removed: false, refused: false, code: 'already-gone', reason: result.reason }
+    } catch (error) {
+      return { removed: false, refused: true, code: 'error', reason: message(error) }
+    }
+  }
+
   // -- RPC surface (client -> host) ---------------------------------------------
 
   async function handleRpc(endpoint, payload) {
@@ -780,6 +812,7 @@ export function createService(deps) {
     adoptForCwd,
     convertSession,
     removeWorkingCopy,
+    removeForPath,
     handleRpc,
   }
 }

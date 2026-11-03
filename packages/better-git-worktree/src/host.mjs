@@ -194,6 +194,9 @@ export default function betterGitWorktree(ctx, config = {}) {
   ctx.provide('betterGitWorktree', {
     createForPath: (options) => service.createForPath(options.path, options),
     refreshManagedCopy: (options) => service.refreshManagedCopy(options.path, options),
+    // Remove a finished managed copy by its root. Refuses (and removes nothing)
+    // when the copy holds unsaved work or cannot be verified; never throws.
+    removeForPath: (options) => service.removeForPath(options?.path),
   })
 
   // -- RPC surface (client -> host) ---------------------------------------------
