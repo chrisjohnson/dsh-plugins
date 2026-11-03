@@ -32,6 +32,11 @@
 //   ticket is the one conversation that is the human's by definition.
 // - A done or discarded ticket is never answered: nothing should be asking
 //   anything from a closed ticket, and an answer would resurrect its turn.
+// - A question that carries a presentation `intent` is never answered from, in
+//   any phase or mode. `exit_plan_mode` asks through this same seam with
+//   `kind: 'plan-review'` and *Approve* as its first option: an option list
+//   there is not a recommendation, it is a human's decision, and taking the
+//   first label would approve a plan with nobody in the room.
 // - Every miss, malformed input or exception calls `next()`. The human stays
 //   the answerer of last resort; a broken auto-answer path costs a prompt,
 //   never a silent decision.
@@ -56,6 +61,14 @@ const ANSWERABLE_PHASES = new Set(['plan', 'implement', 'review']);
  * entry is not a label — is not a decision the model already made, so it is
  * not ours to take.
  *
+ * A question carrying a presentation `intent` is never answered here, whatever
+ * its options look like. An intent means a UI recognises the ask as a specific
+ * kind of decision rather than a free choice between labels: `exit_plan_mode`
+ * asks through this exact seam with `kind: 'plan-review'` and *Approve* as its
+ * first option, so taking the first label there would approve a plan with no
+ * human — the one decision this board exists to put in front of a person. The
+ * intent is the ask saying it is not a recommendation, and it wins.
+ *
  * @param {unknown} questions - the batch as the ask reached the waterfall.
  * @returns {{answers: Array<{id: string, selected: string[]}>}|null}
  */
@@ -64,6 +77,7 @@ export function recommendedAnswer(questions) {
   const answers = [];
   for (const question of questions) {
     if (question === null || typeof question !== 'object') return null;
+    if (question.intent !== undefined && question.intent !== null) return null;
     const id = typeof question.id === 'string' ? question.id.trim() : '';
     if (id === '') return null;
     const options = question.options;
