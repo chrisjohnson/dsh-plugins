@@ -30,6 +30,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 
 import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
+import { sessionTitle } from './board-view.mjs';
 import { makeGrantApprover } from './grants.mjs';
 import { makeGuardApprover, resolveLiveCheckouts } from './guard.mjs';
 import { askUserToolDefinition, makeQuestionAnswerer } from './questions.mjs';
@@ -83,6 +84,38 @@ export function worktreeStaleNote(refreshed) {
   );
 }
 
+/**
+ * The map of sessions paused on a person, reporting each open and close so the
+ * ticket's event log can say when it was waiting on a human (working time
+ * excludes those stretches). Every existing set/delete site keeps working.
+ */
+class WaitLedger extends Map {
+  constructor(onChange) {
+    super();
+    this.onChange = onChange;
+  }
+
+  set(sessionId, wait) {
+    const opened = !this.has(sessionId);
+    super.set(sessionId, wait);
+    if (opened) this.onChange(sessionId, wait, true);
+    return this;
+  }
+
+  delete(sessionId) {
+    const wait = this.get(sessionId);
+    const had = super.delete(sessionId);
+    if (had) this.onChange(sessionId, wait, false);
+    return had;
+  }
+
+  clear() {
+    const open = [...this.entries()];
+    super.clear();
+    for (const [sessionId, wait] of open) this.onChange(sessionId, wait, false);
+  }
+}
+
 /** Existing sessions can be reused within a purpose, never across purposes. */
 export class SessionDriver {
   constructor({ ctx, log, getConfig, store }) {
@@ -109,7 +142,7 @@ export class SessionDriver {
      * waiting. The engine's own waiters only cover turns it started itself;
      * this map covers every turn on a ticket session, engine- or human-driven.
      */
-    this.humanWaits = new Map();
+    this.humanWaits = new WaitLedger((sessionId, wait, started) => this.#recordWait(sessionId, wait, started));
     /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
     /** `${ticketId}:${purpose}` -> Set<sessionId> (newest last) */
@@ -211,6 +244,19 @@ export class SessionDriver {
   // `tool/call` for ask_user_question answered by the `tool/result` citing the
   // same callId — and every one of those events arrives here for every session,
   // whether the engine started the turn or a human did.
+
+  #recordWait(sessionId, wait, started) {
+    try {
+      const ticketId = this.activity.ticketOf(sessionId);
+      if (ticketId === undefined) return;
+      this.store?.appendEvent?.(ticketId, started ? 'human_wait_started' : 'human_wait_ended', {
+        actor: 'engine',
+        payload: { sessionId, kind: wait?.kind ?? null },
+      });
+    } catch {
+      // The event only feeds working time; a failed write never disturbs the turn.
+    }
+  }
 
   #trackHumanWait(session, event) {
     const sessionId = session.id;
@@ -338,6 +384,16 @@ export class SessionDriver {
     } catch (error) {
       this.log.warn('kanban driver: human-wait reattach scan failed for %s: %s', sessionId, String(error?.message ?? error));
     }
+  }
+
+  /** Sessions of this ticket with a turn in flight or a pending ask, for the card's jump-to-session target. */
+  activeSessionIds(ticketId) {
+    const ids = new Set();
+    const candidates = [...this.activity.active, ...this.waiters.keys(), ...this.humanWaits.keys()];
+    for (const sessionId of candidates) {
+      if (this.activity.ticketOf(sessionId) === ticketId) ids.add(sessionId);
+    }
+    return [...ids];
   }
 
   /** True while any session of this ticket has work in flight, engine-driven or human-driven. */
@@ -548,7 +604,7 @@ export class SessionDriver {
     void this.#attachWorkspace(sessionId, cwd, 0);
     try {
       const titles = this.ctx.get('sessionTitle');
-      if (titles?.rename) titles.rename(handle.agent.session, `${ticket.key} · ${purpose}`);
+      if (titles?.rename) titles.rename(handle.agent.session, sessionTitle(ticket, purpose));
     } catch (error) {
       this.log.warn('workflow session: title pin failed: %s', String(error?.message ?? error));
     }

@@ -481,7 +481,7 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
   const client = files['client.mjs']
 
   // The driver owns the fold and answers both kinds of wait for any phase.
-  assert.match(dispatch, /this\.humanWaits = new Map\(\)/)
+  assert.match(dispatch, /this\.humanWaits = new WaitLedger\(/)
   assert.match(dispatch, /case 'approval\/asked'/)
   assert.match(dispatch, /case 'approval\/decided'/)
   assert.match(dispatch, /isAwaitingApproval\(ticketId\)/)

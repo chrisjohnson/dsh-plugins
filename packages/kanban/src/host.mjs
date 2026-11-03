@@ -20,6 +20,8 @@ import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { cardStatus } from './lifecycle.mjs';
 import { startPlanning } from './planning.mjs';
+import { moveToColumn, startBuild } from './build.mjs';
+import { attemptLabel, closedNewestFirst, jumpSession, phaseSegments, phaseSessions, workingMs } from './board-view.mjs';
 import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
@@ -210,11 +212,25 @@ export default async function kanban(ctx, config = {}) {
         awaitingApproval: isAwaitingApproval(ticket),
       });
 
+    /** The facts a card shows that no ticket column holds: phase path, working time, attempt wording, jump target. */
+    const derived = (ticket, telemetry, now) => {
+      const facts = telemetry ?? { transitions: [], events: [], spans: [], sessions: [] };
+      const closedAt = ticket.closedAt === null || ticket.closedAt === undefined ? null : Date.parse(ticket.closedAt);
+      return {
+        attemptLabel: attemptLabel(ticket.attemptCount),
+        segments: phaseSegments({ transitions: facts.transitions, phase: ticket.phase, column: ticket.column }),
+        workingMs: workingMs({ spans: facts.spans, events: facts.events, now, endAt: Number.isFinite(closedAt) ? closedAt : null }),
+        sessionId: jumpSession(facts.sessions, driver.activeSessionIds(ticket.id)),
+      };
+    };
+
     const board = () => {
       const tickets = store.listTickets();
+      const telemetry = store.boardTelemetry();
+      const now = Date.now();
       const byColumn = { backlog: [], working: [], done: [], discarded: [] };
       for (const ticket of tickets) {
-        const item = summary(ticket, store.isEditable(ticket.id));
+        const item = { ...summary(ticket, store.isEditable(ticket.id)), ...derived(ticket, telemetry.get(ticket.id), now) };
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
         item.awaitingQuestion = isAwaitingUser(ticket);
         item.awaitingApproval = isAwaitingApproval(ticket);
@@ -229,6 +245,8 @@ export default async function kanban(ctx, config = {}) {
       return {
         counts: store.counts(),
         columns: byColumn,
+        // Done and Discarded share one column on the board, newest closed first.
+        closed: closedNewestFirst([...byColumn.done, ...byColumn.discarded]),
       };
     };
 
@@ -258,7 +276,11 @@ export default async function kanban(ctx, config = {}) {
             ? { ...ticket, needsAttentionReason: 'Waiting on your answer' }
             : ticket),
           editable,
+          ...derived(ticket, store.boardTelemetry(ticket.id).get(ticket.id), Date.now()),
         },
+        // Where each progress step opens: plan -> the latest plan session,
+        // implement / review / approval -> the build session.
+        phaseSessions: phaseSessions(store.listSessions(ticket.id)),
         // KAN-31: the client used to render "5 / 3" because it had the attempt
         // count and a hard-coded cap. The cap is configuration; the detail payload
         // is where the client can read the one the engine is actually enforcing.
@@ -444,8 +466,7 @@ export default async function kanban(ctx, config = {}) {
             // into Working starts the engine (any park is cleared by the move),
             // back into Backlog parks it. No WIP guard — the cap only throttles
             // concurrency, queued Working tickets wait their turn.
-            const updated = store.transitionTicket(String(p.id), { column }, { actor: 'human', reason: p.reason ?? 'human move' });
-            void engineRef.current.tick();
+            const updated = moveToColumn({ store, engine: engineRef.current, id: String(p.id), column, reason: p.reason });
             return { ok: true, value: { ticket: updated } };
           }
           case 'resolve': {
@@ -524,6 +545,13 @@ export default async function kanban(ctx, config = {}) {
               // every guard on it, lives in src/planning.mjs so it is testable
               // without the HTTP surface.
               const result = startPlanning({ store, driver, engine: engineRef.current, ticket });
+              if (!result.ok) return fail(result.code, result.message);
+              return { ok: true, value: { ticket: result.ticket } };
+            }
+            if (action === 'startBuild') {
+              // Start the build of a planned Backlog ticket: the same move into
+              // Working that dragging it there makes (src/build.mjs).
+              const result = startBuild({ store, engine: engineRef.current, ticket, reason: p.reason });
               if (!result.ok) return fail(result.code, result.message);
               return { ok: true, value: { ticket: result.ticket } };
             }
