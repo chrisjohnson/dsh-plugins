@@ -1259,16 +1259,20 @@ export class Engine {
     const config = this.getConfig();
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     try {
-      const [status, diff] = await Promise.all([
+      const [status, diff, head] = await Promise.all([
         execFileAsync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: 10_000, maxBuffer: 100_000 }),
         execFileAsync('git', ['-C', cwd, 'diff', 'HEAD'], { timeout: 10_000, maxBuffer: MAX_DIFF_BYTES }),
+        // HEAD is part of the fingerprint because `diff HEAD` is relative to it:
+        // a round that committed its work leaves a clean tree and would otherwise
+        // look exactly like a round that did nothing.
+        execFileAsync('git', ['-C', cwd, 'rev-parse', 'HEAD'], { timeout: 10_000, maxBuffer: 1000 }),
       ]);
       const untracked = status.stdout
         .split('\n')
         .filter((line) => line.startsWith('??'))
         .map((line) => line.slice(3))
         .slice(0, 50);
-      return hashText(`${status.stdout}\n${untracked.join('\n')}\n${diff.stdout}`);
+      return hashText(`${head.stdout}\n${status.stdout}\n${untracked.join('\n')}\n${diff.stdout}`);
     } catch {
       return null;
     }

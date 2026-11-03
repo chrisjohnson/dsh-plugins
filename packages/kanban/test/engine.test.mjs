@@ -1252,6 +1252,48 @@ test('a rework round against an unchanged working tree parks with no progress', 
   assert.deepEqual(signature.failingIds, ['notes'])
 })
 
+test('a rework round that commits its work is not called no-progress', async () => {
+  // The fingerprint reads `git diff HEAD`, which is relative to HEAD: a round
+  // that commits leaves a clean tree and would otherwise hash exactly like the
+  // round that did nothing. HEAD is part of the fingerprint for this case.
+  const cwd = gitRepo()
+  const { store, engine, driver } = setup(
+    {
+      implement: [
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+      ],
+      review: [
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_PASS },
+      ],
+    },
+    {},
+  )
+  const ticket = pickedUp(store, { workspaceCwd: cwd })
+  const git = (...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' })
+  let buildTurns = 0
+  const sendTurn = driver.sendTurn.bind(driver)
+  driver.sendTurn = async (input) => {
+    if (driver.sessions.get(input.sessionId)?.role === 'implementer') {
+      buildTurns += 1
+      if (buildTurns === 2) {
+        // This round does its work AND commits it: the tree is clean again.
+        writeFileSync(join(cwd, 'notes.txt'), 'hello\n')
+        git('add', 'notes.txt')
+        git('-c', 'user.email=test@example.com', '-c', 'user.name=test', 'commit', '-q', '-m', 'notes')
+      }
+    }
+    return sendTurn(input)
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(buildTurns, 3, 'the third round ran: a committed round is progress, not a repeat')
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
+})
+
 test('a rework round that moves the tree is not called no-progress', async () => {
   const cwd = gitRepo()
   const { store, engine, driver } = setup(

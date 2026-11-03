@@ -5,6 +5,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A rework round that committed its work was at risk of being called
+  no-progress** (KAN-31 review). The fingerprint read `git diff HEAD`, which is
+  relative to HEAD, so a round that finished by committing left a clean tree that
+  hashed exactly like a round that had done nothing — and the next round would
+  park instead of running. `rev-parse HEAD` is now part of the fingerprint, so a
+  moved HEAD is progress. Test: a rework round that commits is not called
+  no-progress.
+
 ## 0.17.0
 
 ### Fixed
