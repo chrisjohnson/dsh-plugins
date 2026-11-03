@@ -32,6 +32,13 @@ export const DEFAULT_CONFIG = {
   dbPath: null,
   /** Default cwd for a ticket created without one. `null` resolves to process.cwd(). */
   defaultWorkspaceCwd: null,
+  /**
+   * Absolute paths of live deployment checkouts. A build session's escalated
+   * writes there are denied outside the approval-phase pre-stage. The
+   * `DSH_KANBAN_LIVE_CHECKOUTS` environment variable (colon-separated) adds to
+   * this list; with neither set the rule is off.
+   */
+  liveCheckouts: [],
 
   /** Provider concurrency/pricing. Unknown providers are admitted one at a time at an unknown price. */
   providers: [],
@@ -262,6 +269,9 @@ export function resolveConfig(input = {}) {
 
   optionalString(config.dbPath, 'dbPath', errors);
   optionalString(config.defaultWorkspaceCwd, 'defaultWorkspaceCwd', errors);
+  if (!Array.isArray(config.liveCheckouts) || config.liveCheckouts.some((p) => !isNonEmptyString(p) || !p.startsWith('/'))) {
+    errors.push(new ConfigError('must be an array of absolute paths', 'liveCheckouts'));
+  }
   validateProviders(config.providers, errors, warnings);
   validateRoles(config.roles, errors, warnings);
   validateLadder(config.escalationLadder, errors);

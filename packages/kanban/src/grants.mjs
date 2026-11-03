@@ -246,7 +246,7 @@ export function escalationMode(reason) {
  * commands live in the `tool/call` event the agent loop appended for the call
  * being escalated.
  */
-function callArguments(agent, callId) {
+export function callArguments(agent, callId) {
   const events = agent?.session?.snapshotEvents?.();
   if (!Array.isArray(events)) return null;
   for (let i = events.length - 1; i >= 0; i -= 1) {

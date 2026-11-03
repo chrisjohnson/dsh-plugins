@@ -31,6 +31,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
 import { makeGrantApprover } from './grants.mjs';
+import { makeGuardApprover, resolveLiveCheckouts } from './guard.mjs';
 import { askUserToolDefinition, makeQuestionAnswerer } from './questions.mjs';
 
 export class DispatchError extends Error {
@@ -606,6 +607,14 @@ export class SessionDriver {
       // A session without the listener behaves like every pre-0.16 session:
       // each escalation asks the human. Losing grants is never losing work.
       this.log.warn('kanban grants: approver could not be registered: %s', String(error?.message ?? error));
+    }
+    // Registered second and prepended, so it runs before the grant approver:
+    // a denied target can never be rescued by a grant.
+    try {
+      const guard = makeGuardApprover({ store: this.store, log: this.log, getLiveCheckouts: () => resolveLiveCheckouts(this.getConfig()) });
+      agentCtx.on('approval/request', guard, { prepend: true });
+    } catch (error) {
+      this.log.warn('kanban guard: approver could not be registered: %s', String(error?.message ?? error));
     }
   }
 
