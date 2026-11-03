@@ -24,11 +24,14 @@ import { isQuestionPark, planRevisionState } from './recovery.mjs';
 import { startPlanning } from './planning.mjs';
 import { moveToColumn, startBuild } from './build.mjs';
 import { placement } from './ordering.mjs';
-import { attemptLabel, closedNewestFirst, jumpSession, phaseSegments, phaseSessions, workingMs } from './board-view.mjs';
+import { phaseSessions } from './board-view.mjs';
+import { compactBoard, createBoardSnapshots, derivedFacts, digest, stableJson } from './board-snapshot.mjs';
+import { BoardFeed } from './feed.mjs';
 import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
 const API_BASE = '/api/kanban';
+const STREAM_ENDPOINT = 'stream';
 const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 const ENDPOINTS = [
@@ -83,9 +86,12 @@ export default async function kanban(ctx, config = {}) {
   await validateRoutes(initial, llm, log);
 
   const db = openDatabase(dbPath);
+  // Set once the push channel exists; a committed event asks it to check soon.
+  const boardFeedRef = { current: null };
   const store = new KanbanStore(db, {
     onEvent: (event) => {
       if (process.env.DSH_KANBAN_DEBUG === '1') log.info('event %s %s', event.kind, event.ticketId ?? '-');
+      boardFeedRef.current?.notify();
     },
   });
 
@@ -209,55 +215,35 @@ export default async function kanban(ctx, config = {}) {
     const statusOf = (ticket) => attentionFacts(ticket, { engine, driver }).status;
 
     /** The facts a card shows that no ticket column holds: phase path, working time, attempt wording, jump target. */
-    const derived = (ticket, telemetry, now) => {
-      const facts = telemetry ?? { transitions: [], events: [], spans: [], sessions: [] };
-      const closedAt = ticket.closedAt === null || ticket.closedAt === undefined ? null : Date.parse(ticket.closedAt);
-      return {
-        attemptLabel: attemptLabel(ticket.attemptCount),
-        segments: phaseSegments({ transitions: facts.transitions, phase: ticket.phase, column: ticket.column }),
-        workingMs: workingMs({ spans: facts.spans, events: facts.events, now, endAt: Number.isFinite(closedAt) ? closedAt : null }),
-        sessionId: jumpSession(facts.sessions, driver.activeSessionIds(ticket.id)),
-      };
-    };
+    const derived = (ticket, telemetry, now) => derivedFacts(ticket, telemetry, now, { driver });
 
-    const board = () => {
-      const tickets = store.listTickets();
-      const telemetry = store.boardTelemetry();
-      const now = Date.now();
-      const byColumn = { backlog: [], working: [], done: [], discarded: [] };
-      for (const ticket of tickets) {
-        const item = { ...summary(ticket, store.isEditable(ticket.id)), ...derived(ticket, telemetry.get(ticket.id), now) };
-        if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
-        // A ticket parked because its session ended on a question reads exactly
-        // like one whose session is paused inside the question: both are waiting
-        // on the person's answer, and the card, chip and next-action say so.
-        item.parkedOnQuestion = isQuestionPark(ticket.needsAttentionReason);
-        item.awaitingQuestion = isAwaitingUser(ticket) || item.parkedOnQuestion;
-        item.awaitingApproval = isAwaitingApproval(ticket);
-        item.status = statusOf(ticket);
-        // Attention without an engine park is a mid-turn human wait (KAN-17):
-        // say which one, so the red card explains itself the way a park does.
-        if (item.status === 'attention' && !ticket.needsAttentionReason) {
-          item.needsAttentionReason = item.awaitingApproval ? 'Awaiting your approval' : 'Waiting on your answer';
-        }
-        byColumn[ticket.column]?.push(item);
+    // The board is built by one module (src/board-snapshot.mjs) for the RPC and
+    // the push channel alike, so both always say the same thing.
+    const snapshots = createBoardSnapshots({ store, driver, engine });
+    const feed = new BoardFeed({ token: snapshots.token, build: snapshots.build });
+    boardFeedRef.current = feed;
+    ctx.effect(() => () => {
+      boardFeedRef.current = null;
+      feed.close();
+    }, `${PLUGIN_NAME}: board feed`);
+
+    /** A board answer: the whole board, or, when the caller already holds this exact state, a one-line "unchanged". */
+    const boardAnswer = (p) => {
+      if (typeof p.since === 'string' && p.since !== '') {
+        const current = snapshots.token();
+        if (current === p.since) return { unchanged: true, token: current };
       }
-      return {
-        counts: store.counts(),
-        columns: byColumn,
-        // Done and Discarded share one column on the board, newest closed first.
-        closed: closedNewestFirst([...byColumn.done, ...byColumn.discarded]),
-      };
+      const snapshot = snapshots.build();
+      const body = p.compact === true ? compactBoard(snapshot.board) : snapshot.board;
+      return { ...body, seq: snapshot.seq, boot: snapshot.boot, token: snapshot.token, asOf: snapshot.asOf };
     };
 
-    const detail = (id) => {
+    const detail = (id, { withEvents = true } = {}) => {
       const ticket = requireTicket(id);
       const spans = store.listSpans(ticket.id);
       const events = store.listEvents(ticket.id, { limit: 300 });
-      const artifacts = store.listArtifacts(ticket.id, { limit: 40 }).map((artifact) => ({
-        ...artifact,
-        content: store.getArtifact(artifact.id)?.content ?? '',
-      }));
+      // Artifact bodies ride only inside the timeline steps they belong to.
+      const artifacts = store.listArtifactsWithContent(ticket.id, { limit: 40 });
       const plan = store.latestArtifact(ticket.id, 'plan');
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
@@ -270,8 +256,10 @@ export default async function kanban(ctx, config = {}) {
       const pendingWait = driver.humanWaitSession(ticket.id);
       // `editable` is the lock the client renders: the pencil is dead the moment
       // any engine has touched the ticket (see store.isEditable).
-      const editable = store.isEditable(ticket.id);
-      return {
+      const editable = store.isEditableTicket(ticket);
+      const sessions = store.listSessions(ticket.id);
+      const conditions = store.listConditions(ticket.id);
+      const value = {
         ticket: {
           ...(awaitingQuestion && !ticket.needsAttentionReason
             ? { ...ticket, needsAttentionReason: 'Waiting on your answer' }
@@ -281,7 +269,7 @@ export default async function kanban(ctx, config = {}) {
         },
         // Where each progress step opens: plan -> the latest plan session,
         // implement / review / approval -> the build session.
-        phaseSessions: phaseSessions(store.listSessions(ticket.id)),
+        phaseSessions: phaseSessions(sessions),
         // KAN-31: the client used to render "5 / 3" because it had the attempt
         // count and a hard-coded cap. The cap is configuration; the detail payload
         // is where the client can read the one the engine is actually enforcing.
@@ -294,7 +282,7 @@ export default async function kanban(ctx, config = {}) {
         // client only draws the buttons these name.
         actions: {
           markDone: canMarkDone(ticket).ok,
-          rerunReview: canRerunReview(ticket, { hasConditions: store.listConditions(ticket.id).length > 0 }).ok,
+          rerunReview: canRerunReview(ticket, { hasConditions: conditions.length > 0 }).ok,
           revisePlan: engine.planRevisionBlock(ticket) === null,
         },
         planRevision: planRevisionState(events),
@@ -305,14 +293,11 @@ export default async function kanban(ctx, config = {}) {
           ?? (ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null)
           ?? (parkedOnQuestion ? (driver.liveTicketSession(ticket.id, ticket.phase === 'plan' ? 'plan' : 'build') ?? null) : null),
         acceptance: store.listAcceptance(ticket.id),
-        conditions: store.listConditions(ticket.id),
-        sessions: store.listSessions(ticket.id),
+        conditions,
+        sessions,
         spans,
-        spanTree: tree(spans),
         timeline: timelineView(spans, artifacts, events),
         usage: store.rollup(ticket.id),
-        events,
-        artifacts,
         // One entry per distinct `kanban-image:` ref in the body, in order;
         // `available: false` means the bytes no longer resolve and the client
         // renders the ref broken rather than hiding the human's reference.
@@ -321,6 +306,25 @@ export default async function kanban(ctx, config = {}) {
         review: review === undefined ? null : safeJson(review.content),
         verification: verification === undefined ? null : safeJson(verification.content),
       };
+      // The lifecycle log is the Events tab's alone: a page that is not showing
+      // it asks without it and the payload stays a fraction of the size.
+      if (withEvents) value.events = events;
+      return value;
+    };
+
+    /**
+     * A detail answer. The token is a digest of the content with only the
+     * clock's contribution removed, so a caller holding the current token is
+     * told "unchanged" in one line instead of being sent the whole ticket again.
+     * A ticket with a running step also folds in a ten-second bucket, so its
+     * live bars keep advancing.
+     */
+    const detailAnswer = (p) => {
+      const value = detail(String(p.id), { withEvents: p.events !== false });
+      const running = value.ticket.accruing === true || value.timeline.some((item) => item.status === 'running');
+      const token = digest(`${stableJson(value)}|${running ? Math.floor(Date.now() / 10000) : 0}`);
+      if (typeof p.since === 'string' && p.since === token) return { unchanged: true, token };
+      return { ...value, token };
     };
 
     const handler = async (endpoint, payload) => {
@@ -328,7 +332,7 @@ export default async function kanban(ctx, config = {}) {
         const p = payload !== null && typeof payload === 'object' ? payload : {};
         switch (endpoint) {
           case 'board':
-            return { ok: true, value: board() };
+            return { ok: true, value: boardAnswer(p) };
           case 'workspaces': {
             const registry = ctx.get('workspaceRegistry');
             const items = registry === undefined || typeof registry.list !== 'function' ? [] : registry.list().map((workspace) => ({
@@ -339,7 +343,7 @@ export default async function kanban(ctx, config = {}) {
             return { ok: true, value: { items } };
           }
           case 'ticket':
-            return { ok: true, value: detail(String(p.id)) };
+            return { ok: true, value: detailAnswer(p) };
           case 'events':
             return { ok: true, value: store.listEvents(String(p.id), { limit: p.limit ?? 300, before: p.before ?? null }) };
           case 'readImage': {
@@ -761,7 +765,17 @@ export default async function kanban(ctx, config = {}) {
         fetch: apiFetch(endpoint),
       });
     }
-    log.info('applied: db=%s routes=%s/{%s}', dbPath, API_BASE, ENDPOINTS.join(','));
+    // The push channel: a long-lived response of newline-delimited board frames.
+    // The browser holds one for as long as a board is visible; the feed behind it
+    // does no work when none is open. A frame is dropped rather than queued when
+    // the reader is behind, because the next one supersedes it.
+    connection.fetch.register({
+      path: `${API_BASE}/${STREAM_ENDPOINT}`,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request) => openBoardStream(feed, request),
+    });
+    log.info('applied: db=%s routes=%s/{%s,%s}', dbPath, API_BASE, ENDPOINTS.join(','), STREAM_ENDPOINT);
   });
 
   // ---- shutdown ------------------------------------------------------------
@@ -776,42 +790,38 @@ export default async function kanban(ctx, config = {}) {
 
 // ---------------------------------------------------------------------------
 
-function summary(ticket, editable = false) {
-  return {
-    id: ticket.id,
-    key: ticket.key,
-    title: ticket.title,
-    column: ticket.column,
-    phase: ticket.phase,
-    editable,
-    priority: ticket.priority,
-    sortOrder: ticket.sortOrder,
-    attemptCount: ticket.attemptCount,
-    planTiming: ticket.planTiming,
-    planQuestions: ticket.planQuestions,
-    spentUsd: ticket.spentUsd,
-    budgetUsd: ticket.budgetUsd,
-    allowPaid: ticket.allowPaid,
-    needsAttentionReason: ticket.needsAttentionReason,
-    updatedAt: ticket.updatedAt,
-    createdAt: ticket.createdAt,
-    closedAt: ticket.closedAt ?? null,
-    totalMs: (() => {
-      const created = Date.parse(ticket.createdAt);
-      const closed = ticket.closedAt === null || ticket.closedAt === undefined ? Date.now() : Date.parse(ticket.closedAt);
-      return Number.isFinite(created) && Number.isFinite(closed) ? Math.max(0, closed - created) : 0;
-    })(),
+/**
+ * Hold one board stream open: newline-delimited JSON frames from the feed until
+ * the reader goes away. A frame is dropped rather than queued when the reader is
+ * behind; the next one supersedes it.
+ */
+function openBoardStream(feed, request) {
+  const encoder = new TextEncoder();
+  let unsubscribe = null;
+  const stop = () => {
+    if (unsubscribe !== null) unsubscribe();
+    unsubscribe = null;
   };
-}
-
-function tree(spans) {
-  const byId = new Map(spans.map((span) => [span.id, { ...span, children: [] }]));
-  const roots = [];
-  for (const span of byId.values()) {
-    if (span.parentSpanId !== null && byId.has(span.parentSpanId)) byId.get(span.parentSpanId).children.push(span);
-    else roots.push(span);
-  }
-  return roots;
+  const body = new ReadableStream({
+    start: (controller) => {
+      unsubscribe = feed.subscribe((line) => {
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) return;
+        controller.enqueue(encoder.encode(line));
+      });
+      request.signal?.addEventListener('abort', () => {
+        stop();
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }, { once: true });
+    },
+    cancel: stop,
+  });
+  return new Response(body, {
+    headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' },
+  });
 }
 
 

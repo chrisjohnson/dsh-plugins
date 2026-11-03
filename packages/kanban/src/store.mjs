@@ -52,6 +52,13 @@ const BOARD_EVENT_KINDS = [
   'human_wait_ended',
 ];
 
+/** Every tickets column except the body (see listTickets). */
+const TICKET_SUMMARY_COLUMNS = [
+  'id', 'key', 'title', 'col', 'phase', 'plan_timing', 'plan_questions', 'priority', 'sort_order', 'allow_paid',
+  'budget_usd', 'spent_usd', 'attempt_count', 'escalation_rung', 'workspace_cwd', 'preset', 'write_mode', 'worktree',
+  'needs_attention_reason', 'confidence_threshold', 'created_at', 'updated_at', 'closed_at', 'version',
+].join(', ');
+
 const TICKET_FIELDS = [
   'title',
   'body',
@@ -296,14 +303,55 @@ export class KanbanStore {
     return ticketFromRow(row);
   }
 
-  listTickets({ columns = null } = {}) {
+  /**
+   * Every ticket, or those in the given columns, in queue order. `withBody:
+   * false` leaves the (large, rarely needed) body out of the read: the board
+   * and the scheduler never look at it, and on a long-lived board the bodies
+   * are most of the bytes in the table.
+   */
+  listTickets({ columns = null, withBody = true } = {}) {
+    const fields = withBody ? '*' : TICKET_SUMMARY_COLUMNS;
     const rows =
       columns === null || columns === undefined
-        ? this.db.prepare('SELECT * FROM tickets ORDER BY created_at ASC').all()
+        ? this.db.prepare(`SELECT ${fields} FROM tickets ORDER BY created_at ASC`).all()
         : this.db
-            .prepare(`SELECT * FROM tickets WHERE col IN (${columns.map(() => '?').join(',')}) ORDER BY created_at ASC`)
+            .prepare(`SELECT ${fields} FROM tickets WHERE col IN (${columns.map(() => '?').join(',')}) ORDER BY created_at ASC`)
             .all(...columns);
     return rows.map(ticketFromRow).sort(compareQueue);
+  }
+
+  /**
+   * The tickets the scheduler could launch right now, in launch order: those in
+   * Working that are not parked, then Backlog tickets asked to plan now. The
+   * filter runs in SQL so a board where everything is parked, done or waiting
+   * costs the tick one indexed read and no row decoding.
+   */
+  listRunnable() {
+    const unparked = "(needs_attention_reason IS NULL OR needs_attention_reason = '')";
+    const working = this.db.prepare(`SELECT ${TICKET_SUMMARY_COLUMNS} FROM tickets WHERE col = 'working' AND ${unparked}`).all();
+    const planNow = this.db
+      .prepare(`SELECT ${TICKET_SUMMARY_COLUMNS} FROM tickets WHERE col = 'backlog' AND phase = 'plan' AND plan_timing = 'now' AND ${unparked}`)
+      .all();
+    return [...working.map(ticketFromRow).sort(compareQueue), ...planNow.map(ticketFromRow).sort(compareQueue)];
+  }
+
+  /** Just the id and phase of every ticket: the cheap list the live-state signature walks. */
+  listTicketHeads() {
+    return this.db.prepare('SELECT id, phase FROM tickets').all().map((row) => ({ id: row.id, phase: row.phase }));
+  }
+
+  /**
+   * A token that differs whenever any row of the database changed: the
+   * connection's own write count plus SQLite's data version (which moves when
+   * another connection wrote). Two equal tokens mean nothing stored changed in
+   * between; it says nothing about in-memory state or the clock.
+   */
+  changeToken() {
+    this.changeStatements ??= {
+      total: this.db.prepare('SELECT total_changes() AS n'),
+      version: this.db.prepare('PRAGMA data_version'),
+    };
+    return `${this.changeStatements.total.get().n}.${this.changeStatements.version.get().data_version}`;
   }
 
   updateTicket(idOrKey, patch, { actor = 'human', reason = '' } = {}) {
@@ -381,6 +429,11 @@ export class KanbanStore {
   isEditable(idOrKey) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) return false;
+    return this.isEditableTicket(ticket);
+  }
+
+  /** `isEditable` for a ticket row already in hand: the board asks it for every card. */
+  isEditableTicket(ticket) {
     if (ticket.column !== 'backlog' && ticket.column !== 'working') return false;
     if (ticket.phase !== 'plan') return false;
     if (Number(ticket.attemptCount) > 0) return false;
@@ -613,10 +666,26 @@ export class KanbanStore {
    * What the board derives per-ticket facts from, for every ticket in three
    * queries: phase transitions and attention events, work spans, and attached
    * sessions. Returned as Map(ticketId -> {transitions, events, spans, sessions}).
+   *
+   * `scope` is null (every ticket), one ticket id, or a list of ids: a scoped
+   * read goes through the per-ticket indexes instead of scanning the whole
+   * event log. `sessions: false` skips the session read (see boardSessions).
    */
-  boardTelemetry(ticketId = null) {
-    const only = ticketId === null ? '' : ' AND ticket_id = ?';
-    const arg = ticketId === null ? [] : [ticketId];
+  boardTelemetry(scope = null, { sessions = true } = {}) {
+    if (Array.isArray(scope)) {
+      // Bound-variable limits: read a long id list in slices.
+      const merged = new Map();
+      for (let at = 0; at < scope.length; at += 400) {
+        for (const [id, entry] of this.#telemetry(scope.slice(at, at + 400), sessions)) merged.set(id, entry);
+      }
+      return merged;
+    }
+    return this.#telemetry(scope === null ? null : [scope], sessions);
+  }
+
+  #telemetry(ids, sessions) {
+    const only = ids === null ? '' : ` AND ticket_id IN (${ids.map(() => '?').join(',')})`;
+    const arg = ids === null ? [] : ids;
     const out = new Map();
     const bucket = (ticketId) => {
       let entry = out.get(ticketId);
@@ -642,8 +711,23 @@ export class KanbanStore {
     for (const row of this.db.prepare(`SELECT ticket_id, kind, status, started_at, ended_at FROM spans WHERE 1 = 1${only}`).all(...arg)) {
       bucket(row.ticket_id).spans.push({ kind: row.kind, status: row.status, startedAt: row.started_at, endedAt: row.ended_at });
     }
+    if (!sessions) return out;
     for (const row of this.db.prepare(`SELECT ticket_id, dsh_session_id, role, purpose FROM sessions WHERE ticket_id IS NOT NULL${only} ORDER BY id ASC`).all(...arg)) {
       bucket(row.ticket_id).sessions.push({ sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose });
+    }
+    return out;
+  }
+
+  /** Attached sessions of every ticket, oldest first: Map(ticketId -> [{sessionId, role, purpose}]). */
+  boardSessions() {
+    const out = new Map();
+    for (const row of this.db.prepare('SELECT ticket_id, dsh_session_id, role, purpose FROM sessions WHERE ticket_id IS NOT NULL ORDER BY id ASC').all()) {
+      let list = out.get(row.ticket_id);
+      if (list === undefined) {
+        list = [];
+        out.set(row.ticket_id, list);
+      }
+      list.push({ sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose });
     }
     return out;
   }
@@ -882,6 +966,21 @@ export class KanbanStore {
       createdAt: row.created_at,
       bytes: Number(row.bytes),
     }));
+  }
+
+  /** `listArtifacts` with each artifact's content, in one read instead of one per artifact. */
+  listArtifactsWithContent(ticketId, { limit = 100 } = {}) {
+    return this.db
+      .prepare('SELECT id, kind, span_id, created_at, bytes, content FROM artifacts WHERE ticket_id = ? ORDER BY id DESC LIMIT ?')
+      .all(ticketId, limit)
+      .map((row) => ({
+        id: Number(row.id),
+        kind: row.kind,
+        spanId: row.span_id,
+        createdAt: row.created_at,
+        bytes: Number(row.bytes),
+        content: row.content ?? '',
+      }));
   }
 
   getArtifact(id) {

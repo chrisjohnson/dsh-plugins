@@ -155,6 +155,23 @@ export function workingMs({ spans = [], events = [], now = Date.now(), endAt = n
   return worked.reduce((sum, [start, end]) => sum + (end - start), 0);
 }
 
+/**
+ * Whether the ticket's working time is growing right now: a work span is open,
+ * it is not paused on a person, and no attention stretch is covering the
+ * present. The board shows a still-growing time as the figure plus the time
+ * since it was read, so it needs no new request to keep moving.
+ */
+export function isAccruing({ spans = [], events = [] }, now = Date.now()) {
+  const running = spans.some(
+    (span) => WORK_SPAN_KINDS.has(span.kind)
+      && span.status !== 'awaiting_human'
+      && (span.endedAt === null || span.endedAt === undefined)
+      && toMs(span.startedAt) !== null,
+  );
+  if (!running) return false;
+  return workingMs({ spans, events, now: now + 1000 }) > workingMs({ spans, events, now });
+}
+
 /** The most recent session of a purpose (`plan` or `build`), by attach order. */
 export function latestSessionOf(sessions, purpose) {
   let hit = null;

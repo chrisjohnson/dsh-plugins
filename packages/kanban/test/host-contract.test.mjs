@@ -245,7 +245,7 @@ test('readImage is a registered endpoint answering through the store helper', as
 
 test('the detail response carries the body image refs', async () => {
   const host = (await sources())['host.mjs']
-  const detail = host.slice(host.indexOf('const detail = (id)'), host.indexOf('const handler ='))
+  const detail = host.slice(host.indexOf('const detail = (id'), host.indexOf('const handler ='))
   assert.match(detail, /images: describeBodyImages\(attachments\(\), ticket\.body \?\? ''\)/)
 })
 
@@ -259,11 +259,14 @@ test('both acceptance actions go through the guarded boundary', async () => {
 })
 
 test('the board and the detail both carry the editable flag', async () => {
-  const host = (await sources())['host.mjs']
-  assert.match(host, /summary\(ticket, store\.isEditable\(ticket\.id\)\)/, 'every board card knows if it is still editable')
-  assert.match(host, /function summary\(ticket, editable = false\)/)
-  assert.match(host, /const editable = store\.isEditable\(ticket\.id\)/, 'the detail computes the same predicate')
-  assert.equal((host.match(/^\s+editable,$/gm) || []).length, 2, 'summary and detail each carry it once')
+  const files = await sources()
+  const host = files['host.mjs']
+  const snapshot = files['board-snapshot.mjs']
+  assert.match(snapshot, /summary\(ticket, store\.isEditableTicket\(ticket\), nowMs\)/, 'every board card knows if it is still editable')
+  assert.match(snapshot, /export function summary\(ticket, editable = false/)
+  assert.match(host, /const editable = store\.isEditableTicket\(ticket\)/, 'the detail computes the same predicate')
+  assert.equal((snapshot.match(/^\s+editable,$/gm) || []).length, 1, 'summary carries it once')
+  assert.equal((host.match(/^\s+editable,$/gm) || []).length, 1, 'and so does the detail')
 })
 
 test('the detail hero has one Edit ticket pencil, disabled once the ticket started', async () => {
@@ -489,10 +492,12 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
 
   // The host feeds both flags to the card status and surfaces them on the board
   // and in the detail, with a reason that names which ask is pending.
+  const snapshot = files['board-snapshot.mjs']
   assert.match(host, /attentionFacts\(ticket, \{ engine, driver \}\)\.status/)
+  assert.match(snapshot, /attentionFacts\(ticket, \{ engine, driver \}\)\.status/)
   assert.match((await sources())['attention.mjs'], /awaitingApproval,\n\s*\}\);|awaitingUser: awaitingQuestion,\n\s*awaitingApproval,/)
-  assert.match(host, /item\.awaitingApproval = isAwaitingApproval\(ticket\)/)
-  assert.match(host, /'Awaiting your approval'/)
+  assert.match(snapshot, /item\.awaitingApproval = driver\.isAwaitingApproval\(ticket\.id\)/)
+  assert.match(snapshot, /'Awaiting your approval'/)
   assert.match(host, /awaitingApproval,\n\s*status:/, 'the detail payload carries the flag')
   assert.match(host, /pendingWait\?\.sessionId/, 'the detail points at the session holding the ask')
   // The question scan is no longer gated on the plan phase.
@@ -583,7 +588,7 @@ test('the detail payload carries the real attempt cap', async () => {
   // The client used to hard-code 3 and print "5 / 3". The cap is configuration,
   // so the host now sends the one the engine is enforcing.
   assert.match(host, /maxAttempts: getConfig\(\)\.maxAttempts/)
-  const detail = host.slice(host.indexOf('const detail = (id) =>'))
+  const detail = host.slice(host.indexOf('const detail = (id'))
   assert.ok(detail.indexOf('maxAttempts: getConfig().maxAttempts') < detail.indexOf('awaitingQuestion,'), 'the cap rides on the detail payload')
   const client = files['client.mjs']
   assert.match(client, /t\.attemptCount \+ " \/ " \+ \(d\.maxAttempts \|\| 3\)/, 'the attempts row reads the cap from the detail')
