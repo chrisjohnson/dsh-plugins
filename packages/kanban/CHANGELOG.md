@@ -5,6 +5,19 @@
 
 ## Unreleased
 
+## 0.24.1
+
+### Fixed
+
+- **The ticket overview's phase stepper is now just the dot and the name.** Each
+  phase that has a session used to be a pill-shaped button: it carried padding and
+  a negative margin, a rounded background, an underlined label, and the connector
+  dash drawn inside its own box, so the whole pill was the click target. Now only
+  the colour dot and the phase name are the button — no pill padding, no underline
+  — and the dash between phases is a separate non-interactive element. Hovering
+  still tints just the dot-and-name box, and clicking it still opens that phase's
+  session.
+
 ## 0.24.0
 
 ### Added

@@ -225,7 +225,7 @@ var CSS =
 		+ ".kb-hero-title{margin:8px 0 3px;font:500 18px/25px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
 		+ ".kb-lifecycle{display:flex;align-items:center;gap:4px;margin-top:12px;flex-wrap:wrap}"
 		+ ".kb-life{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary,#999);font:500 11px/16px var(--dsw-font-family,sans-serif)}"
-		+ ".kb-life.link{appearance:none;background:none;border:0;padding:2px 8px;margin:0 -4px;border-radius:999px;cursor:pointer}.kb-life.link:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.kb-life.link:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,#3b82f6)}.kb-life.link .kb-life-label{text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}.kb-life+.kb-life::before{content:'';width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px}"
+		+ ".kb-life.link{appearance:none;background:none;border:0;padding:0;margin:0;cursor:pointer}.kb-life.link:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.kb-life.link:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,#3b82f6)}.kb-life-sep{width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px;flex:none}"
 		+ ".kb-life-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-bg-layer-2,#eef1f5);border:1px solid var(--dsw-alias-border-l3,#ccc)}"
 		+ ".kb-life-intake{--kb-life-color:#64748b}.kb-life-grill{--kb-life-color:#d97706}.kb-life-plan{--kb-life-color:#2563eb}.kb-life-implement{--kb-life-color:#0d9488}.kb-life-verify{--kb-life-color:#7c3aed}.kb-life-review{--kb-life-color:#db2777}.kb-life-closed{--kb-life-color:#15803d}"
 		+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-life-color);border-color:var(--kb-life-color)}"
@@ -1942,26 +1942,29 @@ var CSS =
 			var targets = props.sessions || {};
 			var current = phaseIndex(t.phase);
 			var closed = t.phase === "closed" || t.column === "done";
-			return h("div", { className: "kb-lifecycle" },
-				PHASES.map(function (phase, i) {
-					var done = closed || i < current;
-					var active = !closed && i === current;
-					var target = targets[phase] || null;
-					var className = "kb-life kb-life-" + phase + (done ? " done" : "") + (active ? " active" : "") + (target ? " link" : "");
-					var dot = h("span", { className: "kb-life-dot" });
-					var label = h("span", { className: "kb-life-label", children: phaseLabel(phase) });
-					// A step with a session is a link to it: plan opens the latest plan
-					// session, build / review / approval open the build session.
-					if (!target) return h("div", { key: phase, className: className }, dot, label);
-					return h("button", {
-						key: phase,
-						type: "button",
-						className: className,
-						title: "Open the " + (phase === "plan" ? "plan" : "build") + " session for " + phaseLabel(phase),
-						onClick: function () { if (props.onOpenSession) props.onOpenSession(target); }
-					}, dot, label);
-				})
-			);
+			var items = [];
+			PHASES.forEach(function (phase, i) {
+				var done = closed || i < current;
+				var active = !closed && i === current;
+				var target = targets[phase] || null;
+				var className = "kb-life kb-life-" + phase + (done ? " done" : "") + (active ? " active" : "") + (target ? " link" : "");
+				var dot = h("span", { className: "kb-life-dot" });
+				var label = h("span", { className: "kb-life-label", children: phaseLabel(phase) });
+				// The connector dash is a non-interactive sibling between phases, not
+				// part of the button, so the hit area is exactly the dot + phase name.
+				if (i > 0) items.push(h("span", { key: "sep-" + phase, className: "kb-life-sep" }));
+				// A step with a session is a link to it: plan opens the latest plan
+				// session, build / review / approval open the build session.
+				if (!target) { items.push(h("div", { key: phase, className: className }, dot, label)); return; }
+				items.push(h("button", {
+					key: phase,
+					type: "button",
+					className: className,
+					title: "Open the " + (phase === "plan" ? "plan" : "build") + " session for " + phaseLabel(phase),
+					onClick: function () { if (props.onOpenSession) props.onOpenSession(target); }
+				}, dot, label));
+			});
+			return h("div", { className: "kb-lifecycle" }, items);
 		}
 
 		function TicketAnalytics(props) {
