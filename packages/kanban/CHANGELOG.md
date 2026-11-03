@@ -5,6 +5,36 @@
 
 ## Unreleased
 
+## 0.23.0
+
+### Changed
+
+- **The board is pushed, not polled.** A visible board holds one stream shared by
+  the sidebar badges and the page, instead of two timers asking for the whole
+  board every 3 and 5 seconds. Frames are sent only when something on the board
+  changed; a hidden tab sends nothing; an unavailable stream falls back to asking
+  with a change token, answered "unchanged" in a line and backing off from 3 to
+  30 seconds. The open ticket is fetched when selected and again only when the
+  Host says something changed, and an unchanged ticket costs one line. Routing,
+  workspaces and presets are read when their dialog or form opens, not on timers.
+- **A cheaper board and ticket.** The board is built from one read per table, and
+  the history-derived facts of closed tickets are remembered; the ticket payload
+  drops the unused span tree and the duplicate artifact list, and leaves the
+  lifecycle log to the Events tab. Done and Discarded travel once.
+- **A cheaper scheduler tick.** With nothing to launch a tick is one narrow query,
+  and at the concurrency cap it reads nothing.
+- **Less redrawing.** Cards that say the same thing are not redrawn, "N ago" and
+  a growing working time update as small text leaves on one shared tick, and
+  dragging measures the cards once per frame.
+
+### Fixed
+
+- **"Could not reach the Host." no longer sticks.** The banner appears only after
+  two failed polls in a row, slows the asking down while the Host is down, and goes
+  away on the first poll that works, on the Refresh button's successful reload, and
+  when you move to another ticket or view. An error from something you did stays
+  until your next action that works.
+
 ## 0.22.1
 
 ### Fixed

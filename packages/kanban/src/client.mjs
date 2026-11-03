@@ -410,31 +410,391 @@ var CSS =
 
 		// ------------------------------------------------------------------ icon
 
-		function useKanbanBadges() {
-			var s = React.useState({ inFlight: 0, attention: 0 });
-			var badges = s[0], setBadges = s[1];
-			React.useEffect(function () {
-				var alive = true;
-				function load() {
-					if (!connection) return;
-					rpc("board", {}).then(function (res) {
-						if (!alive || !res || !res.ok || !res.value) return;
-						var columns = res.value.columns || {};
-						var inFlight = 0, attention = 0;
-						["backlog", "working", "done", "discarded"].forEach(function (name) {
-							(columns[name] || []).forEach(function (ticket) {
-								if (ticket.status === "active") inFlight += 1;
-								else if (ticket.status === "attention") attention += 1;
-							});
-						});
-						setBadges({ inFlight: inFlight, attention: attention });
-					}, function () {});
+		// ---------------------------------------------------------------------
+		// Live board.
+		//
+		// One shared store serves everything that shows the board (the sidebar
+		// icon's badges and the page). It holds a single long-lived streaming
+		// request to the Host while anything is subscribed and the tab is
+		// visible, and nothing at all while the tab is hidden. The Host pushes a
+		// frame only when the board changed; a frame that carries only a newer
+		// token tells a page showing a ticket's detail to look again. If the
+		// stream cannot be held (a proxy that buffers, an old Host) the store
+		// falls back to asking `board` with the last token, which the Host
+		// answers with a one-line "unchanged" when nothing moved, backing off
+		// while that stays true, and retries the stream with back-off.
+		// ---------------------------------------------------------------------
+
+		var STREAM_URL = "/api/kanban/stream";
+		var STALL_MS = 20000;
+		var POLL_BASE_MS = 3000;
+		var POLL_MAX_MS = 30000;
+		var POLL_FAST_POLLS = 3;
+		var POLL_FAILURES_SHOWN = 2;
+		var RETRY_BASE_MS = 2000;
+		var RETRY_MAX_MS = 30000;
+		var CLOCK_MS = 3000;
+		var BOARD_COLUMNS = ["backlog", "working", "done", "discarded"];
+
+		// What a card says, with only the clock's contribution left out: a time
+		// that is still growing is carried forward by the browser, not re-sent.
+		function cardSignature(card) {
+			return JSON.stringify(card, function (key, value) {
+				if (key === "totalMs" || key === "readAt") return undefined;
+				if (key === "workingMs" && this.accruing === true) return undefined;
+				return value;
+			});
+		}
+
+		var cardSignatures = new WeakMap();
+		function signatureOf(card) {
+			var known = cardSignatures.get(card);
+			if (known === undefined) {
+				known = cardSignature(card);
+				cardSignatures.set(card, known);
+			}
+			return known;
+		}
+
+		// A compact board carries Done and Discarded once, in `closed`; the page
+		// reads them per column as well.
+		function expandBoard(raw) {
+			if (!raw || raw.compact !== true) return raw;
+			var closed = raw.closed || [];
+			var columns = Object.assign({}, raw.columns);
+			columns.done = closed.filter(function (card) { return card.column === "done"; });
+			columns.discarded = closed.filter(function (card) { return card.column === "discarded"; });
+			return Object.assign({}, raw, { columns: columns });
+		}
+
+		// Cards that say exactly what they said before keep their identity, and
+		// so does a list of such cards: what did not change does not re-render.
+		function reuseCards(previous, next, readAt) {
+			var before = {};
+			if (previous) {
+				BOARD_COLUMNS.forEach(function (name) {
+					((previous.columns || {})[name] || []).forEach(function (card) { before[card.id] = card; });
+				});
+			}
+			function share(list, old) {
+				var out = (list || []).map(function (card) {
+					var prior = before[card.id];
+					if (prior !== undefined && signatureOf(prior) === cardSignature(card)) return prior;
+					card.readAt = readAt;
+					return card;
+				});
+				if (old && old.length === out.length && out.every(function (card, i) { return card === old[i]; })) return old;
+				return out;
+			}
+			var columns = {};
+			BOARD_COLUMNS.forEach(function (name) {
+				columns[name] = share(next.columns[name], previous && previous.columns ? previous.columns[name] : null);
+			});
+			return Object.assign({}, next, { columns: columns, closed: share(next.closed, previous ? previous.closed : null) });
+		}
+
+		function countBadges(board) {
+			var inFlight = 0, attention = 0;
+			if (board && board.columns) {
+				BOARD_COLUMNS.forEach(function (name) {
+					(board.columns[name] || []).forEach(function (ticket) {
+						if (ticket.status === "active") inFlight += 1;
+						else if (ticket.status === "attention") attention += 1;
+					});
+				});
+			}
+			return { inFlight: inFlight, attention: attention };
+		}
+
+		// How long to wait before the next fallback ask: the base for the first
+		// few answers that said "unchanged", then doubling up to a ceiling. Any
+		// change starts the count again.
+		function pollDelay(unchangedRun) {
+			if (unchangedRun <= POLL_FAST_POLLS) return POLL_BASE_MS;
+			return Math.min(POLL_MAX_MS, POLL_BASE_MS * Math.pow(2, unchangedRun - POLL_FAST_POLLS));
+		}
+
+		function createBoardStore(env) {
+			var listeners = new Set();
+			var state = { board: null, token: null, seq: 0, boot: null, error: null, mode: "idle" };
+			var controller = null;
+			var pollTimer = null;
+			var retryTimer = null;
+			var stallTimer = null;
+			var failures = 0;
+			var pollFailures = 0;
+			var unchangedRun = 0;
+			var generation = 0;
+			var held = 0;
+
+			function emit() {
+				Array.from(listeners).forEach(function (listener) { listener(); });
+			}
+			function set(patch) {
+				state = Object.assign({}, state, patch);
+				emit();
+			}
+			function hidden() {
+				return !!(env.document && env.document.hidden);
+			}
+			function clearTimers() {
+				if (pollTimer !== null) { env.clearTimeout(pollTimer); pollTimer = null; }
+				if (retryTimer !== null) { env.clearTimeout(retryTimer); retryTimer = null; }
+				if (stallTimer !== null) { env.clearTimeout(stallTimer); stallTimer = null; }
+			}
+			function abortStream() {
+				if (controller !== null) { try { controller.abort(); } catch (e) { /* already closed */ } controller = null; }
+			}
+			function stopAll() {
+				generation += 1;
+				clearTimers();
+				abortStream();
+				state = Object.assign({}, state, { mode: "idle" });
+			}
+			// One board in. An answer older than what is shown (a frame built before
+			// a write the page has already seen) is dropped, and nothing is applied
+			// while a drop is still being written: the page asks again afterwards.
+			function ingest(value) {
+				if (!value) return false;
+				var patch = {};
+				if (typeof value.token === "string" && value.token !== state.token) patch.token = value.token;
+				var fresh = value.boot !== state.boot || (typeof value.seq === "number" && value.seq > state.seq);
+				if (value.columns && held === 0 && fresh) {
+					var full = expandBoard(value);
+					patch.board = reuseCards(state.board, full, env.now());
+					patch.seq = value.seq;
+					patch.boot = value.boot;
+					patch.error = null;
 				}
-				load();
-				var timer = setInterval(load, 5000);
-				return function () { alive = false; clearInterval(timer); };
-			}, []);
-			return badges;
+				if (Object.keys(patch).length === 0) return false;
+				set(patch);
+				return true;
+			}
+			function pollOnce() {
+				pollTimer = null;
+				var mine = generation;
+				env.rpc("board", { compact: true, since: state.token || undefined }).then(function (res) {
+					if (mine !== generation || state.mode !== "poll") return;
+					var changed = false;
+					if (res && res.ok && res.value) {
+						if (!res.value.unchanged) changed = ingest(res.value);
+						unchangedRun = changed ? 0 : unchangedRun + 1;
+						pollSucceeded();
+					} else {
+						pollFailed(res && res.error ? res.error.message : "Could not reach the Host.");
+					}
+					schedulePoll();
+				}, function () {
+					if (mine !== generation || state.mode !== "poll") return;
+					pollFailed("Could not reach the Host.");
+					schedulePoll();
+				});
+			}
+			// A failed ask is said out loud only when the next one fails too, so a
+			// single dropped request never flashes a banner; every failure slows the
+			// asking down, and the first success clears the banner and the slowdown.
+			function pollFailed(text) {
+				pollFailures += 1;
+				unchangedRun += 1;
+				if (pollFailures >= POLL_FAILURES_SHOWN && state.error !== text) set({ error: text });
+			}
+			function pollSucceeded() {
+				pollFailures = 0;
+				if (state.error !== null) set({ error: null });
+			}
+			function schedulePoll() {
+				if (state.mode !== "poll" || pollTimer !== null) return;
+				pollTimer = env.setTimeout(pollOnce, pollDelay(unchangedRun));
+			}
+			function fallBack() {
+				abortStream();
+				if (stallTimer !== null) { env.clearTimeout(stallTimer); stallTimer = null; }
+				failures += 1;
+				if (state.mode !== "poll") {
+					state = Object.assign({}, state, { mode: "poll" });
+					unchangedRun = 0;
+					pollOnce();
+					emit();
+				}
+				if (retryTimer !== null) env.clearTimeout(retryTimer);
+				var mine = generation;
+				var delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, Math.min(failures, 5)));
+				retryTimer = env.setTimeout(function () {
+					retryTimer = null;
+					if (mine === generation && listeners.size > 0 && !hidden()) openStream();
+				}, delay);
+			}
+			function armStall() {
+				if (stallTimer !== null) env.clearTimeout(stallTimer);
+				var mine = generation;
+				stallTimer = env.setTimeout(function () {
+					stallTimer = null;
+					if (mine === generation) fallBack();
+				}, STALL_MS);
+			}
+			function openStream() {
+				if (typeof env.fetch !== "function" || typeof env.AbortController !== "function") { fallBack(); return; }
+				var mine = generation;
+				controller = new env.AbortController();
+				var signal = controller.signal;
+				armStall();
+				env.fetch(STREAM_URL, {
+					method: "POST", headers: { "content-type": "application/json" },
+					credentials: "same-origin", body: "{}", signal: signal
+				}).then(function (response) {
+					if (!response.ok || !response.body || typeof response.body.getReader !== "function") throw new Error("stream unavailable");
+					var reader = response.body.getReader();
+					var decoder = new env.TextDecoder();
+					var buffer = "";
+					function pump() {
+						return reader.read().then(function (chunk) {
+							if (mine !== generation) return undefined;
+							if (chunk.done) throw new Error("stream closed");
+							armStall();
+							buffer += decoder.decode(chunk.value, { stream: true });
+							var cut;
+							while ((cut = buffer.indexOf("\n")) >= 0) {
+								var line = buffer.slice(0, cut);
+								buffer = buffer.slice(cut + 1);
+								if (line === "") continue;
+								var frame;
+								try { frame = JSON.parse(line); } catch (e) { continue; }
+								if (pollTimer !== null) { env.clearTimeout(pollTimer); pollTimer = null; }
+								if (retryTimer !== null) { env.clearTimeout(retryTimer); retryTimer = null; }
+								failures = 0;
+								pollSucceeded();
+								if (state.mode !== "stream") set({ mode: "stream" });
+								ingest(frame);
+							}
+							return pump();
+						});
+					}
+					return pump();
+				}).catch(function () {
+					if (mine !== generation || signal.aborted) return;
+					fallBack();
+				});
+			}
+			function start() {
+				if (listeners.size === 0 || hidden() || state.mode !== "idle") return;
+				state = Object.assign({}, state, { mode: "stream" });
+				failures = 0;
+				openStream();
+			}
+			function onVisibility() {
+				if (hidden()) stopAll();
+				else start();
+			}
+			if (env.document && env.document.addEventListener) env.document.addEventListener("visibilitychange", onVisibility);
+			return {
+				subscribe: function (listener) {
+					listeners.add(listener);
+					start();
+					return function () {
+						listeners.delete(listener);
+						if (listeners.size === 0) stopAll();
+					};
+				},
+				get: function () { return state; },
+				// Ask for the board now (after the page changed something, or on
+				// request). The answer goes through the same stale-answer rule.
+				refresh: function () {
+					return env.rpc("board", { compact: true }).then(function (res) {
+						if (res && res.ok && res.value) { ingest(res.value); return null; }
+						return res && res.error ? res.error.message : "That did not work.";
+					}, function () { return "Could not reach the Host."; });
+				},
+				// The page shows a change it has made before the Host has confirmed it.
+				update: function (change) {
+					if (!state.board) return;
+					set({ board: change(state.board) });
+				},
+				// While a drop is being written, boards from the Host are not applied.
+				hold: function () { held += 1; },
+				release: function () { held = Math.max(0, held - 1); },
+				dispose: function () {
+					stopAll();
+					if (env.document && env.document.removeEventListener) env.document.removeEventListener("visibilitychange", onVisibility);
+				}
+			};
+		}
+
+		// One shared tick for every time that is shown as "N ago" or as a growing
+		// working time: it runs only while one is on screen and the tab is
+		// visible, and only those small text leaves re-render on it.
+		function createClock(env) {
+			var listeners = new Set();
+			var timer = null;
+			var value = env.now();
+			function hidden() { return !!(env.document && env.document.hidden); }
+			function stop() { if (timer !== null) { env.clearInterval(timer); timer = null; } }
+			function start() {
+				if (timer !== null || listeners.size === 0 || hidden()) return;
+				timer = env.setInterval(function () {
+					value = env.now();
+					Array.from(listeners).forEach(function (listener) { listener(); });
+				}, CLOCK_MS);
+			}
+			function onVisibility() {
+				if (hidden()) { stop(); return; }
+				value = env.now();
+				Array.from(listeners).forEach(function (listener) { listener(); });
+				start();
+			}
+			if (env.document && env.document.addEventListener) env.document.addEventListener("visibilitychange", onVisibility);
+			return {
+				subscribe: function (listener) {
+					listeners.add(listener);
+					start();
+					return function () {
+						listeners.delete(listener);
+						if (listeners.size === 0) stop();
+					};
+				},
+				get: function () { return value; }
+			};
+		}
+
+		var liveEnv = {
+			document: typeof document !== "undefined" ? document : null,
+			fetch: typeof window !== "undefined" && window.fetch ? window.fetch.bind(window) : undefined,
+			AbortController: typeof AbortController !== "undefined" ? AbortController : undefined,
+			TextDecoder: typeof TextDecoder !== "undefined" ? TextDecoder : undefined,
+			setTimeout: function (fn, ms) { return window.setTimeout(fn, ms); },
+			clearTimeout: function (id) { window.clearTimeout(id); },
+			setInterval: function (fn, ms) { return window.setInterval(fn, ms); },
+			clearInterval: function (id) { window.clearInterval(id); },
+			now: function () { return Date.now(); },
+			rpc: rpc
+		};
+		var boardStore = createBoardStore(liveEnv);
+		var liveClock = createClock(liveEnv);
+
+		function useBoardStore() {
+			return React.useSyncExternalStore(boardStore.subscribe, boardStore.get);
+		}
+
+		function useClock() {
+			return React.useSyncExternalStore(liveClock.subscribe, liveClock.get);
+		}
+
+		// The working time on a card: the figure the Host read, plus the time
+		// since it was read while the ticket is still being worked on.
+		function LiveDur(props) {
+			var now = useClock();
+			var t = props.ticket;
+			var ms = (t.workingMs || 0) + (t.accruing && t.readAt ? Math.max(0, now - t.readAt) : 0);
+			return fmtDur(ms);
+		}
+
+		function LiveAgo(props) {
+			useClock();
+			return ago(props.iso);
+		}
+
+		function useKanbanBadges() {
+			var live = useBoardStore();
+			return React.useMemo(function () { return countBadges(live.board); }, [live.board]);
 		}
 
 		function KanbanIcon(props) {
@@ -550,6 +910,27 @@ var CSS =
 			}
 			return null;
 		}
+		// The id of the card a pointer at clientY would drop before, read from the
+		// live card boxes inside `container` and skipping the dragged card (it stays
+		// in place, dimmed, and is not a target).
+		function beforeIdFor(container, clientY, dragId) {
+			var nodes = container.querySelectorAll("[data-card-id]");
+			var rects = [];
+			Array.prototype.forEach.call(nodes, function (node) {
+				var id = node.getAttribute("data-card-id");
+				if (id === dragId) return;
+				var box = node.getBoundingClientRect();
+				rects.push({ id: id, top: box.top, height: box.height });
+			});
+			return dropBefore(rects, clientY);
+		}
+		// At most one pointer measurement per animation frame, whichever column
+		// the pointer is over.
+		var overFrame = { pending: false, latest: null };
+		function nextFrame(fn) {
+			if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(fn);
+			else setTimeout(fn, 16);
+		}
 		// True when dropping dragId before beforeId would leave the column as it is
 		// (right back where it was), so no indicator is drawn and nothing is sent.
 		function dropIsNoop(ids, dragId, beforeId) {
@@ -660,11 +1041,21 @@ var CSS =
 					}, "Start build") : null,
 					h("span", { className: "kb-spacer" }),
 					h("span", { className: "kb-worktime", title: "Time spent actively working on this ticket (not while it waits on you)" },
-						h(ClockIcon), fmtDur(t.workingMs || 0)),
-					h("span", { className: "kb-created", title: "Created " + fmtTime(t.createdAt), children: "created " + ago(t.createdAt) })
+						h(ClockIcon), h(LiveDur, { ticket: t })),
+					h("span", { className: "kb-created", title: "Created " + fmtTime(t.createdAt) }, "created ", h(LiveAgo, { iso: t.createdAt }))
 				)
 			);
 		}
+
+		// A card is redrawn when its own ticket object changed (the store keeps
+		// the identity of a card that said the same thing again) or when it starts
+		// or stops being dragged. Its callbacks are not compared: every one of them
+		// reaches current state through refs and setters, never through values
+		// captured at the render that created it.
+		function sameCard(prev, next) {
+			return prev.ticket === next.ticket && prev.dragging === next.dragging && prev.column === next.column;
+		}
+		var BoardCard = React.memo(Card, sameCard);
 
 		function Column(props) {
 			var items = props.items || [];
@@ -679,21 +1070,13 @@ var CSS =
 			var rendered = [];
 			items.forEach(function (t) {
 				if (showLine && target.beforeId === t.id) rendered.push(line);
-				rendered.push(h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onStartPlanning: props.onStartPlanning, onStartBuild: props.onStartBuild, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd }));
+				rendered.push(h(BoardCard, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onStartPlanning: props.onStartPlanning, onStartBuild: props.onStartBuild, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd }));
 			});
 			if (showLine && (target.beforeId === null || target.beforeId === undefined)) rendered.push(line);
 			// Where a pointer at ev.clientY would drop: read from the live card boxes,
 			// skipping the dragged card (it stays in place, dimmed, and is not a target).
 			function beforeIdAt(ev) {
-				var nodes = ev.currentTarget.querySelectorAll("[data-card-id]");
-				var rects = [];
-				Array.prototype.forEach.call(nodes, function (node) {
-					var id = node.getAttribute("data-card-id");
-					if (id === props.dragId) return;
-					var box = node.getBoundingClientRect();
-					rects.push({ id: id, top: box.top, height: box.height });
-				});
-				return dropBefore(rects, ev.clientY);
+				return beforeIdFor(ev.currentTarget, ev.clientY, props.dragId);
 			}
 			return h(
 				"div",
@@ -703,7 +1086,24 @@ var CSS =
 						if (!droppable || !dragging) return;
 						ev.preventDefault();
 						ev.dataTransfer.dropEffect = "move";
-						if (props.onDragOverColumn) props.onDragOverColumn(props.column, beforeIdAt(ev));
+						if (!props.onDragOverColumn) return;
+						// The pointer moves far faster than the screen redraws; the cards
+						// are measured once per frame, for the latest position only.
+						var container = ev.currentTarget;
+						var pointerY = ev.clientY;
+						var dragged = props.dragId;
+						var column = props.column;
+						var report = props.onDragOverColumn;
+						overFrame.latest = function () { report(column, beforeIdFor(container, pointerY, dragged)); };
+						if (!overFrame.pending) {
+							overFrame.pending = true;
+							nextFrame(function () {
+								overFrame.pending = false;
+								var run = overFrame.latest;
+								overFrame.latest = null;
+								if (run) run();
+							});
+						}
 					},
 					onDrop: function (ev) {
 						if (!droppable) return;
@@ -1610,9 +2010,9 @@ var CSS =
 				["Attempts", t.attemptCount + " / " + (d.maxAttempts || 3)],
 				["Spend", fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)")],
 				["Allow paid", t.allowPaid ? "yes" : "no"],
-				["Working time", fmtDur(t.workingMs || 0)],
+				["Working time", h(LiveDur, { ticket: t })],
 				["Created", fmtTime(t.createdAt)],
-				["Updated", ago(t.updatedAt)]
+				["Updated", h(LiveAgo, { iso: t.updatedAt })]
 			];
 			if (t.closedAt) rows.push(["Closed", fmtTime(t.closedAt)]);
 			return h("div", { className: "kb-panel kb-side-panel" },
@@ -1733,7 +2133,7 @@ var CSS =
 						h("button", { className: "kb-btn sm", onClick: function () { rpc("export", { id: t.id, kind: "usage", format: "csv" }).then(function (res) { if (res && res.ok) download(t.key + "-usage.csv", res.value.mime, res.value.body); }); }, children: "Usage CSV" })),
 					h(Timeline, { items: d.timeline || [] })) : null,
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction, onRecover: props.onRecover }) : null,
-				tab === "events" ? h(EventsPanel, { detail: d }) : null,
+				tab === "events" ? h(EventsPanel, { detail: d, liveToken: props.liveToken }) : null,
 				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null,
 				h(Modal, { open: modal === "markDone", title: "Mark done", onClose: function () { setModal(null); } },
 					h(TextActionForm, {
@@ -1983,13 +2383,28 @@ var CSS =
 			);
 		}
 
+		// The lifecycle log is read when its tab is open, not carried with every
+		// refresh of the ticket: it is looked at again whenever the Host says
+		// something changed.
 		function EventsPanel(props) {
+			var st = React.useState(props.detail.events || null);
+			var events = st[0], setEvents = st[1];
+			var ticketId = props.detail.ticket.id;
+			var liveToken = props.liveToken;
+			React.useEffect(function () {
+				var alive = true;
+				rpc("events", { id: ticketId, limit: 300 }).then(function (res) {
+					if (alive && res && res.ok && Array.isArray(res.value)) setEvents(res.value);
+				});
+				return function () { alive = false; };
+			}, [ticketId, liveToken]);
+			if (events === null) return h("div", { className: "kb-panel" }, h("h3", { children: "Event log" }), h("div", { className: "kb-hint", children: "Loading events…" }));
 			return h("div", { className: "kb-panel" },
 				h("h3", { children: "Event log" }),
-				props.detail.events.length === 0 ? h("div", { className: "kb-hint", children: "No events." }) :
+				events.length === 0 ? h("div", { className: "kb-hint", children: "No events." }) :
 					h("table", { className: "kb-table" },
 						h("thead", null, h("tr", null, h("th", { children: "at" }), h("th", { children: "kind" }), h("th", { children: "actor" }), h("th", { children: "phase" }), h("th", { children: "detail" }))),
-						h("tbody", null, props.detail.events.slice().reverse().map(function (e) {
+						h("tbody", null, events.slice().reverse().map(function (e) {
 							return h("tr", { key: e.id },
 								h("td", { style: { whiteSpace: "nowrap" }, children: fmtTime(e.at) }),
 								h("td", null, h("code", { children: e.kind })),
@@ -2161,14 +2576,16 @@ var CSS =
 		}
 
 		function KanbanPage() {
-			var b = React.useState(null);
-			var board = b[0], setBoard = b[1];
+			var live = useBoardStore();
+			var board = live.board;
 			var sel = React.useState(null);
 			var selectedId = sel[0], setSelectedId = sel[1];
 			var det = React.useState(null);
 			var detail = det[0], setDetail = det[1];
 			var n = React.useState(null);
 			var notice = n[0], setNotice = n[1];
+			var dpState = React.useState(null);
+			var detailProblem = dpState[0], setDetailProblem = dpState[1];
 			var c = React.useState(false);
 			var creating = c[0], setCreating = c[1];
 			var v = React.useState("board");
@@ -2195,12 +2612,13 @@ var CSS =
 			var dragId = dr[0], setDragId = dr[1];
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
-			var poll = React.useRef(0);
-			// A board response is applied only if no drop has happened since the
-			// request left and none is still in flight: an older answer would put
-			// the card back where it was for one refresh.
-			var boardEpoch = React.useRef(0);
-			var dropsInFlight = React.useRef(0);
+			// What the long-lived callbacks need to read: the current selection and
+			// the detail on screen. Callbacks that outlive a render (the cards keep
+			// theirs) read these instead of values captured when they were made.
+			var selectedRef = React.useRef(null);
+			selectedRef.current = selectedId;
+			var detailRef = React.useRef(null);
+			detailRef.current = detail;
 			var bodyRef = React.useRef(null);
 
 			// The Done / Discarded column is pinned at the height of the visible
@@ -2229,34 +2647,83 @@ var CSS =
 				setDetail(null);
 			};
 
-			function loadBoard() {
-				var asked = boardEpoch.current;
-				rpc("board", {}).then(function (res) {
-					if (asked !== boardEpoch.current || dropsInFlight.current > 0) return;
-					if (res && res.ok) setBoard(res.value);
-					else if (res && res.error) setNotice(res.error.message);
-				}, function () { setNotice("Could not reach the Host."); });
-			}
-			function loadDetail(id) {
-				rpc("ticket", { id: id }).then(function (res) {
-					if (res && res.ok) setDetail(res.value);
-					else if (res && res.error) { setNotice(res.error.message); }
+			// The board arrives by itself (see the live board store); this asks for
+			// it right now, after something this page did or on request.
+			// A reload the person asked for (the Refresh button) also clears whatever
+			// notice is up when it works.
+			function loadBoard(asked) {
+				boardStore.refresh().then(function (problem) {
+					if (problem) setNotice(problem);
+					else if (asked === true) setNotice(null);
 				});
 			}
+			// A notice that polling set is cleared by the next poll that works, and
+			// by moving to another ticket or view; one a user action set stays until
+			// the next action that works.
+			var detailFailures = React.useRef(0);
+			function detailPollOk() {
+				detailFailures.current = 0;
+				setDetailProblem(null);
+			}
+			function detailPollFailed(text) {
+				detailFailures.current += 1;
+				if (detailFailures.current >= POLL_FAILURES_SHOWN) setDetailProblem(text);
+			}
+			React.useEffect(function () {
+				setNotice(null);
+				detailFailures.current = 0;
+				setDetailProblem(null);
+			}, [selectedId, view]);
+			// The ticket on screen. The Host is told which version this page holds
+			// and answers "unchanged" in a line when nothing moved. The event log is
+			// not part of it: its tab asks for it itself.
+			function loadDetail(id) {
+				var held = detailRef.current;
+				var since = held && held.ticket && held.ticket.id === id ? held.token : undefined;
+				rpc("ticket", { id: id, since: since, events: false }).then(function (res) {
+					if (selectedRef.current !== id) return;
+					if (res && res.ok) {
+						detailPollOk();
+						if (res.value && res.value.unchanged) return;
+						if (res.value && res.value.ticket) res.value.ticket.readAt = Date.now();
+						setDetail(res.value);
+					} else {
+						detailPollFailed(res && res.error ? res.error.message : "Could not reach the Host.");
+					}
+				}, function () {
+					if (selectedRef.current === id) detailPollFailed("Could not reach the Host.");
+				});
+			}
+			// The workspace and preset lists are read when the page opens and again
+			// each time the new-ticket form does; they are not worth a poll.
 			React.useEffect(function () {
 				rpc("workspaces", {}).then(function (res) { if (res && res.ok && res.value) setWorkspaces(res.value.items || []); });
 				rpc("capabilities", {}).then(function (res) { if (res && res.ok && res.value) setCapabilities(res.value); });
-				function loadRouting() { rpc("config", {}).then(function (res) { if (res && res.ok && res.value) setRouting(res.value); }); }
-				loadRouting();
-				var routingTimer = setInterval(loadRouting, 15000);
-				loadBoard();
-				var timer = setInterval(function () {
-					poll.current += 1;
-					loadBoard();
-					if (selectedId) loadDetail(selectedId);
-				}, 3000);
-				return function () { clearInterval(timer); clearInterval(routingTimer); };
-			}, [selectedId]);
+			}, [creating]);
+			// The routing rules are read when the dialog opens.
+			React.useEffect(function () {
+				if (!routingOpen) return;
+				rpc("config", {}).then(function (res) { if (res && res.ok && res.value) setRouting(res.value); });
+			}, [routingOpen]);
+			// The open ticket is fetched when it is selected, then again whenever the
+			// Host says something changed (at most a few times a second). A ticket
+			// whose working time is still growing is also looked at every ten seconds
+			// while the tab is visible, so its live bars keep moving.
+			var liveToken = live.token;
+			var previousSelected = React.useRef(null);
+			React.useEffect(function () {
+				if (!selectedId) { previousSelected.current = null; return undefined; }
+				var fresh = previousSelected.current !== selectedId;
+				previousSelected.current = selectedId;
+				var timer = setTimeout(function () { loadDetail(selectedId); }, fresh ? 0 : 300);
+				return function () { clearTimeout(timer); };
+			}, [selectedId, liveToken]);
+			var detailRunning = Boolean(detail && detail.ticket && (detail.ticket.accruing || (detail.timeline || []).some(function (item) { return item.status === "running"; })));
+			React.useEffect(function () {
+				if (!selectedId || !detailRunning) return undefined;
+				var timer = setInterval(function () { if (!document.hidden) loadDetail(selectedId); }, 10000);
+				return function () { clearInterval(timer); };
+			}, [selectedId, detailRunning]);
 			React.useEffect(function () {
 				if (view === "analytics" && analyticsData === null) {
 					rpc("analytics", {}).then(function (res) { if (res && res.ok) setAnalyticsData(res.value); });
@@ -2268,7 +2735,7 @@ var CSS =
 					if (res && res.ok) {
 						setNotice(null);
 						loadBoard();
-						if (selectedId) loadDetail(selectedId);
+						if (selectedRef.current) loadDetail(selectedRef.current);
 					} else {
 						setNotice(res && res.error ? res.error.message : "That did not work.");
 					}
@@ -2291,15 +2758,16 @@ var CSS =
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
-						h("button", { className: "kb-btn", onClick: function () { loadBoard(); }, children: "Refresh" }),
+						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
 					)
 				),
 				h("div", { className: "kb-body", ref: bodyRef },
-					notice ? h("div", { className: "kb-notice" }, notice) : null,
-					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })),
+					notice || live.error || detailProblem ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem) : null,
+					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
 					selectedId ? h(TicketDetail, {
 						detail: detail,
+						liveToken: liveToken,
 						presets: capabilities.presets || null,
 						onBack: function () { setSelectedId(null); setDetail(null); },
 						onSave: function (id, patch, images) { return act("update", { id: id, patch: patch, images: images || [] }); },
@@ -2383,7 +2851,7 @@ var CSS =
 					}
 				}, function () { setRoutingError("Could not reach the Host."); }).finally(function () { setRoutingSaving(false); });
 			}
-			function open(id) { setSelectedId(id); loadDetail(id); }
+			function open(id) { setSelectedId(id); }
 			function reorder(id, beforeId) {
 				if (id === beforeId) return Promise.resolve(null);
 				var payload = { id: id };
@@ -2423,10 +2891,10 @@ var CSS =
 				var sameColumn = source.column === column;
 				if (sameColumn && dropIsNoop(ids, id, beforeId)) return;
 				// Show the card where it was dropped before the requests return,
-				// and hold back older board answers until they have.
-				boardEpoch.current += 1;
-				dropsInFlight.current += 1;
-				setBoard(function (prev) { return prev ? Object.assign({}, prev, { columns: moveInColumns(prev.columns, id, column, beforeId) }) : prev; });
+				// and hold back boards from the Host until they have: an older one
+				// would put the card back where it was for a moment.
+				boardStore.hold();
+				boardStore.update(function (prev) { return Object.assign({}, prev, { columns: moveInColumns(prev.columns, id, column, beforeId) }); });
 				var work = sameColumn ? reorder(id, beforeId) : rpc("move", { id: id, column: column }).then(function (res) {
 					if (res && res.ok && ids.length > 0) return reorder(id, beforeId);
 					return res;
@@ -2435,10 +2903,9 @@ var CSS =
 					if (res && res.ok === false) setNotice(res.error ? res.error.message : "That did not work.");
 					else setNotice(null);
 				}, function () { setNotice("Could not reach the Host."); }).then(function () {
-					dropsInFlight.current -= 1;
-					boardEpoch.current += 1;
+					boardStore.release();
 					loadBoard();
-					if (selectedId) loadDetail(selectedId);
+					if (selectedRef.current) loadDetail(selectedRef.current);
 				});
 			}
 		}

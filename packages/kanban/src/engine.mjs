@@ -286,16 +286,15 @@ export class Engine {
       // pure concurrency throttle — queued tickets wait, nothing is promoted
       // or rejected on capacity.
       const config = this.getConfig();
-      const working = this.store.listTickets({ columns: ['working'] });
-      const planNow = this
-        .store.listTickets({ columns: ['backlog'] })
-        .filter((ticket) => ticket.phase === 'plan' && ticket.planTiming === 'now');
-      for (const ticket of [...working, ...planNow]) {
-        if (this.disposed || this.active.size >= config.wipCap) break;
-        if (this.active.has(ticket.id)) continue;
-        if (ticket.needsAttentionReason) continue;
-        if (this.busy(ticket)) continue;
-        this.launch(ticket);
+      // At the cap nothing can launch, so the store is not asked at all; below
+      // it, only the tickets that could actually launch are read.
+      if (this.active.size < config.wipCap) {
+        for (const ticket of this.store.listRunnable()) {
+          if (this.disposed || this.active.size >= config.wipCap) break;
+          if (this.active.has(ticket.id)) continue;
+          if (this.busy(ticket)) continue;
+          this.launch(ticket);
+        }
       }
       this.maybePrune();
     } catch (error) {
