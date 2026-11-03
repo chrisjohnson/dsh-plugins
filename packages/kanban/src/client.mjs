@@ -31,6 +31,13 @@ window.__ModuleLoader__.load({
 			return connection.rpc.call("/api", "kanban/" + method, payload || {});
 		}
 
+		// For controls with no room to print a message (the card's jump icon, the
+		// progress steps): a failed open is still said out loud, never swallowed.
+		function openOrComplain(sessionId) {
+			var opening = openSessionById ? openSessionById(sessionId) : Promise.resolve({ ok: false, error: "The session view is not available in this window." });
+			opening.then(function (result) { if (!result || !result.ok) window.alert((result && result.error) || "The session could not be opened."); });
+		}
+
 		function fmtUsd(value) {
 			if (value === null || value === undefined) return "unpriced";
 			return "$" + Number(value).toFixed(value > 0 && value < 0.01 ? 4 : 2);
@@ -155,6 +162,9 @@ var CSS =
 		+ ".kb-gbar.agent{background:#4f7fae}.kb-gbar.judge{background:#8a6fb0}.kb-gbar.tool{background:#6aa87b}.kb-gbar.wait{background:repeating-linear-gradient(45deg,#bbb,#bbb 3px,#e8e8e8 3px,#e8e8e8 6px)}"
 		+ ".kb-gbar.failed{background:#c05b4d}.kb-gbar.abandoned{background:#999}"
 		+ ".kb-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}"
+		+ ".kb-open-error{margin-left:8px;color:#9b1c1c;font:500 12px/18px var(--dsw-font-family,sans-serif)}"
+		+ ".kb-banner-line{padding:8px 12px;border-radius:var(--dsw-radius-md,12px);font-size:13px;line-height:20px;margin-bottom:10px;border:.5px solid transparent}"
+		+ ".kb-banner-line.err{background:#fdecea;border-color:#f3b3ac;color:#9b1c1c}.kb-banner-line.run{background:#eaf2ff;border-color:#b9d0f5;color:#1d4f9b}.kb-banner-line.ok{background:#e8f6ec;border-color:#a8d8b5;color:#1d6b32}"
 		+ ".kb-notice{padding:7px 10px;border-radius:var(--dsw-radius-md,12px);background:#fff7e6;border:.5px solid #f0d39a;color:#7a5200;font-size:12px;line-height:18px;margin-bottom:10px}"
 		+ ".kb-answers{display:flex;flex-direction:column;gap:6px}"
 		+ ".kb-answerrow{display:flex;gap:8px;align-items:flex-start}"
@@ -500,7 +510,7 @@ var CSS =
 			// mid-turn on a human — the red card says which ask is pending, in any
 			// phase. The verify-phase rule below is the engine-parked approval: no
 			// turn in flight, the human still holds the decision.
-			if (t.status === "attention") return t.awaitingApproval ? "Awaiting approval" : t.awaitingQuestion ? "Waiting on you" : t.phase === "verify" ? "Awaiting approval" : "Needs your decision";
+			if (t.status === "attention") return t.awaitingApproval ? "Awaiting approval" : (t.awaitingQuestion || t.parkedOnQuestion) ? "Waiting on you" : t.phase === "verify" ? "Awaiting approval" : "Needs your decision";
 			if (t.status === "active") return t.phase === "plan" ? "Grilling / planning" : "Running";
 			if (t.column === "done" || t.column === "discarded") return "Closed";
 			if (t.column === "working") return "Queued";
@@ -616,7 +626,7 @@ var CSS =
 						title: "Open this ticket's session (the active one, else the latest)",
 						"aria-label": "Open the session for " + t.key,
 						draggable: false,
-						onClick: function (ev) { ev.stopPropagation(); if (openSessionById) openSessionById(t.sessionId); }
+						onClick: function (ev) { ev.stopPropagation(); openOrComplain(t.sessionId); }
 					}, h(JumpIcon)) : null,
 					h("span", { className: "kb-statusdot " + status, title: status, "aria-label": "Status: " + status }),
 					h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) })
@@ -1634,7 +1644,7 @@ var CSS =
 						h("span", { className: "kb-statusdot " + detailStatus, title: detailStatus, "aria-label": "Status: " + detailStatus }),
 						h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) }),
 						h("span", { className: "kb-chip", children: t.column }),
-						(t.needsAttentionReason || d.awaitingApproval) ? h("span", { className: "kb-chip err", children: d.awaitingApproval ? "awaiting approval" : d.awaitingQuestion ? "waiting on your answer" : "needs attention" }) : null,
+						(t.needsAttentionReason || d.awaitingApproval) ? h("span", { className: "kb-chip err", children: d.awaitingApproval ? "awaiting approval" : (d.awaitingQuestion || d.parkedOnQuestion) ? "waiting on your answer" : "needs attention" }) : null,
 						// One pencil for the whole ticket. The lock is the host's
 						// answer, not a guess: `editable` is false the moment any
 						// engine has touched this ticket, and the update endpoint
@@ -1672,12 +1682,25 @@ var CSS =
 						// conditional element, never a conditional hook: the two
 						// useState calls at the top of TicketDetail are the only
 						// hooks this component has, and nothing here adds one.
-						(d.awaitingApproval || d.awaitingQuestion) && d.approvalSessionId ? h("button", {
+						(d.awaitingApproval || d.awaitingQuestion || d.parkedOnQuestion) && d.approvalSessionId ? h(OpenSessionButton, {
+							sessionId: d.approvalSessionId,
+							label: "Open session",
+							title: "Open the session that is waiting on you"
+						}) : null,
+						// Recovery actions. The host decides which apply (d.actions);
+						// these are conditional elements, never conditional hooks.
+						d.actions && d.actions.revisePlan ? h("button", {
 							type: "button",
 							className: "kb-btn sm",
-							title: "Open the session that is waiting on you",
-							onClick: function () { if (openSessionById) openSessionById(d.approvalSessionId); }
-						}, "Open session") : null,
+							title: "Ask the plan session for a revised plan before the build starts",
+							onClick: function () { setModal("revisePlan"); }
+						}, "Revise plan") : null,
+						d.actions && d.actions.markDone ? h("button", {
+							type: "button",
+							className: "kb-btn sm",
+							title: "Close this ticket as done because the work was finished outside the engine",
+							onClick: function () { setModal("markDone"); }
+						}, "Mark done") : null,
 						// KAN-30: a plan that declared sandbox grants parks for
 						// one decision — this button. Approving the plan is the
 						// one-time grant: the build starts with exactly these
@@ -1691,9 +1714,11 @@ var CSS =
 						}, "Approve plan") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
-					h(Lifecycle, { ticket: t, sessions: d.phaseSessions, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } })
+					h(Lifecycle, { ticket: t, sessions: d.phaseSessions, onOpenSession: function (sessionId) { openOrComplain(sessionId); } })
 				),
-				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null),
+				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); } }) : h(NeedsAttention, { ticket: t, actions: d.actions, onResolve: props.onResolve, onMarkDone: function () { setModal("markDone"); } })) : null,
+				d.planRevision && d.planRevision.status === "rejected" ? h("div", { className: "kb-banner-line err", role: "alert", children: "Plan revision rejected: " + d.planRevision.reason }) : null,
+				d.planRevision && d.planRevision.status === "pending" ? h("div", { className: "kb-banner-line run", children: "The plan session is revising the plan…" }) : null),
 				h("aside", { className: "kb-detail-side" }, h(TicketMeta, { detail: d })),
 				h("div", { className: "kb-detail-main" },
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
@@ -1710,6 +1735,22 @@ var CSS =
 				tab === "sessions" ? h(SessionsPanel, { detail: d, onAction: props.onAction, onRecover: props.onRecover }) : null,
 				tab === "events" ? h(EventsPanel, { detail: d }) : null,
 				tab === "ticket analytics" ? h(TicketAnalytics, { detail: d }) : null,
+				h(Modal, { open: modal === "markDone", title: "Mark done", onClose: function () { setModal(null); } },
+					h(TextActionForm, {
+						hint: "Closes " + t.key + " as done and closes its sessions. Use it when the work was completed outside the engine; the reason is recorded on the ticket.",
+						placeholder: "Why is this done? (required)",
+						submitLabel: "Mark done",
+						onSubmit: function (reason) { return props.onAction(t.id, "markDone", { reason: reason }); },
+						onClose: function () { setModal(null); }
+					})),
+				h(Modal, { open: modal === "revisePlan", title: "Revise plan", onClose: function () { setModal(null); } },
+					h(TextActionForm, {
+						hint: "Sends your instruction to the plan session, which resubmits the plan. The new plan and its conditions replace the current ones as a new version.",
+						placeholder: "What should change in the plan? (required)",
+						submitLabel: "Send to plan session",
+						onSubmit: function (instruction) { return props.onAction(t.id, "revisePlan", { instruction: instruction }); },
+						onClose: function () { setModal(null); }
+					})),
 				h(Modal, { open: modal === "ticket", title: "Edit ticket", onClose: function () { setModal(null); } },
 					h(TicketEditor, {
 						ticket: t,
@@ -1730,6 +1771,55 @@ var CSS =
 		}
 
 
+		// A button that opens a workflow session and says what happened: a
+		// loading label while it works, the failure message when it cannot.
+		function OpenSessionButton(props) {
+			var st = React.useState({ phase: "idle", error: "" });
+			var state = st[0], setState = st[1];
+			var mounted = React.useRef(true);
+			React.useEffect(function () { mounted.current = true; return function () { mounted.current = false; }; }, []);
+			function click() {
+				if (state.phase === "loading") return;
+				setState({ phase: "loading", error: "" });
+				var opening = openSessionById ? openSessionById(props.sessionId) : Promise.resolve({ ok: false, error: "The session view is not available in this window." });
+				opening.then(function (result) {
+					if (!mounted.current) return;
+					setState(result && result.ok ? { phase: "idle", error: "" } : { phase: "error", error: (result && result.error) || "The session could not be opened." });
+				});
+			}
+			return h(React.Fragment, null,
+				h("button", { type: "button", className: props.className || "kb-btn sm", style: props.style, title: props.title, disabled: state.phase === "loading", onClick: click, children: state.phase === "loading" ? "Opening…" : props.label }),
+				state.phase === "error" ? h("span", { className: "kb-open-error", role: "alert", children: state.error }) : null);
+		}
+
+		// One required line of text and a submit: the shape of Mark done (a
+		// reason) and Revise plan (an instruction). The server's refusal is shown
+		// in the form, not lost to the page notice.
+		function TextActionForm(props) {
+			var st = React.useState("");
+			var text = st[0], setText = st[1];
+			var bs = React.useState(false);
+			var busy = bs[0], setBusy = bs[1];
+			var es = React.useState("");
+			var error = es[0], setError = es[1];
+			function submit() {
+				setBusy(true);
+				setError("");
+				props.onSubmit(text.trim()).then(function (res) {
+					setBusy(false);
+					if (res && res.ok) props.onClose();
+					else setError(res && res.error ? res.error.message : "That did not work.");
+				}, function () { setBusy(false); setError("Could not reach the Host."); });
+			}
+			return h("div", { className: "kb-form" },
+				h("div", { className: "kb-hint", style: { marginBottom: 8 }, children: props.hint }),
+				h("textarea", { className: "kb-textarea", autoFocus: true, placeholder: props.placeholder, value: text, onChange: function (ev) { setText(ev.target.value); } }),
+				error ? h("div", { className: "kb-open-error", role: "alert", style: { marginLeft: 0, marginTop: 6 }, children: error }) : null,
+				h("div", { className: "kb-row", style: { marginTop: 8 } },
+					h("button", { type: "button", className: "kb-btn primary sm", disabled: busy || text.trim() === "", onClick: submit, children: busy ? "Working…" : props.submitLabel }),
+					h("button", { type: "button", className: "kb-btn sm", disabled: busy, onClick: props.onClose, children: "Cancel" })));
+		}
+
 		function ApprovalPanel(props) {
 			var d = props.detail;
 			var sessionId = d.approvalSessionId;
@@ -1742,7 +1832,7 @@ var CSS =
 					h("button", { className: "kb-btn primary sm", disabled: busy, onClick: function () { setBusy(true); props.onApprove(props.ticket.id).finally(function () { setBusy(false); }); }, children: "Approve and close" }),
 					h("button", { className: "kb-btn danger sm", disabled: busy, onClick: props.onDiscard, children: "Discard" }),
 					sessionId
-						? h("button", { className: "kb-btn sm", onClick: function () { props.onOpenSession(sessionId); }, children: "Open build session" })
+						? h(OpenSessionButton, { sessionId: sessionId, label: "Open build session" })
 						: null)
 			);
 		}
@@ -1762,6 +1852,18 @@ var CSS =
 						onClick: function () { setBusy(true); props.onResolve(props.ticket.id, "retry", instruction).finally(function () { setBusy(false); }); },
 						children: "Retry with instruction"
 					}),
+					props.actions && props.actions.rerunReview ? h("button", {
+						className: "kb-btn sm", disabled: busy,
+						title: "The work exists and nothing is left to implement: go straight to review",
+						onClick: function () { setBusy(true); props.onResolve(props.ticket.id, "rerunReview", instruction).finally(function () { setBusy(false); }); },
+						children: "Re-run review"
+					}) : null,
+					props.actions && props.actions.markDone ? h("button", {
+						className: "kb-btn sm", disabled: busy,
+						title: "Close this ticket as done: the work was finished outside the engine",
+						onClick: props.onMarkDone,
+						children: "Mark done"
+					}) : null,
 					h("button", {
 						className: "kb-btn danger sm", disabled: busy,
 						onClick: function () { setBusy(true); props.onResolve(props.ticket.id, "discard", instruction).finally(function () { setBusy(false); }); },
@@ -1869,7 +1971,7 @@ var CSS =
 							return h("tr", { key: session.id },
 								h("td", { children: session.purpose || session.role }),
 								h("td", null, h("code", { style: { fontSize: 10 }, children: session.sessionId }),
-									h("button", { className: "kb-btn sm", style: { marginLeft: 8 }, onClick: function () { if (openSessionById) openSessionById(session.sessionId); }, children: "Open" }),
+									h(OpenSessionButton, { sessionId: session.sessionId, label: "Open", style: { marginLeft: 8 } }),
 										props.onRecover ? h("button", { className: "kb-btn sm", style: { marginLeft: 4 }, onClick: function () { props.onRecover(session.sessionId); }, children: "Recover tools" }) : null),
 								h("td", { children: (session.provider || "?") + "/" + (session.model || "?") }),
 								h("td", { children: fmtTime(session.createdAt) }),
@@ -2598,11 +2700,32 @@ var CSS =
 		function apply(ctx) {
 			connection = ctx.connection !== undefined ? ctx.connection : ctx.get ? ctx.get("connection") : null;
 			openSessionById = function (sessionId) {
-				try {
-					var uiWorkspace = ctx.get("uiWorkspace");
-					if (uiWorkspace && typeof uiWorkspace.openSession === "function") { uiWorkspace.openSession(sessionId); return true; }
-				} catch (error) { /* best-effort navigation */ }
-				return false;
+				return new Promise(function (resolveOpen) {
+					function failed(text) { resolveOpen({ ok: false, error: text }); }
+					try {
+						var uiWorkspace = ctx.get("uiWorkspace");
+						if (!uiWorkspace || typeof uiWorkspace.openSession !== "function") { failed("The session view is not available in this window."); return; }
+						// A session the list has finished loading and does not
+						// contain is gone (deleted, or never reached the list):
+						// say so instead of navigating to nothing.
+						var snapshot = uiWorkspace.sessions && uiWorkspace.sessions.list && typeof uiWorkspace.sessions.list.getSnapshot === "function" ? uiWorkspace.sessions.list.getSnapshot() : null;
+						if (snapshot && snapshot.phase === "ready" && snapshot.byId && !snapshot.byId[sessionId]) { failed("Session " + sessionId + " is not in the session list; it may have been deleted."); return; }
+						var opened = uiWorkspace.openSession(sessionId);
+						Promise.resolve(opened).then(function () {
+							// Hold the loading state until the session is the current one
+							// (bounded), so the click visibly does something.
+							var waited = 0;
+							(function settle() {
+								var now = uiWorkspace.sessions && uiWorkspace.sessions.list && typeof uiWorkspace.sessions.list.getSnapshot === "function" ? uiWorkspace.sessions.list.getSnapshot() : null;
+								if (!now || now.current === sessionId || waited >= 1500) { resolveOpen({ ok: true }); return; }
+								waited += 100;
+								setTimeout(settle, 100);
+							})();
+						}, function (error) { failed("Could not open the session: " + (error && error.message ? error.message : String(error))); });
+					} catch (error) {
+						failed("Could not open the session: " + (error && error.message ? error.message : String(error)));
+					}
+				});
 			};
 			var slots = ctx.slots !== undefined ? ctx.slots : ctx.get ? ctx.get("slots") : undefined;
 			if (!slots) {

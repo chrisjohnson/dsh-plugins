@@ -365,9 +365,124 @@ stored statement still has to be covered.
   the diff hash plus the condition ids the review left failing). A later rework
   round that starts from that same tree would repeat the previous one, so it parks
   with `no progress: the working tree is unchanged since the round that last
-  failed <ids>` and the attempt is not spent.
+  failed <ids>` and the attempt is not spent. It only speaks when that round
+  named conditions, and a human retry starts it over (see Recovery below).
 - The ticket detail carries the configured `maxAttempts`, so the board shows the
   real cap instead of a hard-coded 3.
+
+## Recovery: retries, restarts, closing and revising
+
+A ticket's work lives in a conversation. These are the rules for when that
+conversation is gone, when a person needs to step in, and how the board shows it.
+
+### A retry continues the earlier work
+
+A human **Retry** (with or without an instruction) resets the attempt budget and
+resumes the phase the ticket was parked in. It no longer starts the build from
+cold:
+
+1. If the ticket's build session is live, the round continues in it.
+2. If it is only on disk (a restart, a park that closed it), the engine reopens
+   it through the session controller, re-wires its workflow tools and continues
+   there. A `session_resumed` event records the reopening.
+3. Only if nothing can be reopened does the round start in a new session, whose
+   first prompt begins with a summary of what the lost conversation knew: whether
+   the work **already passed review** (and so must not be redone) or not, the
+   implementation rounds so far, the last review's verdict, reasons and
+   instruction, what the last implementation shipped (summary, changed files,
+   residual risks) and which conditions are still unmet.
+
+Either way the human's instruction reaches the model. It is recorded when the
+retry is made and appended to the next prompt of the role that resumes (planner,
+implementer or reviewer), once.
+
+The unchanged-tree guard (below) is also reset by a human retry, and it only
+fires when the round before named conditions: a failure that named none (a
+bookkeeping rejection) gives it nothing to say was left unfixed.
+
+The implementer prompts say that ending a turn without calling
+`kanban_submit_implementation` parks the ticket, even if the work is done.
+
+### Mark done and Re-run review
+
+Both are buttons on the ticket detail (the needs-attention panel and, for Mark
+done, the header) and actions on the `resolve` and `action` endpoints.
+
+- **Re-run review** (`rerunReview`, optional `instruction`) is for a parked
+  ticket whose implement phase has nothing left to do: the work exists and only a
+  review is missing. It lifts the park and resumes at the review phase without
+  spending an attempt. Allowed for a ticket parked in implement or review that has
+  plan conditions; anything else is refused with the reason.
+- **Mark done** (`markDone`, required `reason`) closes a ticket as done when its
+  work was finished outside the engine. It works from every column the engine
+  can leave a ticket in (Backlog or Working) and every phase (plan, implement,
+  review, approval), parked or not. It closes the ticket's sessions and records a
+  `done` event with actor `human`, the reason, `outsideEngine: true` and the
+  column it was closed from. Dragging a card to Done is still refused: Done is
+  only reached by an approval or by this explicit, reasoned action.
+
+The detail payload carries an `actions` object (`markDone`, `rerunReview`,
+`revisePlan`) so the client only draws the buttons the engine would accept.
+
+### Questions that are waiting on you
+
+A session paused inside an `ask_user_question` call, or on a permission prompt, is
+a live wait: the card is red and says which ask is pending. A turn that simply
+*ends* on a question (its last paragraph ends with a question mark and it
+submitted nothing) now parks the ticket on `Waiting on your answer in the <phase>
+session: <the question>`. The board and the detail read that like a live wait (red
+card, "Waiting on you", a "waiting on your answer" chip) and offer **Open
+session**, instead of showing a generic "ended without calling ..." failure. When
+you answer in the session, the turn lifts the park in place as any driven turn
+does.
+
+The **Open session**, **Open build session** and per-session **Open** buttons
+show an "Opening…" state while they work and print the failure (the session is
+not in the list, the session view is unavailable, or the open threw) next to the
+button instead of doing nothing.
+
+### Permission prompts are not stalls
+
+A turn waiting on a permission prompt or a question is paused on a person, not
+silent: the stall clock does not run while a wait is open and restarts when it is
+answered. A ticket that was red because a prompt was waiting is plain working
+again the moment the prompt is decided; nothing is stored, so there is nothing to
+clear. (A parked ticket you drive by hand goes back to its park only if your turn
+ends without a workflow submission, as before.)
+
+### Restart: one automatic resume
+
+When the service restarts, a ticket the engine was driving (Working, or a
+plan-now ticket planning in Backlog) is **resumed once, automatically**: its
+interrupted plan, build, review or approval session is reopened and told that the
+service restarted and to continue, ending with the phase's submit tool. A
+`restart_recovered` event with `autoResume: true` records it; the resumed round is
+the same attempt, not another. The ticket parks with the reason when:
+
+- the session cannot be reopened (the reason names why; a Retry then starts a new
+  session from a summary), or
+- the previous automatic resume of that ticket made no progress before another
+  restart arrived (a restart loop).
+
+A ticket that was already parked keeps the reason it was parked for.
+
+### Revise plan
+
+Before the build starts (the plan is in Backlog at the build phase, queued in
+Working, or waiting for plan approval) **Revise plan** (`revisePlan`, required
+`instruction`) sends the instruction to the plan session, reopening it if it is
+only on disk, or a new plan session seeded with the current plan if it cannot be
+reopened. The session's resubmission replaces the plan and `done_when` as a new
+plan version, through the same path as every plan: new sandbox grants supersede
+the old and send the ticket back to the plan-approval wait; a revision without
+grants lifts that wait. The engine holds the ticket while the plan session works,
+so no build starts under a plan being rewritten.
+
+If the resubmission does not take (the plan checker rejects it, the session does
+not resubmit, asks a question instead, or its turn fails), the current plan is
+untouched and the ticket says so: a `plan_revision_rejected` event and a red
+banner on the detail with the reason. Once the build has started the action is
+refused.
 
 ## Config
 
@@ -698,8 +813,11 @@ The `worktree` endpoint on the `action` route stays as the manual escape hatch
 
 ## Restart safety
 
-Running spans are abandoned on restart; affected tickets park in place with a
-needs-attention reason (their column is untouched), and their workflow sessions
-are closed so continue-kicker does not resume a dead Kanban session.
+Running spans are abandoned on restart, and every workflow session is closed in
+the store so continue-kicker does not resume a dead Kanban session. A ticket the
+engine was driving is then resumed once, automatically, in its own reopened
+session (see Recovery: one automatic resume); one that cannot be, or whose last
+automatic resume got nowhere, parks in place with a needs-attention reason (its
+column is untouched). A ticket that was already parked keeps its reason.
 
 [dsh-continue-kicker]: https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/continue-kicker#provided-service-continuekicker

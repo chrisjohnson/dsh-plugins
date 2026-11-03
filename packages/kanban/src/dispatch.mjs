@@ -169,7 +169,11 @@ export class SessionDriver {
     this.offAgent = this.ctx.on('agent/created', (payload) => {
       const agent = payload?.agent;
       if (agent === undefined || agent === null) return;
-      setTimeout(() => { void this.attachExistingSession(agent.id, agent).catch((error) => this.log.warn('kanban: reattach %s failed: %s', agent.id, String(error?.message ?? error))); }, 100);
+      setTimeout(() => {
+        // The agent may have been created and closed inside this delay (a quick
+        // plan turn): adopting its disposed scope would hand later rounds a dead agent.
+        if (typeof this.agents?.get === 'function' && this.agents.get(agent.id) !== agent) return;
+        void this.attachExistingSession(agent.id, agent).catch((error) => this.log.warn('kanban: reattach %s failed: %s', agent.id, String(error?.message ?? error))); }, 100);
     });
     this.offEvent = this.ctx.on('session/event', (session, event) => {
       const waiter = this.waiters.get(session.id);
@@ -849,6 +853,73 @@ export class SessionDriver {
     ids.add(sessionId);
   }
 
+  /**
+   * Bring back the newest usable session a ticket already had for one purpose,
+   * so a later round continues in the conversation that holds the work instead
+   * of starting cold.
+   *
+   * Three outcomes: a session is already live (`via: 'live'`), a persisted one
+   * was reopened through the session controller and re-wired exactly as a
+   * restart reattach does (`via: 'resumed'`), or nothing could be brought back
+   * (`ok: false`, with `none: true` when the ticket never had one). An archived
+   * session is skipped, never resumed: every turn in it is rejected at once.
+   *
+   * @returns {Promise<{ok: true, sessionId: string, via: 'live'|'resumed'} | {ok: false, reason: string, none?: boolean}>}
+   */
+  async reactivateSession(ticketId, purpose) {
+    if (this.disposed) return { ok: false, reason: 'plugin is stopping' };
+    const live = this.#purposeCandidates(ticketId, purpose).find((candidate) => !candidate.archived);
+    if (live !== undefined) return { ok: true, sessionId: live.sessionId, via: 'live' };
+    const archived = this.#archivedSessionIds();
+    const stored = (this.store?.listSessions?.(ticketId) ?? [])
+      .filter((record) => (record.purpose ?? 'build') === purpose && !archived.has(String(record.sessionId)))
+      .reverse();
+    if (stored.length === 0) return { ok: false, reason: `the ticket has no earlier ${purpose} session`, none: true };
+    let lastError = 'the session could not be reopened';
+    for (const record of stored) {
+      try {
+        // The session controller's public resolver returns the agent when it is
+        // genuinely live and resumes the persisted session when it is not. A bare
+        // registry lookup is only the fallback: it can still answer with an agent
+        // whose scope was disposed when the earlier round closed it.
+        let agent;
+        const controller = this.sessionController ?? this.ctx.get('sessionController');
+        if (typeof controller?.resolveAgent === 'function') {
+          const resolved = await controller.resolveAgent(record.sessionId);
+          if (resolved?.error !== undefined) {
+            lastError = String(resolved.error?.message ?? resolved.error);
+            continue;
+          }
+          agent = resolved?.agent;
+        } else {
+          agent = this.agents?.get?.(record.sessionId);
+          if (agent === undefined || agent === null) {
+            lastError = 'the session controller cannot reopen a stored session';
+            continue;
+          }
+        }
+        if (agent === undefined || agent === null) continue;
+        await this.attachExistingSession(record.sessionId, agent);
+        if (!this.live.has(record.sessionId)) continue;
+        // The store row was closed when the old round ended; it is open again.
+        this.store.attachSession({
+          ticketId,
+          dshSessionId: record.sessionId,
+          role: record.role,
+          purpose: record.purpose,
+          preset: record.preset,
+          provider: record.provider,
+          model: record.model,
+        });
+        return { ok: true, sessionId: record.sessionId, via: 'resumed' };
+      } catch (error) {
+        lastError = String(error?.message ?? error);
+        this.log.warn('kanban: could not reopen session %s for %s: %s', record.sessionId, ticketId, lastError);
+      }
+    }
+    return { ok: false, reason: lastError };
+  }
+
   async attachExistingSession(sessionId, agentOverride) {
     if (this.disposed || this.live.has(sessionId)) return false;
     // Reopening an archived session in the UI must not hand it back to the
@@ -1000,7 +1071,9 @@ export class SessionDriver {
     const interval = Math.max(1000, Math.min(5000, Math.floor(stallTimeoutMs / 4)))
     const timer = setInterval(() => {
       if (this.waiters.get(sessionId) !== waiter) return;
-      if (waiter.awaitingUser) return;
+      // A turn paused on a person is not a stalled turn: the clock only runs
+      // while the session is the one that owes the next event.
+      if (waiter.awaitingUser || this.humanWaits.has(sessionId)) return;
       if (Date.now() - waiter.lastEventAt <= stallTimeoutMs) return;
       this.waiters.delete(sessionId);
       clearInterval(timer);
@@ -1075,7 +1148,7 @@ export class SessionDriver {
     for (const [sessionId, waiter] of [...this.waiters]) {
       const live = this.live.get(sessionId);
       if (live === undefined) continue;
-      if (waiter.awaitingUser) continue;
+      if (waiter.awaitingUser || this.humanWaits.has(sessionId)) continue;
       if (now - waiter.lastEventAt > this.getConfig().stallTimeoutMs) {
         this.waiters.delete(sessionId);
         clearInterval(waiter.timer);

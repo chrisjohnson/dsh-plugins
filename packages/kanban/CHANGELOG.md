@@ -5,6 +5,69 @@
 
 ## Unreleased
 
+## 0.21.0
+
+### Added
+
+- **Mark done.** A human can close any open ticket as done when its work was
+  finished outside the engine: from Backlog or Working, in any phase (plan,
+  implement, review, approval), parked or not. A reason is required. The ticket's
+  sessions are closed and a `done` event is recorded with actor `human`, the
+  reason, `outsideEngine: true` and the column it was closed from. Available as
+  `markDone` on the `resolve` and `action` endpoints and as a button in the ticket
+  detail header and its needs-attention panel. Dragging a card to Done is still
+  refused. A turn that fails after the ticket was closed no longer parks it.
+- **Re-run review.** A ticket parked in implement or review whose work already
+  exists can resume at the review phase without spending an attempt
+  (`rerunReview` on both endpoints, a button in the needs-attention panel).
+- **Revise plan.** Before the build starts (planned in Backlog at the build phase,
+  queued in Working, or waiting for plan approval) a human can send an instruction
+  to the plan session (`revisePlan`, a button in the detail header). The session's
+  resubmission replaces the plan and `done_when` as a new plan version; new sandbox
+  grants supersede the old ones and put the ticket back in the plan-approval wait,
+  a revision without grants lifts it. If the resubmission is rejected the current
+  plan stays, and the ticket says so: a `plan_revision_rejected` event and a red
+  banner with the reason. The detail payload now carries `actions` (`markDone`,
+  `rerunReview`, `revisePlan`) and `planRevision`.
+- **One automatic resume after a restart.** A ticket the engine was driving when
+  the service restarted has its interrupted plan, build, review or approval session
+  reopened and told to continue, as the same attempt. It parks with the reason if
+  the session cannot be reopened, or if the previous automatic resume made no
+  progress before another restart. A ticket that was already parked keeps its
+  reason. The events are `restart_recovered` (with `autoResume`) and
+  `session_resumed`.
+- **A question is attention.** A session that ends its turn on a question parks the
+  ticket on `Waiting on your answer in the <phase> session: <question>`. The board
+  shows "Waiting on you" and the detail a "waiting on your answer" chip, exactly as
+  for a live `ask_user_question`, with Open session, instead of a generic failure.
+
+### Changed
+
+- **A retry continues the earlier work.** Retrying reopens the ticket's previous
+  build session (live, already loaded, or resumed from disk through the session
+  controller) instead of starting a cold one. When no session can be reopened the
+  new one begins with a summary: whether the work already passed review, the
+  implementation rounds so far, the last review's verdict, reasons and
+  instruction, what was shipped and what is left.
+- **The human's retry instruction reaches the model.** It is appended once to the
+  next prompt of the planner, implementer or reviewer that resumes.
+- **The unchanged-tree guard only speaks about conditions.** It fires when the
+  round before failed named conditions; a failure that named none (a bookkeeping
+  rejection) no longer parks the next round. A human retry starts the guard over.
+- **The implementer prompts say that ending a turn without calling
+  `kanban_submit_implementation` parks the ticket.**
+- **Open session buttons report what happened.** They show "Opening…" while they
+  work and print the failure (session not in the list, view unavailable, open
+  threw) beside the button.
+
+### Fixed
+
+- A turn paused on a permission prompt is no longer counted as stalled while the
+  prompt waits, and the stall clock restarts when it is answered. A ticket that was
+  red because a prompt was waiting is plain working again once the prompt is
+  decided, in the build, review and approval phases.
+- A session reopened for a later round is never a stale one: the delayed adoption of a newly created session is skipped when the session was closed in the meantime, so a plan that finishes within a moment of its session being created can still be revised afterwards.
+
 ## 0.20.0
 
 ### Added

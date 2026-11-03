@@ -400,12 +400,12 @@ export class KanbanStore {
     );
   }
 
-  transitionTicket(idOrKey, to, { actor = 'engine', reason = '' } = {}) {
+  transitionTicket(idOrKey, to, { actor = 'engine', reason = '', outsideEngine = false } = {}) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
     const column = to.column ?? ticket.column;
     const phase = to.phase ?? ticket.phase;
-    const check = assertTransition(ticket, { column, phase }, { actor, reason });
+    const check = assertTransition(ticket, { column, phase }, { actor, reason, outsideEngine });
     if (!check.ok) throw new StoreError('invalid_transition', check.reason, { from: { column: ticket.column, phase: ticket.phase }, to: { column, phase } });
     if (column === ticket.column && phase === ticket.phase) return ticket;
     return this.transact(() => {
@@ -894,6 +894,18 @@ export class KanbanStore {
     const row = this.db.prepare('SELECT * FROM artifacts WHERE ticket_id = ? AND kind = ? ORDER BY id DESC LIMIT 1').get(ticketId, kind);
     if (row === undefined) return undefined;
     return { id: Number(row.id), kind: row.kind, content: row.content, createdAt: row.created_at, spanId: row.span_id };
+  }
+
+  /**
+   * The highest artifact id whose kind starts with `prefix`, or 0 when there is
+   * none. Prompts are recorded as `<role>_prompt_<span>` artifacts, so this is
+   * "the last time that role was spoken to", compared against later writes by id.
+   */
+  latestArtifactIdWithPrefix(ticketId, prefix) {
+    const row = this.db
+      .prepare('SELECT MAX(id) AS id FROM artifacts WHERE ticket_id = ? AND substr(kind, 1, ?) = ?')
+      .get(ticketId, prefix.length, prefix);
+    return row === undefined || row.id === null ? 0 : Number(row.id);
   }
 
   pruneArtifacts(cutoffIso) {

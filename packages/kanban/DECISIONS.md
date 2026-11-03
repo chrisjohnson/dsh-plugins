@@ -553,3 +553,82 @@ thing that stops a runaway board.
   one more round of a budget already spent, and the ticket parked again on the
   next tick. The reset is an event (`budget_reset`, with the `from` count) so the
   attempt ledger stays honest about which rounds were machine-paid.
+
+## 2026-11-03 — recovery: continue the work, close it honestly, revise before it starts (0.21.0)
+
+Four things that all came from the same failure: the conversation that held a
+ticket's work was gone or beside the point, and the engine's only move was a cold
+restart or a generic park.
+
+- **A retry reopens the old session before it starts a new one.** Reusing the
+  conversation is strictly better than any summary of it, so the engine asks the
+  driver to bring back the newest non-archived session of the purpose (live, then
+  already loaded by dsh, then `sessionController.resolveAgent`) and only falls back to a
+  new session when none can be. The fallback is seeded with a summary rather than
+  left cold, and the summary leads with the one fact that decides whether to redo
+  anything: did the work already pass review. That is computed with the review
+  gate's own `reviewDecision`, so the summary and the engine can never disagree
+  about what "passed" means.
+- **The human's instruction was being written and never read.** The retry stored an
+  `attempt_feedback` artifact that nothing consulted, so an instruction typed into
+  the retry box reached the model only if it happened to be the same as the
+  reviewer's. It is now appended to the next prompt of the role that resumes, once:
+  "once" is decided by comparing the artifact id to the last prompt recorded for
+  that role, which needs no new state.
+- **The unchanged-tree guard speaks only about conditions.** Its message is "the
+  round that last failed <ids>"; with no ids there is nothing to compare, and a
+  bookkeeping rejection (a fail with no rows) was parking tickets whose next round
+  had genuinely new information. The ids it records are the review's unmet rows
+  plus the conditions the code gate found wanting, so a low-confidence pass still
+  counts as naming one. A human retry also starts the guard over, which the
+  earlier reset of the counter did not cover: the signature outlived the retry, so
+  an unchanged tree parked the very next round again.
+- **Mark done is a different transition, not a loosened one.** `done` is reached
+  only through approval, and the phase graph (rightly) has no edge from plan to
+  closed. Rather than add edges that other paths could take, the transition takes
+  an explicit `outsideEngine` flag that only a human can pass and that only
+  allows `done`/`closed`. The `done` event carries the flag, the reason and the
+  column, so the ledger distinguishes "the engine finished this" from "a human
+  says it is finished". Dragging to Done stays refused: a drag has no reason.
+  After a human closes a ticket, a turn that fails late no longer parks it
+  (`needsAttention` stands down on a closed ticket).
+- **Re-run review spends nothing.** Its precondition is "parked in implement or
+  review with conditions"; the attempt counter is left alone because a review that
+  passes needs no further attempt and one that fails spends it in the usual way.
+- **A turn that ends on a question is a question.** The ticket used to park on
+  "ended without calling kanban_submit_*", which is true and useless. The question
+  is recognised by its last paragraph ending in a question mark (trailing markdown
+  looked through; fenced code and a mid-paragraph question mark do not count) and
+  the park reason carries it. The cost of the heuristic is a rare mislabel of a
+  rhetorical question as a wait; the label is cosmetic (the same Retry/Discard
+  actions are there), where the cost of the status quo was an invisible wait.
+  The session sidebar's own "Answer" tag is core client state fed by pending
+  interactions the browser has already subscribed to; the plugin cannot set it, so
+  this change only makes the kanban surfaces agree with each other.
+- **A prompt is not a stall.** The stall timer already excused an open
+  `ask_user_question`; an open permission prompt is the same kind of wait and is
+  now excused by the driver's own wait tracking. The decision event restarts the
+  clock because every session event does. Nothing about a wait is stored, so
+  "needs attention goes back to plain working when the prompt is answered" falls
+  out of there being nothing to clear; the regression tests assert it for build,
+  review and approval turns, for question waits, and for a parked ticket a human
+  drives.
+- **Restart: resume once, then park with the reason.** Resuming is a second
+  chance, not a loop, so it is allowed again only after the previous automatic
+  resume produced progress (a plan, an implementation, a review verdict, a phase
+  move). The resumed round is the same attempt: spending another on an
+  interrupted one would punish the ticket for the service's restart. If the
+  session cannot be reopened the engine does not improvise a cold session there —
+  it parks with the reason, because a cold session cannot tell the model it was
+  interrupted, which is the only thing a resume prompt adds.
+- **Revise plan reuses the plan path end to end.** The resubmission goes through
+  `storePlan`, so the version number, the conditions replacement and the grant
+  count are the ones every plan gets, and the sandbox grants supersede by the same
+  rule as before (the grant approver reads the latest plan artifact and nothing is
+  live while the ticket is parked on Plan ready). A revision that adds grants puts
+  the ticket back in the plan-approval wait, even if an earlier plan's grants were
+  approved: approval of one set of grants is not approval of another. The
+  rejection is an event plus an artifact the detail reads; it is not a park,
+  because the ticket's own state (waiting in Backlog, waiting for plan approval)
+  is still true and parking it would make a rejected edit look like a failure of
+  the ticket.

@@ -2,7 +2,7 @@ Review requested changes to kanban ticket {{key}}: "{{title}}".
 
 Working directory: {{cwd}}
 
-Address every reason the review below raised, rerun the relevant checks in this workspace, and call `kanban_submit_implementation` again with your per-condition evidence when you are done.
+Address every reason the review below raised, rerun the relevant checks in this workspace, and call `kanban_submit_implementation` again with your per-condition evidence when you are done. Ending a turn without calling `kanban_submit_implementation` parks the ticket for a human, even when the work is done: always finish by calling it (with status `blocked` if you cannot continue).
 
 {{question_note}}
 
