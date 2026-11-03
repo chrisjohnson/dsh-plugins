@@ -27,8 +27,9 @@
 // Pure: no dsh imports, everything it reads is passed in.
 
 import { homedir } from 'node:os';
-import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { isAbsolute, join, normalize } from 'node:path';
 
+import { resolvePathToken as resolvePath, segmentWords as words, splitSegments } from './command-paths.mjs';
 import { callArguments, escalationMode } from './grants.mjs';
 import { isInsideLiveCheckout } from './live-checkout.mjs';
 
@@ -66,18 +67,6 @@ export function isOpen(ticket) {
   return OPEN_COLUMNS.has(ticket?.column);
 }
 
-function expand(token, home) {
-  if (token === '~' || token.startsWith('~/')) return join(home, token.slice(1));
-  if (token.startsWith('${HOME}')) return join(home, token.slice(7));
-  if (token.startsWith('$HOME')) return join(home, token.slice(5));
-  return token;
-}
-
-function resolvePath(token, cwd, home) {
-  const expanded = expand(token, home);
-  return isAbsolute(expanded) ? normalize(expanded) : resolve(cwd, expanded);
-}
-
 const READ_ONLY_COMMANDS = new Set([
   'cat', 'ls', 'head', 'tail', 'less', 'more', 'wc', 'stat', 'file', 'grep', 'egrep', 'fgrep', 'rg', 'diff',
   'tree', 'du', 'df', 'pwd', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname',
@@ -86,22 +75,43 @@ const READ_ONLY_COMMANDS = new Set([
 const READ_ONLY_GIT = new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-remote', 'describe', 'blame', 'cat-file', 'rev-list', 'shortlog']);
 const FIND_WRITES = new Set(['-delete', '-exec', '-execdir', '-ok', '-fprint', '-fprintf', '-fls']);
 
-function words(segment) {
-  return segment.trim().split(/\s+/).map((w) => w.replace(/^["']|["']$/g, '')).filter(Boolean);
+// `git fetch` only updates remote-tracking refs and FETCH_HEAD. These flags keep
+// it that way; a refspec (anything with `:`), `--force`, `--prune` and the like
+// can reach local branches or delete refs, so they are not read-only.
+const FETCH_FLAGS = new Set(['-q', '--quiet', '-v', '--verbose', '--tags', '--no-tags', '--all', '--dry-run']);
+
+function gitFetchReadOnly(args) {
+  return args.every((arg) => (arg.startsWith('-') ? FETCH_FLAGS.has(arg) : !arg.includes(':')));
 }
 
-function splitSegments(command) {
-  return String(command).split(/&&|\|\||[;|\n\r]/).map((s) => s.trim()).filter(Boolean);
+/**
+ * Whether the segment starts with one of the configured read-only command
+ * prefixes (token prefix at word boundaries). The deployment, not this plugin,
+ * says which of its own commands only inspect.
+ */
+function configuredReadOnly(tokens, prefixes) {
+  for (const prefix of prefixes) {
+    const want = String(prefix).trim().split(/\s+/).filter(Boolean);
+    if (want.length === 0 || tokens.length < want.length) continue;
+    if (want.every((token, index) => tokens[index] === token)) return true;
+  }
+  return false;
 }
 
-function readOnlySegment(tokens, rawSegment) {
-  if (/[<>]|\$\(|`/.test(rawSegment)) return false;
+// Redirects that write nowhere: stderr folded into stdout, or output to /dev/null.
+const BENIGN_REDIRECT_WORD = /^(?:\d*>&\d+|&?\d*>>?\/dev\/null)$/;
+const BENIGN_REDIRECT = /\d*>&\d+|&?\d*>>?\s*\/dev\/null/g;
+
+function readOnlySegment(tokens, rawSegment, extraPrefixes = []) {
+  if (/[<>]|\$\(|`/.test(rawSegment.replace(BENIGN_REDIRECT, ''))) return false;
   let i = 0;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  if (configuredReadOnly(tokens.slice(i).filter((t) => !BENIGN_REDIRECT_WORD.test(t)), extraPrefixes)) return true;
   const head = (tokens[i] ?? '').split('/').pop();
   if (head === 'git') {
     let j = i + 1;
     while (j < tokens.length && tokens[j].startsWith('-')) j += tokens[j] === '-C' ? 2 : 1;
+    if (tokens[j] === 'fetch') return gitFetchReadOnly(tokens.slice(j + 1).filter((t) => !BENIGN_REDIRECT_WORD.test(t)));
     return READ_ONLY_GIT.has(tokens[j] ?? '');
   }
   if (head === 'find') return !tokens.some((t) => FIND_WRITES.has(t));
@@ -155,9 +165,10 @@ function prestageSegment(tokens, cwd, live) {
  * @param {object|null} input.arguments
  * @param {string} input.cwd - the session's working directory.
  * @param {string[]} [input.liveCheckouts] - absolute live checkout roots.
+ * @param {string[]} [input.readOnlyCommands] - command prefixes the deployment treats as read-only inspection in a live checkout.
  * @param {string} [input.home]
  */
-export function evaluateGuard({ ticket, tickets, toolName, arguments: args, cwd, liveCheckouts = [], home = homedir() }) {
+export function evaluateGuard({ ticket, tickets, toolName, arguments: args, cwd, liveCheckouts = [], readOnlyCommands = [], home = homedir() }) {
   const pass = { deny: false };
   if (ticket === undefined || ticket === null || args === null || args === undefined || typeof args !== 'object') return pass;
   const lives = (Array.isArray(liveCheckouts) ? liveCheckouts : [])
@@ -231,15 +242,42 @@ export function evaluateGuard({ ticket, tickets, toolName, arguments: args, cwd,
     if (touched === null) continue;
     const resolved = tokens.map((t, i) => (i > 0 && (t.startsWith('/') || t.startsWith('~')) ? resolvePath(t, dir, home) : t));
     const staged = ticket.phase === 'verify' && prestageSegment(resolved, dir, touched);
-    if (staged || readOnlySegment(tokens, raw)) continue;
+    if (staged || readOnlySegment(tokens, raw, readOnlyCommands)) continue;
     return {
       deny: true,
       kind: 'live_checkout',
       path: touched,
-      message: `${ticket.key} may not modify the live checkout (${touched}). Only the approval-phase pre-stage is allowed there: git pull --ff-only, pnpm install and pnpm run check.`,
+      message: `${ticket.key} may not modify the live checkout (${touched}). Read-only inspection (including git fetch and any command listed in liveCheckoutReadOnlyCommands) and the approval-phase pre-stage (git pull --ff-only, pnpm install, pnpm run check) are allowed there.`,
     };
   }
   return pass;
+}
+
+const RULE_NAMES = Object.freeze({
+  cross_ticket: 'cross-ticket isolation',
+  live_checkout: 'live-checkout protection',
+});
+
+/**
+ * The note steered into a denied session. The approval service reports a
+ * rejection to the model as the bare "the user rejected escalating this ..." and
+ * nothing more, which reads as a human saying no; a session that believes that
+ * stops to ask the human why. This says what actually happened and what to do.
+ */
+export function denialNote(decision, ticket) {
+  const prefix = clonePrefix(ticket?.key) ?? 'kan<number>';
+  return [
+    `That escalation was refused by a policy rule, not by a person: ${RULE_NAMES[decision.kind] ?? decision.kind}, path ${decision.path}.`,
+    'Nobody reviewed or rejected it, so do not ask the human about it and do not retry it.',
+    `Do the work in your ticket's own worktree, or in a clone named ${prefix}-<name>, or use a command your approved plan grants.`,
+    decision.message,
+  ].join(' ');
+}
+
+/** The configured read-only command prefixes: non-empty strings only. */
+export function resolveReadOnlyCommands(config) {
+  const list = Array.isArray(config?.liveCheckoutReadOnlyCommands) ? config.liveCheckoutReadOnlyCommands : [];
+  return list.filter((c) => typeof c === 'string' && c.trim() !== '').map((c) => c.trim());
 }
 
 /** Live checkout roots from configuration and the environment, absolute only, deduplicated. */
@@ -260,7 +298,7 @@ export function resolveLiveCheckouts(config, env = process.env) {
  * before) the grant approver: a deny can never be overridden by a grant.
  * Every miss, malformed input or exception calls `next()`.
  */
-export function makeGuardApprover({ store, log, getLiveCheckouts = () => [] }) {
+export function makeGuardApprover({ store, log, getLiveCheckouts = () => [], getReadOnlyCommands = () => [], steer = null }) {
   const warn = (fmt, ...a) => {
     try {
       log?.warn?.(fmt, ...a);
@@ -287,6 +325,7 @@ export function makeGuardApprover({ store, log, getLiveCheckouts = () => [] }) {
         arguments: args,
         cwd: ticket.workspaceCwd ?? agent?.session?.meta?.cwd ?? process.cwd(),
         liveCheckouts: getLiveCheckouts(),
+        readOnlyCommands: getReadOnlyCommands(),
       });
       if (!decision.deny) return next();
       try {
@@ -300,6 +339,15 @@ export function makeGuardApprover({ store, log, getLiveCheckouts = () => [] }) {
         warn('kanban guard: could not record guard_denied for %s: %s', ticketId, String(error?.message ?? error));
       }
       warn('kanban guard: %s', decision.message);
+      // The rejection alone reads to the model as a human refusal. Steer the
+      // reason into the session; a failure here must never change the outcome.
+      if (typeof steer === 'function') {
+        try {
+          steer(agent, { text: denialNote(decision, ticket), summary: `Policy denial (${RULE_NAMES[decision.kind] ?? decision.kind}), not a human decision` });
+        } catch (error) {
+          warn('kanban guard: could not steer the denial reason into %s: %s', ticketId, String(error?.message ?? error));
+        }
+      }
       return 'rejected';
     } catch (error) {
       warn('kanban guard: failed open to the next approver: %s', String(error?.stack ?? error));

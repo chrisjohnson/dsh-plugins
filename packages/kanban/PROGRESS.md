@@ -18,12 +18,12 @@ partial (real-model forced-failure demo; exact UI placement decision) — see §
 
 Canonical locations:
 
-- Plugin source: `/home/dsh/dsh-lab/plugins/dsh-plugins/packages/kanban`
-- Lab: `/home/dsh/dsh-lab/default` on `127.0.0.1:3099` (token in `.lab/url`)
-- Lab DB: `/home/dsh/dsh-lab/default/.dsh/kanban/kanban.db`
-- Lab server logs: `/home/dsh/dsh-lab/default/.lab/lab.log` (stdout+stderr,
+- Plugin source: `/srv/scratch/work/plugins/dsh-plugins/packages/kanban`
+- Lab: `/srv/scratch/work/default` on `127.0.0.1:3099` (token in `.lab/url`)
+- Lab DB: `/srv/scratch/work/default/.dsh/kanban/kanban.db`
+- Lab server logs: `/srv/scratch/work/default/.lab/lab.log` (stdout+stderr,
   truncated on every start/restart, mode 600)
-- dsh-deploy worktree: `/home/dsh/dsh-deploy/.dsh-worktrees/fleet-cinder`
+- dsh-deploy worktree: `/srv/live-checkout/.dsh-worktrees/fleet-cinder`
   (branch `dsh/fleet-cinder`, compared with `origin/main`)
 
 ---
@@ -64,7 +64,7 @@ lab was used whenever the phase needed the real host.
 
 ## 4. What exists (file map)
 
-All under `/home/dsh/dsh-lab/plugins/dsh-plugins/packages/kanban`:
+All under `/srv/scratch/work/plugins/dsh-plugins/packages/kanban`:
 
 | File | Contents |
 |---|---|
@@ -147,16 +147,16 @@ tickIntervalMs: 3000
 stallTimeoutMs: 600000
 wipCap: 2
 autoPromote: true
-defaultWorkspaceCwd: /home/dsh/dsh-lab/kanban-workspace
+defaultWorkspaceCwd: /srv/scratch/work/kanban-workspace
 defaultGrillMode: judgement
 defaultPlanMode: at_pickup
 ```
 
 Lab manifests were edited by hand (not committed to dsh-deploy):
 `dsh-kanban` is a `link:` dependency in both lab `package.json` files and in
-`dsh.profiles.web.bundles`. `lab.sh status` shows `LINKED dsh-kanban`.
+`dsh.profiles.web.bundles`. `project-ctl status` shows `LINKED dsh-kanban`.
 
-Demo workspace: `/home/dsh/dsh-lab/kanban-workspace` — a tiny git repo whose
+Demo workspace: `/srv/scratch/work/kanban-workspace` — a tiny git repo whose
 `test/greet.test.mjs` imports `shout` from `src/greet.mjs`; `shout` was missing
 at baseline. Both demo tickets caused it to be added and the suite turns green.
 
@@ -180,7 +180,7 @@ Repo gates:
 
 ### Real lab runs (default lab, linked package)
 - KAN-1 "Diagnose turn settlement" and KAN-2 "Diagnose turn settlement 2" both
-  `done`/`closed`, attempt 1, in `/home/dsh/dsh-lab/default/.dsh/kanban/kanban.db`.
+  `done`/`closed`, attempt 1, in `/srv/scratch/work/default/.dsh/kanban/kanban.db`.
 - Spans chain: `grill-judgement` (judge) → `plan` (planner, log10, coverage
   judge) → `implement` (implementer) → `verify` (verifier) → `review` (reviewer),
   with nested tool spans (`read`, `edit`, `bash`, `glob`) as children.
@@ -254,7 +254,7 @@ needs-attention/grill forms. No `slot entry crashed` and no boot errors.
 
 ## 10. Git state and release work left
 
-### dsh-plugins (`/home/dsh/dsh-lab/plugins/dsh-plugins`)
+### dsh-plugins (`/srv/scratch/work/plugins/dsh-plugins`)
 Branch `feat/kanban`, clean working tree:
 
 ```
@@ -267,7 +267,7 @@ This branch is **local only** (not pushed, no PR, no tag). Repo rules require a
 release PR and a `<package>-v<version>` tag; direct main commits are not allowed.
 `README.md` index and install line for `dsh-kanban-v0.1.0` are prepared.
 
-### dsh-deploy worktree (`/home/dsh/dsh-deploy/.dsh-worktrees/fleet-cinder`)
+### dsh-deploy worktree (`/srv/live-checkout/.dsh-worktrees/fleet-cinder`)
 Branch `dsh/fleet-cinder`, clean after:
 
 ```
@@ -283,23 +283,23 @@ No kanban pin has been added to dsh-deploy because the tag does not exist yet.
 
 ```sh
 # Lab lifecycle
-cd /home/dsh/dsh-deploy
-scripts/lab.sh status
-scripts/lab.sh up            # starts 127.0.0.1:3099
-scripts/lab.sh logs          # tail lab.log (token redacted); LOG_LINES=200 ...
-scripts/lab.sh down
+cd /srv/live-checkout
+scripts/project-ctl status
+scripts/project-ctl up            # starts 127.0.0.1:3099
+scripts/project-ctl logs          # tail lab.log (token redacted); LOG_LINES=200 ...
+scripts/project-ctl down
 
 # Lab URL (token inside)
-cat ~/dsh-lab/default/.lab/url
+cat ~/scratch/work/default/.lab/url
 
 # Plugin checks
-cd ~/dsh-lab/plugins/dsh-plugins
+cd ~/scratch/work/plugins/dsh-plugins
 node --test packages/kanban/test/*.test.mjs
 node scripts/verify.mjs --package dsh-kanban
 node scripts/check-plugin-hooks.mjs packages/kanban
 
 # HTTP API (needs the lab token cookie)
-URL=$(cat ~/dsh-lab/default/.lab/url); curl -s -c /tmp/kc "$URL" -o /dev/null
+URL=$(cat ~/scratch/work/default/.lab/url); curl -s -c /tmp/kc "$URL" -o /dev/null
 curl -s -b /tmp/kc -X POST http://127.0.0.1:3099/api/kanban/board \
   -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:3099' -d '{}'
 ```
@@ -337,7 +337,7 @@ release work.
 
 Concurrency moved out of kanban into a new separate host plugin:
 
-- `/home/dsh/dsh-lab/plugins/dsh-plugins/packages/model-capacity`
+- `/srv/scratch/work/plugins/dsh-plugins/packages/model-capacity`
   - `src/config.mjs` — enabled switch, per-provider limits, default 1, queue
     bound, reservation TTL, subagent tool list.
   - `src/semaphore.mjs` — per-provider buckets: active leases, FIFO waiters,
@@ -471,9 +471,9 @@ such as `CAPACITY DEMO UI session. Reply · lab-wt-repo · medium-dense` and
 `Write a very long, detailed · lab-wt-repo · deepseek-flash`; queued entries
 show `Convert OK · lab-wt-repo · big-moe`.
 
-API-created demo sessions that pointed at `/home/dsh/dsh-lab/lab-wt-repo` show
+API-created demo sessions that pointed at `/srv/scratch/work/lab-wt-repo` show
 `no workspace` because the registered workspace path is
-`/home/dsh/dsh-lab/default/.lab/home/lab-wt-repo`; sessions created through the
+`/srv/scratch/work/default/.lab/home/lab-wt-repo`; sessions created through the
 UI under the `lab-wt-repo` workspace resolve correctly. This is a demo-data path
 mismatch, not a lookup bug.
 

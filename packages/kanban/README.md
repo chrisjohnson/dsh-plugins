@@ -168,18 +168,18 @@ is a ticket sitting idle. The Questions choice decides who answers:
 ### Sandbox grants (0.16.0)
 
 A build session runs under the ticket's write mode with the ticket's workspace as
-its sandbox root. Anything outside that — a lab directory, a scratch checkout, a
+its sandbox root. Anything outside that — a scratch directory, a package cache, a
 command the sandbox would deny — normally stops the build mid-turn to ask a human.
 A plan may declare those needs up front, in an optional `sandbox` section:
 
 ```json
 "sandbox": {
   "grants": {
-    "paths": ["/home/dsh/dsh-lab/kan30-grant"],
+    "paths": ["/srv/scratch/work"],
     "commands": ["git push", "gh pr create"]
   },
   "checks": [
-    { "path": "/home/dsh/dsh-lab/kan30-grant", "check": "test -w /home/dsh/dsh-lab/kan30-grant", "observed": "writable" }
+    { "path": "/srv/scratch/work", "check": "test -w /srv/scratch/work", "observed": "writable" }
   ]
 }
 ```
@@ -197,6 +197,25 @@ A plan may declare those needs up front, in an optional `sandbox` section:
   `git push origin main`, never `git pushfoo`). The matcher reads the exact
   arguments from the session's own `tool/call` event, never from the model's
   justification text.
+- **A path grant also covers bash.** A `bash` call that matches no command
+  grant is covered by a path grant when it is not denylisted, every path it
+  names lies inside a granted path, the ticket's own workspace or platform temp
+  (`/tmp`, `/var/tmp`, `/dev/null`), and at least one path it names absolutely
+  (or reaches with `cd`) lies inside a granted path. Paths are read from `cd`
+  targets (followed per segment, `~` and `$HOME` resolved, `..` normalised),
+  arguments, `git -C`, `--option=value` and `NAME=value` words and redirect
+  targets; relative words with a slash resolve against the directory the `cd`s
+  left the command in. A command that names no absolute path is never covered
+  (it needs a command grant), and neither is one using command substitution,
+  a subshell, `eval`/`xargs`, a nested `sh -c` string or an unresolved variable.
+  Network commands (`git fetch`, `git push`, `gh`, an installing `pnpm`) and
+  workspace-relative commands therefore still need a command grant. This is a
+  text rule with the same limits as command grants: it cannot see inside a
+  script or an interpreter, or follow a symlink. The `grant_applied` event
+  carries `kind: "path"` or `"command"`.
+- **Plans that grant paths but no commands get an advisory.** The `plan_ready`
+  event carries `advisory` (otherwise `null`) naming that network and
+  relative commands will still prompt. It is not an error.
 - **The denylist is never claimable.** The check is **word-based, not
   position-based**: the command is split on whitespace and on the shell syntax
   that can hide a command from a first-token read (`(`, `)`, `{`, `}`, `$`,
@@ -242,8 +261,8 @@ A plan may declare those needs up front, in an optional `sandbox` section:
 The planner is coached to gather evidence for its grants: for every declared
 path it runs the read-only `test -w <path>` and records `{path, check,
 observed}` in `sandbox.checks`, so the human approves against what was
-actually observed rather than an assumption (the KAN-17 `~/dsh-lab` and
-KAN-29 `/tmp` classes of surprise). Platform temp areas are already writable
+actually observed rather than an assumption (a directory outside the
+workspace, or a `/tmp` that is not writable). Platform temp areas are already writable
 under `workspace-write` and need no grant.
 
 ## Readable prompts (0.19.0)
@@ -263,7 +282,7 @@ reported unmet). A rework prompt adds the review that sent the round back, and
 the no-progress rule. The review prompt carries the same ticket and plan plus the
 implementer's result. Build and rework prompts also tell the agent not to create
 handoff, runbook, deploy-notes, smoke-results or summary documents, and to keep run
-evidence under the ignored lab directory. Tool-call argument schemas are unchanged.
+evidence under an ignored directory. Tool-call argument schemas are unchanged.
 
 ## Checkout isolation (0.19.0)
 
@@ -271,13 +290,18 @@ A build session is denied, rather than prompted, when a sandbox escalation reach
 into somebody else's checkout. The ask resolves `rejected`, a `guard_denied` event
 on the ticket records the tool, the path and the reason (naming the owning
 ticket), and the grant approver and the human are never consulted. Because the
-approval service only carries an outcome, the agent sees an ordinary rejection;
-the explanation is in the event, the log, and the prompt's standing instruction.
+approval service only carries an outcome, the agent would see a bare "the user
+rejected ..." and conclude a person refused. So the guard also steers a short
+notice into the denied session (`agent.steer`, source `plugin:dsh-kanban`): it
+says the refusal was a policy rule and not a person, names the rule and the path,
+says not to ask the human or retry, and says to work in the ticket's own worktree
+or a `kan<number>-<name>` clone, or use a command the plan grants. A failed steer
+changes nothing about the rejection.
 
 | Rule | Denied | Allowed |
 |---|---|---|
 | Another open ticket's checkout | An escalated `write`, `edit` or `bash` whose path is inside another Backlog/Working ticket's workspace, or has a path segment `kan<number>` or `kan<number>-<name>` for another existing open ticket | The session's own workspace and its own clones; any path of a done or discarded ticket |
-| The live checkout | Any escalated write there, and any `bash` segment that runs with the live checkout as its directory or names it, unless it is read-only | Read-only commands (`cat`, `ls`, `git status`/`log`/`diff`, `find` without `-delete`/`-exec`, ...), and the approval-phase pre-stage |
+| The live checkout | Any escalated write there, and any `bash` segment that runs with the live checkout as its directory or names it, unless it is read-only | Read-only commands (`cat`, `ls`, `git status`/`log`/`diff`, `git fetch` without a refspec, `--force` or `--prune`, `find` without `-delete`/`-exec`, ...; `2>&1` and redirects to `/dev/null` do not count as writes), commands matching `liveCheckoutReadOnlyCommands`, and the approval-phase pre-stage |
 
 Managed working copies are not the live checkout, even when they sit inside it: a
 path counts as inside a live checkout only when it is within the live root and not
@@ -504,6 +528,7 @@ Everything below lives on the `kanban` row.
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
 | `liveCheckouts[]` | absolute paths of live deployment checkouts that build sessions may not modify (see Checkout isolation); `DSH_KANBAN_LIVE_CHECKOUTS` adds to it. Default none. |
+| `liveCheckoutReadOnlyCommands[]` | command prefixes (token prefix, word boundaries) a build session may run from a live checkout as read-only inspection, on top of the built-in set. A deployment lists its own inspection commands; a matching segment with a write redirect, or chained with anything not read-only, is still denied. Default none. |
 | `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: the copy is removed through `dsh-better-git-worktree` (0.3.0+) only when it sits under a `.dsh-worktrees` root, is not a live checkout (a `liveCheckouts` path, other than a copy under its `.dsh-worktrees`) and is not used by another open ticket; a copy with uncommitted, unpushed or stashed work, or whose state cannot be read, is left in place and its sessions stay unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
 | `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
@@ -813,6 +838,13 @@ A ticket can ask to be worked in its own git working copy, and the ask is
 `tickets.worktree` and creates nothing. The copy is settled when a plan session
 actually starts, which is the moment the question "where should this work?" first
 has an answer.
+
+The switch is **on by default** whenever `dsh-better-git-worktree` is mounted: the
+new-ticket form starts with it on, and a `create` that omits `worktree` (or sends
+`null`) records the intent on the host, so a ticket gets its own working copy
+unless the human turns it off (`worktree: false`). A ticket without one runs its
+sessions inside the workspace itself, which for a live checkout is unusable for
+builds. With the service absent nothing is defaulted.
 
 At plan start the driver asks `dsh-better-git-worktree` for the directory, in
 three shapes:

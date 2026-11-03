@@ -38,7 +38,10 @@
 //   the answerer of last resort. A broken grant path fails open to a prompt,
 //   never closed to a silent denial.
 
+import { homedir } from 'node:os';
 import { isAbsolute, normalize, resolve } from 'node:path';
+
+import { commandPaths } from './command-paths.mjs';
 
 /**
  * Command words that may never appear anywhere in a grant-covered call, whatever
@@ -192,40 +195,91 @@ export function countGrants(sandbox) {
   return (Array.isArray(grants.paths) ? grants.paths.length : 0) + (Array.isArray(grants.commands) ? grants.commands.length : 0);
 }
 
+/** Platform temp areas a path-covered bash call may also name: already writable under the standing sandbox. */
+export const BASH_PATH_SAFE_ROOTS = Object.freeze(['/tmp', '/var/tmp', '/dev/null']);
+
+/**
+ * Whether a path grant covers a bash call that matched no command grant. A text
+ * rule with the same limits as a command grant (it cannot see inside a script
+ * or an interpreter): the command must not be denylisted, every path it names —
+ * `cd` targets, arguments, `git -C`, redirect targets, relative words resolved
+ * against the directory it runs in — must lie inside a granted path, the
+ * ticket's own workspace root or platform temp, and at least one path it names
+ * absolutely (or reaches by `cd`) must lie inside a granted path. A command
+ * naming no absolute path is never covered here; it needs a command grant.
+ *
+ * @returns {string|null} the granted path that covers the call, or null.
+ */
+function bashPathGrant({ paths, command, workspaceRoot, home }) {
+  const granted = (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && isAbsolute(p));
+  if (granted.length === 0) return null;
+  const parsed = commandPaths(command, { cwd: workspaceRoot, home });
+  if (!parsed.ok) return null;
+  const allowedRoots = [...granted, ...(typeof workspaceRoot === 'string' && workspaceRoot !== '' ? [workspaceRoot] : []), ...BASH_PATH_SAFE_ROOTS];
+  let covering = null;
+  for (const named of parsed.paths) {
+    if (!allowedRoots.some((root) => pathMatches(root, named.path))) return null;
+    if (covering === null && named.explicit) covering = granted.find((root) => pathMatches(root, named.path)) ?? null;
+  }
+  return covering;
+}
+
 /**
  * The matcher: given a plan's grants and one tool call, decide whether the
- * call is covered. Returns the matched grant string, or null.
+ * call is covered, and by what.
  *
- * - `bash`: a command grant matches by token prefix.
+ * - `bash`: a command grant matches by token prefix; failing that, a path grant
+ *   covers the call when it only names paths inside granted paths (see
+ *   `bashPathGrant`).
  * - `write` / `edit`: a path grant matches by path-segment containment of
  *   `file_path` under the granted root.
  *
  * The denylist is applied here too — a covered call whose command is
  * denylisted is never a match, even if a human approved a plan declaring it.
  *
- * @param {{grants: {paths?: string[], commands?: string[]}|null, toolName: string, arguments: object|null}} input
- * @returns {string|null}
+ * @param {{grants: {paths?: string[], commands?: string[]}|null, toolName: string, arguments: object|null, workspaceRoot?: string|null, home?: string}} input
+ * @returns {{grant: string, kind: 'command'|'path'}|null}
  */
-export function matchGrant({ grants, toolName, arguments: args }) {
+export function matchGrantDetail({ grants, toolName, arguments: args, workspaceRoot = null, home = homedir() }) {
   if (grants === null || grants === undefined || typeof grants !== 'object') return null;
   if (args === null || args === undefined || typeof args !== 'object') return null;
   if (toolName === 'bash') {
     const command = typeof args.command === 'string' ? args.command : '';
     if (command === '' || isDenylisted(command)) return null;
     for (const grant of Array.isArray(grants.commands) ? grants.commands : []) {
-      if (typeof grant === 'string' && commandMatches(grant, command)) return grant;
+      if (typeof grant === 'string' && commandMatches(grant, command)) return { grant, kind: 'command' };
     }
-    return null;
+    const covering = bashPathGrant({ paths: grants.paths, command, workspaceRoot, home });
+    return covering === null ? null : { grant: covering, kind: 'path' };
   }
   if (toolName === 'write' || toolName === 'edit') {
     const filePath = typeof args.file_path === 'string' ? args.file_path : '';
     if (filePath === '') return null;
     for (const grant of Array.isArray(grants.paths) ? grants.paths : []) {
-      if (typeof grant === 'string' && pathMatches(grant, filePath)) return grant;
+      if (typeof grant === 'string' && pathMatches(grant, filePath)) return { grant, kind: 'path' };
     }
     return null;
   }
   return null;
+}
+
+/** The matched grant string of {@link matchGrantDetail}, or null. */
+export function matchGrant(input) {
+  return matchGrantDetail(input)?.grant ?? null;
+}
+
+/**
+ * The submit-time advisory for a plan that declares path grants but no command
+ * grants, or null. Path grants cover edits and bash calls that stay inside the
+ * path; network and workspace-relative commands still prompt without a command
+ * grant, and the planner is told so when the plan is parked for approval.
+ */
+export function grantAdvisory(sandbox) {
+  const grants = sandbox?.grants;
+  const paths = Array.isArray(grants?.paths) ? grants.paths.length : 0;
+  const commands = Array.isArray(grants?.commands) ? grants.commands.length : 0;
+  if (paths === 0 || commands > 0) return null;
+  return 'path grants declared with no command grants: network commands (git fetch, git push, gh, installs that download) and commands that name no absolute path will still ask a human';
 }
 
 /** The escalation reason prefix the sandbox approval service stamps on every ask. */
@@ -327,15 +381,17 @@ export function makeGrantApprover({ store, log }) {
       if (grants === null) return next();
       const args = callArguments(agent, callId);
       if (args === null) return next();
-      const grant = matchGrant({ grants, toolName, arguments: args });
-      if (grant === null) return next();
+      const workspaceRoot = agent?.session?.meta?.cwd ?? ticket.workspaceCwd ?? null;
+      const match = matchGrantDetail({ grants, toolName, arguments: args, workspaceRoot });
+      if (match === null) return next();
+      const { grant, kind } = match;
       const target = toolName === 'bash' ? args.command : args.file_path;
       try {
         store.appendEvent(ticketId, 'grant_applied', {
           actor: 'engine',
           phaseFrom: ticket.phase,
           phaseTo: ticket.phase,
-          payload: { toolName, callId, grant, mode, target },
+          payload: { toolName, callId, grant, kind, mode, target },
         });
       } catch (error) {
         // The audit event is the point of the grant; if it cannot be written,

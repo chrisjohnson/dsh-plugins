@@ -519,8 +519,9 @@ test('the new-ticket worktree switch records intent and creates nothing', async 
   // only existed to show a copy that had already been made.
   assert.equal(/rpc\("worktree"/.test(client), false, 'the create form must not create a working copy any more')
   assert.equal(/worktreeCreated|worktreePath|createWorktree\b/.test(client), false, 'the eager-create form state is gone')
-  assert.match(client, /worktree: !!form\.worktree/, 'the create payload carries the intent flag')
-  assert.match(client, /A worktree from the latest main is created when planning starts\./)
+  assert.match(client, /worktree: wantWorktree/, 'the create payload carries the intent flag')
+  assert.match(client, /form\.worktree === null \? Boolean\(props\.worktreeAvailable\)/, 'the switch defaults to on when the service is mounted')
+  assert.match(client, /On by default: a worktree from the latest main is created when planning starts\./)
   // The host endpoint stays as the manual escape hatch; the form just no longer calls it.
   assert.match(files['host.mjs'], /case 'worktree':/)
 })

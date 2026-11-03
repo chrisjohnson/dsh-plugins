@@ -1,7 +1,5 @@
 Review the implementation of kanban ticket {{key}}: "{{title}}".
 
-Working directory: {{cwd}}
-
 The ticket, the plan and the implementer's result are restated below; read the working tree and the diff with git before judging anything. Do not edit files. Review adversarially: assume the work is broken until you have proved otherwise, and check every `done_when` condition against the code, not against what the implementer claimed.
 
 Then call `kanban_submit_review` with exactly these keys:

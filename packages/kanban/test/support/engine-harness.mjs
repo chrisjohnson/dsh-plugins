@@ -49,11 +49,11 @@ export const PLAN_V2 = {
 }
 export const PLAN_GRANTS = {
   summary: 'write outside the workspace',
-  steps: ['write /lab/grant/out.txt'],
-  done_when: [{ id: 'out', statement: 'the file exists', how_verified: 'test -f /lab/grant/out.txt' }],
+  steps: ['write /ws/grant/out.txt'],
+  done_when: [{ id: 'out', statement: 'the file exists', how_verified: 'test -f /ws/grant/out.txt' }],
   sandbox: {
-    grants: { paths: ['/lab/grant'], commands: ['git push'] },
-    checks: [{ path: '/lab/grant', check: 'test -w /lab/grant', observed: 'writable' }],
+    grants: { paths: ['/ws/grant'], commands: ['git push'] },
+    checks: [{ path: '/ws/grant', check: 'test -w /ws/grant', observed: 'writable' }],
   },
 }
 export const REVIEW_FAIL_ROW = {

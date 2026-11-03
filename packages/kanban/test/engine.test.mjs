@@ -896,7 +896,7 @@ test('a failed fetch parks the ticket with git reason and never starts the plan 
   const { store, engine, driver } = setup()
   const ticket = pickedUp(store)
   driver.prep = () => {
-    throw new Error('git fetch failed for /home/dsh/dsh-deploy: could not read from remote repository')
+    throw new Error('git fetch failed for /srv/live-checkout: could not read from remote repository')
   }
   await engine.advance(store.getTicket(ticket.id))
   const parked = store.getTicket(ticket.id)
@@ -941,11 +941,11 @@ test('a ticket with nothing to say about its copy gets an unannotated prompt', a
 
 const PLAN_GRANTS = {
   summary: 'write outside the workspace',
-  steps: ['write /lab/grant/out.txt'],
-  done_when: [{ id: 'out', statement: 'the file exists', how_verified: 'test -f /lab/grant/out.txt' }],
+  steps: ['write /ws/grant/out.txt'],
+  done_when: [{ id: 'out', statement: 'the file exists', how_verified: 'test -f /ws/grant/out.txt' }],
   sandbox: {
-    grants: { paths: ['/lab/grant'], commands: ['git push'] },
-    checks: [{ path: '/lab/grant', check: 'test -w /lab/grant', observed: 'writable' }],
+    grants: { paths: ['/ws/grant'], commands: ['git push'] },
+    checks: [{ path: '/ws/grant', check: 'test -w /ws/grant', observed: 'writable' }],
   },
 }
 
@@ -967,7 +967,23 @@ test('a plan with grants parks plan-ready and never transitions to implement', a
   // The conditions were still stored: the plan is real, it just waits.
   assert.equal(store.listConditions(ticket.id).length, 1)
   const artifact = JSON.parse(store.latestArtifact(ticket.id, 'plan').content)
-  assert.deepEqual(artifact.sandbox.grants, { paths: ['/lab/grant'], commands: ['git push'] })
+  assert.deepEqual(artifact.sandbox.grants, { paths: ['/ws/grant'], commands: ['git push'] })
+})
+
+test('plan_ready carries an advisory when path grants come with no command grants', async () => {
+  const pathsOnly = { ...PLAN_GRANTS, sandbox: { grants: { paths: ['/ws/grant'], commands: [] }, checks: PLAN_GRANTS.sandbox.checks } }
+  const a = setup({ plan: [{ type: 'plan', value: pathsOnly }] })
+  const ticketA = pickedUp(a.store)
+  await a.engine.advance(a.store.getTicket(ticketA.id))
+  const readyA = a.store.listEvents(ticketA.id, { limit: 500 }).find((e) => e.kind === 'plan_ready')
+  assert.match(readyA.payload.advisory, /network commands/)
+  assert.equal(String(a.store.getTicket(ticketA.id).needsAttentionReason).startsWith('Plan ready:'), true, 'an advisory is not an error')
+
+  const b = setup({ plan: [{ type: 'plan', value: PLAN_GRANTS }] })
+  const ticketB = pickedUp(b.store)
+  await b.engine.advance(b.store.getTicket(ticketB.id))
+  const readyB = b.store.listEvents(ticketB.id, { limit: 500 }).find((e) => e.kind === 'plan_ready')
+  assert.equal(readyB.payload.advisory, null)
 })
 
 test('a plan without grants transitions to implement exactly as before', async () => {

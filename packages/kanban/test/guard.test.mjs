@@ -60,12 +60,12 @@ test('a write into another open ticket workspace is denied naming the owner', ()
 
 test('the session own workspace and own clones pass', () => {
   assert.equal(write('/w/kan5/src/x.mjs').deny, false)
-  assert.equal(write('/lab/.dsh-worktrees/kan5-plugins/src/x.mjs').deny, false)
-  assert.equal(bash('cd /lab/.dsh-worktrees/kan5-deploy && git status').deny, false)
+  assert.equal(write('/ws/.dsh-worktrees/kan5-plugins/src/x.mjs').deny, false)
+  assert.equal(bash('cd /ws/.dsh-worktrees/kan5-deploy && git status').deny, false)
 })
 
 test('clones named for another open ticket are denied wherever they live', () => {
-  for (const path of ['/lab/.dsh-worktrees/kan6-plugins/x', '/lab/.dsh-worktrees/kan6-deploy', '/anywhere/kan6/y', '/lab/KAN6-plugins/x']) {
+  for (const path of ['/ws/.dsh-worktrees/kan6-plugins/x', '/ws/.dsh-worktrees/kan6-deploy', '/anywhere/kan6/y', '/ws/KAN6-plugins/x']) {
     const verdict = write(path)
     assert.equal(verdict.deny, true, path)
     assert.equal(verdict.owner, 'KAN-6', path)
@@ -73,27 +73,27 @@ test('clones named for another open ticket are denied wherever they live', () =>
 })
 
 test('a backlog ticket without a workspace still owns its named clones', () => {
-  assert.equal(write('/lab/.dsh-worktrees/kan8-plugins/x').owner, 'KAN-8')
+  assert.equal(write('/ws/.dsh-worktrees/kan8-plugins/x').owner, 'KAN-8')
 })
 
 test('a closed ticket workspace and clones stay accessible', () => {
   assert.equal(write('/w/kan7/notes.txt').deny, false)
-  assert.equal(write('/lab/.dsh-worktrees/kan7-plugins/x').deny, false)
-  assert.equal(bash('cat /w/kan7/README.md /lab/.dsh-worktrees/kan7-deploy/package.json').deny, false)
+  assert.equal(write('/ws/.dsh-worktrees/kan7-plugins/x').deny, false)
+  assert.equal(bash('cat /w/kan7/README.md /ws/.dsh-worktrees/kan7-deploy/package.json').deny, false)
 })
 
 test('a clone name for a ticket that does not exist is not anyones', () => {
-  assert.equal(write('/lab/.dsh-worktrees/kan99-plugins/x').deny, false)
-  assert.equal(write('/lab/kanban/x').deny, false)
-  assert.equal(write('/lab/kan6x/x').deny, false)
+  assert.equal(write('/ws/.dsh-worktrees/kan99-plugins/x').deny, false)
+  assert.equal(write('/ws/kanban/x').deny, false)
+  assert.equal(write('/ws/kan6x/x').deny, false)
 })
 
 test('bash commands that reach another open ticket are denied in each spelling', () => {
   for (const command of [
     'cat /w/kan6/secret',
-    'git -C /lab/.dsh-worktrees/kan6-plugins status',
+    'git -C /ws/.dsh-worktrees/kan6-plugins status',
     'cd /w/kan6 && ls',
-    'cd /lab && cd .dsh-worktrees/kan6-deploy && ls',
+    'cd /ws && cd .dsh-worktrees/kan6-deploy && ls',
     'cp /w/kan5/a /w/kan6/a',
     'ls ../kan6',
     'ls "/w/kan6/dir"',

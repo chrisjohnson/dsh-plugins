@@ -30,7 +30,7 @@ const skip = kanban === undefined ? 'dsh peer packages are not installed' : fals
 
 const LOG = { info() {}, warn() {}, error() {}, debug() {} }
 
-async function boot() {
+async function boot({ worktreeService = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-host-rpc-'))
   const dbPath = join(dir, 'kanban.db')
   const routes = new Map()
@@ -40,6 +40,7 @@ async function boot() {
       if (name === 'llm') {
         return { listProviders: () => [{ id: 'local' }], listModels: async () => [], resolveModelInfo: async () => null }
       }
+      if (name === 'betterGitWorktree' && worktreeService) return { createForPath: async () => ({ managedRoot: '/managed/copy' }) }
       return undefined
     },
     effect() {},
@@ -253,4 +254,19 @@ test('a retry over RPC resets the budget and records the instruction for the nex
   assert.equal(store.getTicket(id).attemptCount, 0)
   assert.match(store.latestArtifact(id, 'attempt_feedback').content, /use docs\//)
   assert.ok(store.listEvents(id, { limit: 100 }).some((e) => e.kind === 'budget_reset'))
+})
+
+test('a new ticket defaults to its own worktree when the worktree service is mounted, unless told otherwise', { skip }, async () => {
+  const { rpc, store } = await boot({ worktreeService: true })
+  const made = async (fields) => (await rpc('create', { title: 'demo', body: '', column: 'backlog', ...fields })).value.ticket.id
+  assert.equal(store.getTicket(await made({})).worktree, true, 'omitted means on')
+  assert.equal(store.getTicket(await made({ worktree: null })).worktree, true, 'null means the default too')
+  assert.equal(store.getTicket(await made({ worktree: false })).worktree, false, 'an explicit off is honoured')
+  assert.equal(store.getTicket(await made({ worktree: true })).worktree, true)
+})
+
+test('a new ticket has no worktree intent when the worktree service is not mounted', { skip }, async () => {
+  const { rpc, store } = await boot()
+  const id = (await rpc('create', { title: 'demo', body: '', column: 'backlog' })).value.ticket.id
+  assert.equal(store.getTicket(id).worktree, false)
 })

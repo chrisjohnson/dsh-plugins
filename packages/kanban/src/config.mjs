@@ -40,6 +40,14 @@ export const DEFAULT_CONFIG = {
    */
   liveCheckouts: [],
 
+  /**
+   * Command prefixes (token prefix, word boundaries) a build session may run from
+   * a live checkout as read-only inspection, on top of the built-in set (git
+   * status/log/diff/show/fetch, ls, cat, grep and the like). A deployment lists
+   * its own inspection commands here. Default none.
+   */
+  liveCheckoutReadOnlyCommands: [],
+
   /** Provider concurrency/pricing. Unknown providers are admitted one at a time at an unknown price. */
   providers: [],
 
@@ -278,6 +286,9 @@ export function resolveConfig(input = {}) {
   optionalString(config.defaultWorkspaceCwd, 'defaultWorkspaceCwd', errors);
   if (!Array.isArray(config.liveCheckouts) || config.liveCheckouts.some((p) => !isNonEmptyString(p) || !p.startsWith('/'))) {
     errors.push(new ConfigError('must be an array of absolute paths', 'liveCheckouts'));
+  }
+  if (!Array.isArray(config.liveCheckoutReadOnlyCommands) || config.liveCheckoutReadOnlyCommands.some((c) => !isNonEmptyString(c))) {
+    errors.push(new ConfigError('must be an array of non-empty command prefixes', 'liveCheckoutReadOnlyCommands'));
   }
   validateProviders(config.providers, errors, warnings);
   validateRoles(config.roles, errors, warnings);

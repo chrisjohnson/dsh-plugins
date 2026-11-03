@@ -57,8 +57,8 @@ const PLAN_PARAMETERS = {
     additionalProperties: true,
     description:
       'Optional sandbox section. Declare ONLY what the build session would otherwise be prompted for mid-build: ' +
-      'grants.paths = absolute paths outside the workspace root the build must write (write/edit under each path is auto-approved once you approve this plan); ' +
-      'grants.commands = token-prefix command grants for bash calls the standing sandbox would deny (the command must start with these tokens at word boundaries). ' +
+      'grants.paths = absolute paths outside the workspace root the build must write (write/edit under each path is auto-approved once you approve this plan, and so is a bash call that cd\'s into or names absolute paths only inside that path, the workspace and /tmp, and names at least one path inside it; a path only ever written by a tool the build runs in bash, such as a package store or cache, is useful only through that bash coverage); ' +
+      'grants.commands = token-prefix command grants for bash calls the standing sandbox would deny (the command must start with these tokens at word boundaries). Network commands (git fetch, git push, gh, an installing pnpm) and workspace-relative commands that need escalation are NOT covered by a path grant: declare them here. ' +
       'The denylist is word-based, not position-based: a call is denied if ANY word in it — after splitting on whitespace and on ( ) { } $ backtick ; | & and newlines, with quotes and backslashes stripped — ' +
       'is systemctl, service, launchctl, sudo, kill, pkill, rm or dd, so a granted prefix can never chain into one of those in any natural shell form ' +
       '("git push && systemctl restart dsh", "git push && (systemctl restart dsh)", "git push && FOO=1 systemctl restart dsh", "git push && \\systemctl restart dsh" are all refused), and a plan declaring ' +

@@ -441,6 +441,13 @@ export default async function kanban(ctx, config = {}) {
               attachments: attachments(),
             });
             if (!prepared.ok) return fail('bad_request', prepared.error);
+            // A ticket without its own worktree runs its sessions inside the workspace
+            // itself, which for a live checkout is unusable for builds. So the intent
+            // defaults to ON when the worktree service is mounted; an explicit
+            // `worktree: false` still turns it off.
+            if (fields.worktree === undefined || fields.worktree === null) {
+              fields.worktree = typeof ctx.get('betterGitWorktree')?.createForPath === 'function';
+            }
             const ticket = store.createTicket({ ...fields, body: prepared.body, column });
             appendConfigFingerprint(store, ticket.id);
             void engineRef.current.tick();
