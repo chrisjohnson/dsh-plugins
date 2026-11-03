@@ -154,7 +154,7 @@ test('the needs-attention card is static red, the in-flight card still glows', a
   assert.match(client, /@keyframes kb-glow-blue/)
   assert.match(client, /\.kb-statusdot\.active\{[^}]*animation:kb-pulse/)
   // Reduced motion still covers what does animate.
-  const motion = client.slice(client.indexOf('@media (prefers-reduced-motion'), client.indexOf('@media (max-width:900px)'))
+  const motion = client.slice(client.indexOf('@media (prefers-reduced-motion'), client.indexOf('@media (max-width:900px){.kb-analytics-kpis'))
   assert.match(motion, /\.kb-card\.active/)
   assert.equal(motion.includes('.kb-card.attention'), false, 'a static card needs no reduced-motion entry')
 })
@@ -166,9 +166,10 @@ test('nothing opens a session on its own', async () => {
   // No effect anywhere in the client may navigate: every remaining call sits on
   // the same line as the click that caused it, or is the definition itself.
   const callers = client.split('\n').filter((line) => line.includes('openSessionById'))
-  // KAN-17 added the hero's Open-session button for a mid-turn human wait: one
-  // definition and four click handlers, nothing else.
-  assert.equal(callers.length, 5, 'one definition and four click handlers, nothing else')
+  // One definition, the hero's Open-session button for a mid-turn human wait,
+  // the card's jump icon and the ticket page's progress steps - every one a
+  // click on a control the human pressed - plus the sessions table and panels.
+  assert.equal(callers.length, 7, 'one definition and six click handlers, nothing else')
   for (const line of callers) {
     const allowed = line.includes('var openSessionById = null;')
       || line.includes('openSessionById = function')
@@ -219,7 +220,7 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   assert.match(update, /prepareBodyImages\(\{ body: draftBody, images: uploads, attachments: attachments\(\) \}\)/)
   assert.equal(/store\.updateTicket\(/.test(update), false, 'the update endpoint must not bypass the guard')
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
-  assert.match(host, /store\.updateTicket\(ticket\.id, \{ sortOrder \}, \{ actor: 'human', reason: 'reorder' \}\)/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
   assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
 })
@@ -406,9 +407,9 @@ test('the client offers both options in create and edit and shows them in the ov
   assert.match(editor, /if \(nextPreset !== \(t\.preset === undefined \? null : t\.preset\)\) patch\.preset = nextPreset/)
   assert.match(editor, /if \(form\.writeMode !== \(t\.writeMode \|\| "workspace-write"\)\) patch\.writeMode = form\.writeMode/)
   // The overview shows the stored choice, naming the default when it is null.
-  const overview = client.slice(client.indexOf('function Overview(props)'))
-  assert.match(overview, /children: t\.preset \|\| "harness default"/)
-  assert.match(overview, /children: t\.writeMode \|\| "workspace write"/)
+  const meta = client.slice(client.indexOf('function TicketMeta(props)'), client.indexOf('function TicketDetail(props)'))
+  assert.match(meta, /t\.preset \|\| "harness default"/)
+  assert.match(meta, /t\.writeMode \|\| "workspace write"/)
 })
 
 // --------------------------------------------------------------- KAN-16
@@ -443,7 +444,7 @@ test('the client offers Start planning on the card and in the detail hero', asyn
   assert.equal((client.match(/canStartPlanning\(/g) || []).length, 3, 'the definition plus the card and the hero')
   // The card button stops the click so it does not also open the detail.
   const card = client.slice(client.indexOf('function Card(props)'), client.indexOf('function Column(props)'))
-  assert.match(card, /canStartPlanning\(t\) \? h\("div", \{ className: "kb-cardfoot" \}/)
+  assert.match(card, /h\("div", \{ className: "kb-cardfoot" \},[\s\S]*canStartPlanning\(t\) \? h\("button"/)
   assert.match(card, /ev\.stopPropagation\(\);\s*\n\s*if \(props\.onStartPlanning\) props\.onStartPlanning\(t\.id\);/)
   // Column passes the handler down; the board sends it as an action and lets act()
   // refresh the board and surface a refusal as a notice.
@@ -481,7 +482,7 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
   const client = files['client.mjs']
 
   // The driver owns the fold and answers both kinds of wait for any phase.
-  assert.match(dispatch, /this\.humanWaits = new Map\(\)/)
+  assert.match(dispatch, /this\.humanWaits = new WaitLedger\(/)
   assert.match(dispatch, /case 'approval\/asked'/)
   assert.match(dispatch, /case 'approval\/decided'/)
   assert.match(dispatch, /isAwaitingApproval\(ticketId\)/)

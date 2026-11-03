@@ -293,3 +293,40 @@ test('an ask from an earlier turn is not mistaken for the open turn\'s', async (
   assert.equal(await driver.attachExistingSession(id, agent), true)
   assert.equal(driver.isAwaitingApproval(ticket.id), false, 'the open turn holds no ask')
 })
+
+// ----------------------------------------------------- the ticket's event log --
+
+test('opening and closing a wait is written to the ticket log, once each', (t) => {
+  if (skip) { t.skip(skip); return }
+  const { driver, store, ticket, emit } = harness()
+  const kinds = () => store.listEvents(ticket.id).map((e) => e.kind).filter((k) => k.startsWith('human_wait'))
+
+  emit({ type: 'turn/start', data: { turn: 1 } })
+  emit({ type: 'approval/asked', data: { id: 'a1', toolName: 'bash' } })
+  assert.deepEqual(kinds(), ['human_wait_started'])
+  emit({ type: 'approval/decided', data: { id: 'a1', outcome: 'allowed-once' } })
+  assert.deepEqual(kinds(), ['human_wait_started', 'human_wait_ended'])
+  // Nothing was open, so a stray end writes nothing.
+  emit({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  assert.deepEqual(kinds(), ['human_wait_started', 'human_wait_ended'])
+})
+
+test('stopping the driver closes a wait that was still open', (t) => {
+  if (skip) { t.skip(skip); return }
+  const { driver, store, ticket, emit } = harness()
+  emit({ type: 'turn/start', data: { turn: 1 } })
+  emit({ type: 'tool/call', data: { turn: 1, step: 0, callId: 'c1', name: 'ask_user_question' } })
+  driver.stop()
+  const kinds = store.listEvents(ticket.id).map((e) => e.kind).filter((k) => k.startsWith('human_wait'))
+  assert.deepEqual(kinds, ['human_wait_started', 'human_wait_ended'])
+})
+
+test('the sessions a card can jump to are the ones with a turn in flight or a pending ask', (t) => {
+  if (skip) { t.skip(skip); return }
+  const { driver, ticket, sessionId, emit } = harness()
+  assert.deepEqual(driver.activeSessionIds(ticket.id), [])
+  emit({ type: 'turn/start', data: { turn: 1 } })
+  assert.deepEqual(driver.activeSessionIds(ticket.id), [sessionId])
+  emit({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  assert.deepEqual(driver.activeSessionIds(ticket.id), [])
+})

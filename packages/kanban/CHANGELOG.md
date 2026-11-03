@@ -5,6 +5,61 @@
 
 ## Unreleased
 
+## 0.20.0
+
+### Added
+
+- **Start build.** A planned Backlog ticket (at the build phase) gets a **Start
+  build** button on its card and in the ticket page, next to the pencil. It makes
+  exactly the move dragging the ticket into Working makes. The same call is
+  available to tooling as the `action` endpoint's `startBuild` action
+  (`{id, action: "startBuild"}`), which refuses any ticket that is not a planned
+  Backlog ticket with `bad_request`; `move` to `working` still does the same
+  thing unguarded. A planned ticket waiting in Backlog is an ordinary idle card,
+  not an attention state.
+- **Jump to session.** A card with a session shows a small icon button that opens
+  the active session, else the latest. On the ticket page each progress step is a
+  link: Plan opens the latest plan session; Build, Review and Approval open the
+  build session.
+- **Card facts.** Bottom right of a card: total working time (with a clock icon)
+  and when the ticket was created. Working time counts only time the engine had a
+  turn, judge call, tool or workflow step running and nobody was being waited on:
+  a parked ticket and a turn paused on a question or approval prompt do not count
+  (the driver now records `human_wait_started` / `human_wait_ended` events; time
+  before this release counts mid-turn waits as work). Done / Discarded is one
+  list, newest closed first (`closed` on the `board` payload).
+- **Progress segments follow the real path.** A ticket with two implement/review
+  rounds shows seven segments, not five. Reached segments are filled; known
+  required segments not yet reached are light grey.
+- **Workflow session titles** read "<ticket id> · <session type> · <ticket title>".
+
+### Changed
+
+- **Board layout.** Backlog and Working no longer scroll on their own; they grow
+  the page. The Done / Discarded column is pinned at the height of the visible
+  board with its own scrollbar, so scrolling the page never moves it.
+- **Ticket page.** Title, status, body and the rest sit on the left (about 80%);
+  workspace, planning, questions, preset, write mode, attempts, spend, working
+  time, created and updated sit in a sidebar on the right (about 20%). Below 900px
+  the sidebar drops under the header.
+- **Card visuals.** The working and attention accents sit inside the rounded
+  border instead of poking past the corners; the bar is slightly wider.
+- **Durations.** Past 24 hours a duration reads `1d2h`; from two days on, whole
+  days only (`3d`, `4d`).
+- The first attempt shows no badge; later ones read "second attempt", "third
+  attempt" and so on (was "try N").
+
+### Fixed
+
+- **Dragging within a column reorders.** The queue order ignored the stored
+  order, so a reorder never changed the list and cards snapped back. Queue order
+  is now priority, then the arranged order, then creation (the engine launches in
+  it too). Dropping at the end of a column no longer fails. A drop is computed by
+  the column from the pointer against the card midpoints, shown with a drop line
+  that takes no room, applied at once, and held against older board refreshes.
+  A drop into another priority tier adopts that tier's priority. Dragging between
+  columns is unchanged.
+
 ## 0.19.1
 
 ### Fixed

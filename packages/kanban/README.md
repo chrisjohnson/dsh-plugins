@@ -539,6 +539,27 @@ again lifts the park and launches a fresh plan. Behind it is a `startPlanning`
 action on the `action` endpoint; it writes `planTiming` and nothing else, and
 refuses any other ticket with `bad_request`.
 
+**Start build** is the matching button for a planned ticket: a Backlog ticket
+that planned in place and now waits at the build phase. On the card and beside
+the pencil in the ticket page it moves the ticket to Working, exactly as dragging
+it there does. Tooling can call it without simulating a drag:
+
+```text
+POST /api/kanban/action   {"id": "<ticket id>", "action": "startBuild"}
+```
+
+It answers `bad_request` for any ticket that is not in Backlog at the build
+phase; `{"id": ..., "column": "working"}` on `move` is the unguarded equivalent.
+`reorder` takes `{id, beforeId}`; an absent or null `beforeId` means the end of
+the column, and the dropped ticket adopts the priority of the tier it lands in.
+
+A card with a session carries a small jump icon that opens its active session,
+else its latest. On the ticket page the progress steps link the same way: Plan to
+the latest plan session, Build / Review / Approval to the build session. Workflow
+sessions are titled `<ticket id> · <plan|build> · <ticket title>`. A card's
+bottom right shows its working time (engine turns, not time parked or waiting on
+you) and its age; Done / Discarded is one list, newest closed first.
+
 A ticket is edited through the one pencil in the detail hero, which opens a
 single editor for the whole card: title, body, acceptance (one statement per
 line — change a line to edit it, delete a line to remove it), planning,

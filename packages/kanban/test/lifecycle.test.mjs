@@ -80,3 +80,11 @@ test('a mid-turn human wait outranks active (KAN-17)', () => {
   // Neither flag: the in-flight turn stays blue.
   assert.equal(cardStatus(working, { active: true }), 'active')
 })
+
+test("queue order: priority first, then the arranged order, then creation", () => {
+  const a = { priority: 0, sortOrder: 2000, createdAt: "1" }
+  const b = { priority: 0, sortOrder: 1000, createdAt: "2" }
+  const c = { priority: 1, sortOrder: 9000, createdAt: "3" }
+  const d = { priority: 0, sortOrder: 1000, createdAt: "0" }
+  assert.deepEqual([a, b, c, d].sort(compareQueue), [c, d, b, a])
+})

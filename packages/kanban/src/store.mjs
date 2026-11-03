@@ -41,6 +41,17 @@ export function normalizeWriteMode(value) {
   return value;
 }
 
+/** The event kinds the board's derived facts (phase path, working time) read. */
+const BOARD_EVENT_KINDS = [
+  'phase_changed',
+  'column_changed',
+  'needs_attention',
+  'attention_cleared',
+  'session_reactivated',
+  'human_wait_started',
+  'human_wait_ended',
+];
+
 const TICKET_FIELDS = [
   'title',
   'body',
@@ -596,6 +607,45 @@ export class KanbanStore {
         ? this.db.prepare('SELECT * FROM events WHERE ticket_id = ? ORDER BY id DESC LIMIT ?').all(ticketId, limit)
         : this.db.prepare('SELECT * FROM events WHERE ticket_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(ticketId, before, limit);
     return rows.map(eventFromRow).reverse();
+  }
+
+  /**
+   * What the board derives per-ticket facts from, for every ticket in three
+   * queries: phase transitions and attention events, work spans, and attached
+   * sessions. Returned as Map(ticketId -> {transitions, events, spans, sessions}).
+   */
+  boardTelemetry(ticketId = null) {
+    const only = ticketId === null ? '' : ' AND ticket_id = ?';
+    const arg = ticketId === null ? [] : [ticketId];
+    const out = new Map();
+    const bucket = (ticketId) => {
+      let entry = out.get(ticketId);
+      if (entry === undefined) {
+        entry = { transitions: [], events: [], spans: [], sessions: [] };
+        out.set(ticketId, entry);
+      }
+      return entry;
+    };
+    const events = this.db
+      .prepare(
+        `SELECT id, ticket_id, at, kind, phase_from, phase_to FROM events
+         WHERE ticket_id IS NOT NULL AND kind IN (${BOARD_EVENT_KINDS.map(() => '?').join(',')})${only} ORDER BY id ASC`,
+      )
+      .all(...BOARD_EVENT_KINDS, ...arg);
+    for (const row of events) {
+      const entry = bucket(row.ticket_id);
+      if (row.kind === 'phase_changed' || row.kind === 'column_changed') {
+        if (row.phase_to !== null && row.phase_to !== row.phase_from) entry.transitions.push({ from: row.phase_from, to: row.phase_to });
+      }
+      entry.events.push({ id: Number(row.id), at: row.at, kind: row.kind });
+    }
+    for (const row of this.db.prepare(`SELECT ticket_id, kind, status, started_at, ended_at FROM spans WHERE 1 = 1${only}`).all(...arg)) {
+      bucket(row.ticket_id).spans.push({ kind: row.kind, status: row.status, startedAt: row.started_at, endedAt: row.ended_at });
+    }
+    for (const row of this.db.prepare(`SELECT ticket_id, dsh_session_id, role, purpose FROM sessions WHERE ticket_id IS NOT NULL${only} ORDER BY id ASC`).all(...arg)) {
+      bucket(row.ticket_id).sessions.push({ sessionId: row.dsh_session_id, role: row.role, purpose: row.purpose });
+    }
+    return out;
   }
 
   // --------------------------------------------------------------- sessions
