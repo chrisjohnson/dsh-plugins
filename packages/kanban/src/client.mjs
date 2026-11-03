@@ -56,7 +56,13 @@ window.__ModuleLoader__.load({
 			if (s < 60) return s + "s";
 			var m = Math.floor(s / 60);
 			if (m < 60) return m + "m " + (s % 60) + "s";
-			return Math.floor(m / 60) + "h " + (m % 60) + "m";
+			var hours = Math.floor(m / 60);
+				if (hours < 24) return hours + "h " + (m % 60) + "m";
+				// A day or more: hours stay for the first day ("1d2h"), then only
+				// whole days ("3d") - minutes stop being information at that scale.
+				var days = Math.floor(hours / 24);
+				if (days >= 2) return days + "d";
+				return hours % 24 === 0 ? days + "d" : days + "d" + (hours % 24) + "h";
 		}
 
 		function fmtTime(iso) {
