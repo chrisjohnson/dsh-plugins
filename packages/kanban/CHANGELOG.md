@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.17.1
+
 ### Fixed
 
 - **A `fail` could reach approval without the build's own conditions being
