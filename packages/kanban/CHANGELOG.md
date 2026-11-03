@@ -5,6 +5,46 @@
 
 ## Unreleased
 
+## 0.18.0
+
+### Added
+
+- **The Questions setting now covers the whole ticket** (KAN-32). `autonomous`
+  ("decide autonomously") used to apply only to planning: an autonomous ticket's
+  build session still stopped on an `ask_user_question` prompt and waited for a
+  human, which is exactly the round trip the setting says it does not want. Now
+  an `ask_user_question` batch whose every question carries options is answered
+  by the engine in the implement and review phases of an autonomous ticket, and
+  in the plan phase of every ticket — the first (recommended) option is taken
+  back from the model, and a `question_answered_autonomously` ticket event
+  records the call id and the exact `{id, selected}` batch before the answer is
+  claimed. A question with no options is the model saying it genuinely does not
+  know, so it still reaches a person in every phase and every mode; so does
+  anything in the approval (verify) phase, on a done or discarded ticket, or on
+  any malformed input or thrown error — every miss calls `next()` and the human
+  answers, and a failed event write does not answer either. The decision is a
+  pure module (`src/questions.mjs`, no dsh imports) reached through core's own
+  seam: an agent-scoped, prepended `user-questions/request` waterfall listener,
+  registered on plan and build sessions at setup and again on reattach after a
+  restart, so a restart no longer silently turns an autonomous ticket back into
+  one that waits.
+- **A tolerant `ask_user_question` in every kanban session.** Registered in the
+  agent scope, where it shadows the preset's copy for that session only. A
+  question missing its `id` gets one assigned (`q1`, `q2`, …, never colliding
+  with a supplied id) instead of the whole call being rejected — the observed
+  failure was a model emitting a batch without ids and losing the question
+  entirely — and the ask carries the tool call id as its card key, which is what
+  lets core's persisted draft store (`dsh.user-questions.drafts.v1`) restore a
+  half-typed answer across a page reload. With no `userQuestions` service
+  mounted the tool is not registered, the core copy stays, and the log says so
+  once.
+- **The prompts tell the model what the engine will do.** An autonomous ticket's
+  implement, rework and review prompts carry a questions note: an option batch is
+  answered for it and logged, asking is therefore safe, and every choice taken
+  this way must be named in the submitted report. The interactive planning prompt
+  says an all-options batch never reaches a human, so optionless questions are
+  reserved for what genuinely needs a person.
+
 ## 0.17.1
 
 ### Fixed

@@ -237,6 +237,75 @@ test('both plan prompts coach that done_when conditions are agent-verifiable, ne
   }
 })
 
+// ------------------------------------------------------------------- KAN-32
+//
+// The Questions setting now covers the whole ticket, and the prompts say so: an
+// autonomous ticket's build and review turns are told that an option-batch ask
+// is answered for them and logged, and the interactive planning prompt is told
+// that offering options is what keeps a question off a human's screen. An
+// interactive ticket's build prompt keeps the exact text it had before.
+
+test('an autonomous ticket’s build, rework and review prompts carry the questions note', async () => {
+  const fail = { verdict: 'fail', reasons: ['not done'], instruction: 'do it again', scope_drift: 'none', acceptance_coverage: [] }
+  const { store, engine, promptOf } = await setup({
+    'session-2': [
+      { type: 'implementation', value: IMPLEMENTATION },
+      { type: 'review', value: fail },
+      { type: 'implementation', value: IMPLEMENTATION },
+    ],
+  })
+  const ticket = working(store) // planQuestions: 'autonomous'
+  await engine.plan(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  const implement = promptOf('implementer_prompt_implement')
+  assert.match(implement, /set to decide autonomously/)
+  assert.match(implement, /question_answered_autonomously/)
+  assert.match(implement, /`kanban_submit_implementation` report/)
+  assert.match(implement, /A question with no options is still a question for a human/)
+  await engine.review(store.getTicket(ticket.id))
+  assert.match(promptOf('reviewer_prompt_review'), /`kanban_submit_review` report/)
+  await engine.implement(store.getTicket(ticket.id))
+  assert.match(promptOf('implementer_prompt_implement'), /set to decide autonomously/, 'the rework prompt carries it too')
+})
+
+test('an interactive ticket’s build and review prompts carry no questions note', async () => {
+  const { store, engine, promptOf } = await setup()
+  const created = store.createTicket({
+    title: 'demo',
+    body: 'make the note',
+    acceptance: ['note exists'],
+    workspaceCwd: CWD,
+    planTiming: 'at_pickup',
+    planQuestions: 'interactive',
+    column: 'working',
+  })
+  const ticket = store.getTicket(created.id)
+  await engine.plan(ticket)
+  await engine.implement(ticket)
+  const implement = promptOf('implementer_prompt_implement')
+  assert.equal(implement.includes('decide autonomously'), false, 'an interactive ticket is not told the engine decides for it')
+  assert.equal(implement.includes('{{'), false, 'the placeholder is resolved, not left behind')
+  await engine.review(ticket)
+  assert.equal(promptOf('reviewer_prompt_review').includes('{{'), false)
+})
+
+test('the interactive planning prompt says an all-options batch never reaches a human', async () => {
+  const { store, engine, promptOf } = await setup()
+  const created = store.createTicket({
+    title: 'demo',
+    body: 'make the note',
+    acceptance: ['note exists'],
+    workspaceCwd: CWD,
+    planTiming: 'at_pickup',
+    planQuestions: 'interactive',
+    column: 'working',
+  })
+  await engine.plan(store.getTicket(created.id))
+  const prompt = promptOf('planner_prompt_plan')
+  assert.match(prompt, /auto-decided by the board/)
+  assert.match(prompt, /reserve an optionless question/)
+})
+
 // ------------------------------------------------------------------- KAN-31
 //
 // One definition of done, rendered the same way into every phase: the plan

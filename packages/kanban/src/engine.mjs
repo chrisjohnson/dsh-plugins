@@ -131,6 +131,24 @@ function releaseScopeLine(plan) {
 }
 
 /**
+ * KAN-32: the questions line an autonomous ticket's build and review prompts
+ * carry. The engine answers an option-batch ask by taking the first
+ * (recommended) option and logging the choice, so the prompt can say plainly
+ * that asking is safe — and require the decision be written down, because a
+ * choice nobody recorded is a choice nobody can review. Empty for every
+ * interactive ticket, which keeps its prompt byte-identical to before.
+ */
+function questionNote(ticket, submitTool) {
+  if (ticket.planQuestions !== 'autonomous') return '';
+  return (
+    'Questions: this ticket is set to decide autonomously, so an `ask_user_question` batch whose every question carries options is answered for you — ' +
+    'the first (recommended) option is taken and the choice is recorded on the ticket as a `question_answered_autonomously` event. ' +
+    'Asking is therefore safe: it does not stall the ticket. Ask whenever a real choice exists, put the option you recommend first, ' +
+    `and name every choice taken this way in your \`${submitTool}\` report. A question with no options is still a question for a human, and it will wait for one.`
+  );
+}
+
+/**
  * The compact condition list the review prompt carries: id plus statement, no
  * how_verified. The reviewer's own session already holds the plan and the diff,
  * so the ids are all it needs to answer against — and the one thing it must not
@@ -581,6 +599,7 @@ export class Engine {
       review: rework === null ? '' : JSON.stringify(rework, null, 2),
       review_line: reworkLine(rework),
       release_scope: releaseScopeLine(planValue),
+      question_note: questionNote(ticket, 'kanban_submit_implementation'),
     });
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
@@ -711,6 +730,7 @@ export class Engine {
       cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
       acceptance: acceptanceBlock(acceptance),
       done_when: conditionListBlock(conditions),
+      question_note: questionNote(ticket, 'kanban_submit_review'),
     });
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt, spanName: 'review', attempt: ticket.attemptCount, runId });

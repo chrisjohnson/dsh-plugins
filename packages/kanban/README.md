@@ -93,8 +93,8 @@ attach to the ticket's selected workspace and are titled `KAN-n · purpose`.
 Ticket choices:
 
 - **Planning:** `now` or `at_pickup`
-- **Questions:** `interactive` (native `ask_user_question`) or `autonomous`
-  (self-judgement prompt)
+- **Questions:** `interactive` (ask me) or `autonomous` (decide autonomously) —
+  the whole ticket, not just its planning; see *Questions and the whole ticket*
 - **Preset:** the starting preset of the ticket's build session — the harness
   default (stored as null, so it keeps tracking future default changes) or any
   registered preset; plan and verify stay on standard
@@ -106,6 +106,58 @@ The plan session is one flat session: it asks questions, researches, and calls
 `kanban_submit_plan` when confident. A valid plan ends that session. Implement,
 review and approval share one session; a complete review flips that same session
 to the approver phase and asks the human what to do with the work.
+
+### Questions and the whole ticket (0.18.0)
+
+An `ask_user_question` call pauses a turn in flight, so a question nobody answers
+is a ticket sitting idle. The Questions choice decides who answers:
+
+| Phase | `interactive` | `autonomous` |
+| --- | --- | --- |
+| plan | option batches auto-answered; optionless asks reach the human | same |
+| implement / review | every ask reaches the human | option batches auto-answered; optionless asks reach the human |
+| verify (approval) | the human | the human |
+
+- **Only an option batch is auto-decided.** When *every* question in the batch
+  carries a non-empty `options` list, the engine answers it with the first
+  option — the model's own recommendation, taken back from it — and nothing else.
+  A question with no options is the model saying it does not know, and that stays
+  with a person in every phase and every mode.
+- **Every auto-answer is audited.** A `question_answered_autonomously` ticket
+  event carries the call id and the exact `{id, selected}` batch, written
+  *before* the answer is claimed. If that write fails the engine does not answer:
+  the ask falls back to the human. An unlogged decision is a decision nobody can
+  review.
+- **The approval phase is never answered from.** Wrapping up finished work is the
+  one conversation that belongs to a human by definition, and a done or discarded
+  ticket answers nothing at all.
+- **Every miss falls through.** A malformed request, a session that belongs to no
+  ticket, a store that throws — all of them reach the human, because a broken
+  auto-answer path costs a prompt and never a silent decision. The decision
+  itself is a pure module (`src/questions.mjs`, no dsh imports) so the whole
+  matrix is unit-tested on a bare clone.
+- **The mechanism is core's own seam.** `@deepseek-ai/dsh-user-questions` settles
+  an ask on the `user-questions/request` waterfall dispatched on the requesting
+  agent's scope, and a cordis waterfall settles on the first listener that does
+  not call `next()`. Kanban registers an agent-scoped, prepended listener on plan
+  and build sessions (setup and reattach-after-restart alike), so it answers that
+  session's asks before the human bridge is reached and nobody else's.
+- **Kanban sessions get a tolerant `ask_user_question`.** Registered in the agent
+  scope, where it shadows the preset's copy for that session only. It differs in
+  two ways: a question missing its `id` gets one assigned (`q1`, `q2`, …, never
+  colliding with a supplied id) instead of the whole call being rejected — the
+  observed failure was a model emitting a batch without ids and losing the
+  question — and the ask carries the tool call id as its card key, which is what
+  lets core's persisted draft store (`dsh.user-questions.drafts.v1`) restore a
+  half-typed answer after a page reload. If no `userQuestions` service is
+  mounted the tool is not registered, the core copy stays, and the log says so
+  once.
+- **The prompts say all of this to the model.** An autonomous ticket's implement,
+  rework and review prompts state that an option batch is answered for it and
+  logged, and require the choice to be named in the submitted report; the
+  interactive planning prompt states that offering options is what keeps a
+  question off a human's screen, so an optionless question is reserved for what
+  genuinely needs a person.
 
 ### Sandbox grants (0.16.0)
 

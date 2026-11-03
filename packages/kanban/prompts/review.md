@@ -15,6 +15,8 @@ Then call `kanban_submit_review` with exactly these keys:
 
 A complete pass is approved by code and moves the ticket straight to human approval; there is no separate verification session. Deferred conditions travel with it and are listed in the approval hand-over, so passing on them costs the build nothing.
 
+{{question_note}}
+
 ## The plan's conditions
 
 {{done_when}}
