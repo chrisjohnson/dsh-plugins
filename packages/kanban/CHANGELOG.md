@@ -5,6 +5,37 @@
 
 ## Unreleased
 
+## 0.19.0
+
+### Added
+
+- **Build, rework and review prompts render markdown, not JSON.** The stored plan,
+  the implementer's result and the review verdict are rendered back as readable
+  sections instead of being pasted as JSON. A build or rework prompt now carries
+  the human's own title, body, acceptance statements and image paths, the plan
+  (summary, steps, release scope, sandbox grants and checks), every condition with
+  its id, statement, verification and source, and a submission contract listing
+  exactly what the engine checks before it accepts an implementation and what the
+  review holds each claim to. A rework prompt adds the review that sent it back.
+  The review prompt carries the same ticket and plan plus the implementer's
+  result. Tool-call argument schemas are unchanged.
+- **Build and rework prompts forbid handoff documents.** They tell the agent not to
+  create handoff, runbook, deploy-notes, smoke-results or summary documents, to
+  report in its final message, and to keep run evidence under the ignored lab
+  directory.
+- **Cross-ticket checkout access is denied, not prompted.** A sandbox escalation
+  from one ticket's build session that reaches another open ticket's workspace,
+  worktree or clone (a path segment `kan<number>` or `kan<number>-<name>`) resolves
+  `rejected` and records a `guard_denied` event naming the owning ticket. A done or
+  discarded ticket's checkout stays readable. Builds name their clones
+  `kan<number>-plugins` and `kan<number>-deploy`, and the build prompt says so.
+- **The live checkout is protected.** Configured live checkouts (`liveCheckouts`,
+  `DSH_KANBAN_LIVE_CHECKOUTS`) refuse escalated writes, except the approval-phase
+  pre-stage (`git pull --ff-only`, `pnpm install`, `pnpm run check`) and read-only
+  commands. The matcher is a pure module (`src/guard.mjs`); it runs ahead of the
+  grant approver, so a grant cannot override a denial, and the grant denylist is
+  unchanged.
+
 ## 0.18.0
 
 ### Added
