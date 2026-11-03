@@ -14,7 +14,7 @@ import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
-import { normalizePlan, validatePlan, verifyReview } from './result.mjs';
+import { normalizePlan, validatePlan, verifyReview, classifyGaps } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 
@@ -94,7 +94,40 @@ function acceptanceBlock(acceptance) {
 }
 
 function doneWhenBlock(conditions) {
-  return conditions.map((c) => `- ${c.id}: ${c.statement}\n  verify: ${c.howVerified}`).join('\n');
+  return conditions.map((c) => `${conditionHead(c)}\n  verify: ${c.howVerified}${deferredNote(c)}`).join('\n');
+}
+
+/**
+ * KAN-31: the deferred marker, in the one wording the build, the review and the
+ * approval prompt all use. A deferred condition is planned work the agent must
+ * NOT do and cannot evidence — it is handed to the human at approval — so every
+ * phase has to see the same thing the gate decided on.
+ */
+function deferredNote(condition) {
+  if (condition.deferred !== true) return '';
+  const evidence = typeof condition.humanEvidence === 'string' && condition.humanEvidence.trim() !== ''
+    ? condition.humanEvidence.trim()
+    : condition.howVerified;
+  return ` (deferred to approval — human evidence: ${evidence})`;
+}
+
+function conditionHead(c) {
+  return `- ${c.id}: ${c.statement}`;
+}
+
+/**
+ * KAN-31: the release-scope line, rendered only when the plan declared a scope,
+ * so a plan written before 0.17.0 gets the byte-identical prompt it had.
+ */
+function releaseScopeLine(plan) {
+  const scope = plan === null || plan === undefined ? undefined : plan.releaseScope;
+  if (scope === 'stop_before_merge') {
+    return 'Release scope: this plan stops before the release. Do not merge to the default branch, tag, or deploy — those steps are deferred conditions the human performs at approval. Land the work on this branch and prove the conditions that are yours.';
+  }
+  if (scope === 'full_release') {
+    return 'Release scope: this plan carries the release through. Merging, tagging and deploying are in-scope work for this build unless a condition marks them deferred.';
+  }
+  return '';
 }
 
 /**
@@ -105,7 +138,67 @@ function doneWhenBlock(conditions) {
  */
 function conditionListBlock(conditions) {
   if (!Array.isArray(conditions) || conditions.length === 0) return '(the plan declared no conditions)';
-  return conditions.map((c) => `- \`${c.id}\` — ${c.statement}`).join('\n');
+  return conditions.map((c) => `- \`${c.id}\` — ${c.statement}${deferredNote(c)}`).join('\n');
+}
+
+/**
+ * KAN-31: the deferred section of the approval prompt. Empty when nothing is
+ * deferred, so an ordinary ticket gets the exact hand-over it got before; when
+ * something is, the human is told precisely which conditions are theirs to
+ * evidence and what to look at.
+ *
+ * The leading and trailing newlines are part of the value, not of the template:
+ * `approval.md` ends with `{{deferred}}` with no newline of its own, so an empty
+ * value here reproduces the pre-0.17.0 prompt byte for byte.
+ */
+function deferredBlock(deferredIds, conditions) {
+  if (!Array.isArray(deferredIds) || deferredIds.length === 0) return '';
+  const byId = new Map((conditions ?? []).map((c) => [c.id, c]));
+  const lines = deferredIds.map((id) => {
+    const condition = byId.get(id);
+    if (condition === undefined) return `- \`${id}\``;
+    return `- \`${id}\` — ${condition.statement}${deferredNote(condition)}`;
+  });
+  return [
+    '',
+    '',
+    'Deferred conditions — the human evidences these, not you:',
+    '',
+    ...lines,
+    '',
+    'Name each one in your hand-over and say what to check. Do not attempt them and do not call them failures: the review passed with these left open on purpose.',
+  ].join('\n');
+}
+
+/**
+ * The condition ids the review that sent this round back left failing. A fail is
+ * allowed to stop listing rows it already bounced, so an empty set is honest and
+ * the park message says so rather than guessing.
+ */
+function reworkFailingIds(rework) {
+  const rows = Array.isArray(rework?.done_when) ? rework.done_when : [];
+  const ids = [];
+  for (const row of rows) {
+    if (row !== null && typeof row === 'object' && row.met !== true && row.id !== undefined) {
+      const id = String(row.id);
+      if (!ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The condition ids a list of review gaps names. `verifyReview` writes every
+ * per-condition gap as `done_when.<id> …`, so the id is recoverable without
+ * re-running the gate — which is what the no-progress signature needs.
+ */
+function gapConditionIds(gaps) {
+  const ids = [];
+  for (const gap of Array.isArray(gaps) ? gaps : []) {
+    const match = /^done_when\.(\S+)/.exec(String(gap));
+    if (match !== null && !ids.includes(match[1])) ids.push(match[1]);
+  }
+  return ids;
 }
 
 /**
@@ -447,17 +540,37 @@ export class Engine {
       return { kind: 'continue' };
     }
     const attempt = ticket.attemptCount + 1;
-    if (attempt > config.maxAttempts) return this.needsAttention(ticket, `attempt budget exhausted (${config.maxAttempts})`);
+    if (attempt > config.maxAttempts) {
+      return this.needsAttention(ticket, `attempt budget exhausted (${config.maxAttempts}) — a human Retry with instruction grants a fresh budget`);
+    }
     const route = this.resolveRoute('implementer', attempt);
     const admission = this.admit(ticket, route, 'implementer', { attempt });
     if (!admission.ok) return this.hold(ticket, admission);
-    this.store.setAttempt(ticket.id, attempt, route.rung);
     const prompts = this.getPrompts();
     const conditions = this.store.listConditions(ticket.id);
     const acceptance = this.store.listAcceptance(ticket.id);
     const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
+    const planValue = planArtifact === undefined ? null : safeJson(planArtifact.content);
     const reviewArtifact = this.store.latestArtifact(ticket.id, 'review');
     const rework = reviewArtifact === undefined ? null : safeJson(reviewArtifact.content);
+    // KAN-31: a rework round is only worth an attempt if there is something new
+    // to review. The signature records the tree this rework round started from;
+    // if the tree a later rework round starts from is that same tree, the round
+    // in between changed nothing and would only repeat itself, so park instead
+    // of spending the attempt on a copy of the last one.
+    if (rework !== null) {
+      const held = this.reworkSignature(ticket);
+      const now = await this.workingTreeHash(ticket);
+      if (held !== null && now !== null && now === held.diffHash) {
+        const ids = held.failingIds.length > 0 ? held.failingIds.join(', ') : 'the conditions the last review named';
+        return this.needsAttention(ticket, `no progress: the working tree is unchanged since the round that last failed ${ids}`, {
+          noProgress: true,
+          failingIds: held.failingIds,
+        });
+      }
+      if (now !== null) this.saveReworkSignature(ticket, now, reworkFailingIds(rework));
+    }
+    this.store.setAttempt(ticket.id, attempt, route.rung);
     const prompt = render(prompts.bodies[rework === null ? 'implement' : 'rework'], {
       key: ticket.key,
       title: ticket.title,
@@ -467,6 +580,7 @@ export class Engine {
       done_when: doneWhenBlock(conditions),
       review: rework === null ? '' : JSON.stringify(rework, null, 2),
       review_line: reworkLine(rework),
+      release_scope: releaseScopeLine(planValue),
     });
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
@@ -484,6 +598,75 @@ export class Engine {
   }
 
   // ----------------------------------------------------------------- review
+
+  /**
+   * Decide what a submitted review means, in code, before any attempt is spent.
+   *
+   * Three routes out of a pass. Substantive gaps — a condition the plan can hold
+   * the build to that is unmet, under-confident or unevidenced — go back to
+   * implementation, as they always did. Cosmetic gaps — a missing, duplicated or
+   * invented id, a malformed coverage row, an uncovered statement — are a defect
+   * in the *review*, so they go back to the reviewer, not to the builder. And a
+   * pass whose only open conditions are deferred ones is a clean pass: the
+   * deferred ids ride into the approval prompt with it.
+   *
+   * A fail verdict gets the same reading: a reviewer that marks every non-deferred
+   * condition met and only the deferred ones unmet is describing a pass, and gets
+   * the pass's routing.
+   */
+  reviewDecision(value, conditions, acceptance, threshold) {
+    const { gaps, deferred } = verifyReview(value, conditions, acceptance, threshold);
+    const { substantive, cosmetic } = classifyGaps(gaps);
+    const failing = new Set(gapConditionIds(substantive));
+    if (value.verdict === 'pass') {
+      if (substantive.length > 0) return { route: 'implement', gaps, substantive, cosmetic, deferred, failingIds: [...failing] };
+      if (cosmetic.length > 0) return { route: 'cosmetic', gaps, substantive, cosmetic, deferred, failingIds: [...failing] };
+      return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+    }
+    for (const row of Array.isArray(value.done_when) ? value.done_when : []) {
+      if (row !== null && typeof row === 'object' && row.met !== true && row.id !== undefined) failing.add(String(row.id));
+    }
+    if (substantive.length === 0 && deferred.length > 0) return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+    return { route: 'implement', gaps, substantive, cosmetic, deferred, failingIds: [...failing] };
+  }
+
+  /**
+   * Send a review back to implementation and record why. A pass the code gate
+   * rejects records its gaps, as it always did; a plain `fail` records nothing
+   * extra — its instruction is the feedback, and inventing a gap list for a
+   * reviewer that was allowed to omit rows would only put noise on the timeline.
+   */
+  reviewToImplement(ticket, { gaps, substantive }, feedback, spanId, verdict) {
+    this.store.addArtifact(ticket.id, 'review_feedback', feedback, { spanId });
+    if (verdict === 'pass') {
+      this.appendEvent(ticket.id, 'review_rejected', {
+        phaseFrom: 'review',
+        phaseTo: 'implement',
+        payload: { gaps, substantive },
+      });
+    }
+    this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: feedback });
+    return { kind: 'continue' };
+  }
+
+  /**
+   * KAN-31: the one retry a cosmetic review gets, in the session that wrote it.
+   * The message is the exact gap text plus the two lists the gate checks against,
+   * so the reviewer has nothing to guess.
+   */
+  reviewRetryPrompt(conditions, acceptance, cosmetic) {
+    return [
+      'Your review passed, but it cannot be code-verified. The gaps are in the review submission itself, not in the work — do not change any file, and do not send the build away to fix what only your answer can fix.',
+      '',
+      ...cosmetic.map((gap) => `- ${gap}`),
+      '',
+      `The plan's condition ids are exactly: ${conditions.map((c) => `\`${c.id}\``).join(', ') || '(none — submit an empty done_when array)'}.`,
+      `The stored acceptance statements are: ${acceptance.length === 0 ? 'none — submit an empty acceptance_coverage array' : acceptance.map((a) => `"${a.statement}"`).join(', ')}.`,
+      'Report deferred conditions with `met: false` and evidence naming what the human checks at approval; if the only unmet conditions are deferred, the verdict is pass.',
+      '',
+      'Call kanban_submit_review again with the complete corrected object.',
+    ].join('\n');
+  }
 
   async review(ticket) {
     if (this.stopped(ticket.id)) return { kind: 'stopped' };
@@ -516,22 +699,48 @@ export class Engine {
     }
     const value = turn.action.value;
     this.store.addArtifact(ticket.id, 'review', JSON.stringify(value, null, 2), { spanId: turn.spanId });
-    if (value.verdict === 'pass') {
-      const gaps = verifyReview(value, this.store.listConditions(ticket.id), acceptance, config.confidenceThreshold);
-      if (gaps.length > 0) {
-        const feedback = `Review cannot be code-verified: ${gaps.join('; ')}`;
-        this.store.addArtifact(ticket.id, 'review_feedback', feedback, { spanId: turn.spanId });
-        this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'implement', payload: { gaps } });
-        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: feedback });
-        return { kind: 'continue' };
-      }
-      await this.enterApproval(ticket, turn.sessionId);
+    const decision = this.reviewDecision(value, this.store.listConditions(ticket.id), acceptance, config.confidenceThreshold);
+    if (decision.route === 'implement') {
+      const feedback = value.verdict === 'pass'
+        ? `Review cannot be code-verified: ${decision.gaps.join('; ')}`
+        : (typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; '));
+      return this.reviewToImplement(ticket, decision, feedback, turn.spanId, value.verdict);
+    }
+    if (decision.route === 'approval') {
+      await this.enterApproval(ticket, turn.sessionId, { deferred: decision.deferred });
       return { kind: 'wait' };
     }
-    const instruction = typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; ');
-    this.store.addArtifact(ticket.id, 'review_feedback', instruction, { spanId: turn.spanId });
-    this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: `review requested changes: ${instruction}` });
-    return { kind: 'continue' };
+    // Cosmetic only: one retry in the same session. No implement transition, so
+    // no attempt is spent, and a reviewer that fixes its own answer continues
+    // from here exactly as if it had been right the first time.
+    this.appendEvent(ticket.id, 'review_retry', { phaseFrom: 'review', phaseTo: 'review', payload: { gaps: decision.cosmetic } });
+    const retryPrompt = this.reviewRetryPrompt(conditions, acceptance, decision.cosmetic);
+    let retry = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt: retryPrompt, spanName: 'review-retry', attempt: ticket.attemptCount, runId });
+    if (retry.kind !== 'ok') retry = (await this.autoRecover(ticket, retry, 'review')) ?? retry;
+    if (retry.kind !== 'ok') return this.failedTurn(ticket, retry, 'review');
+    if (retry.action === null || retry.action.type !== 'review') {
+      return this.needsAttention(ticket, `Review cannot be code-verified: ${decision.cosmetic.join('; ')} — the retry ended without calling kanban_submit_review`);
+    }
+    const second = retry.action.value;
+    this.store.addArtifact(ticket.id, 'review', JSON.stringify(second, null, 2), { spanId: retry.spanId });
+    const again = this.reviewDecision(second, this.store.listConditions(ticket.id), acceptance, config.confidenceThreshold);
+    if (again.route === 'implement') {
+      const feedback = second.verdict === 'pass'
+        ? `Review cannot be code-verified: ${again.gaps.join('; ')}`
+        : (typeof second.instruction === 'string' && second.instruction.trim() !== '' ? second.instruction : (second.reasons ?? []).join('; '));
+      return this.reviewToImplement(ticket, again, feedback, retry.spanId, second.verdict);
+    }
+    if (again.route === 'approval') {
+      await this.enterApproval(ticket, retry.sessionId, { deferred: again.deferred });
+      return { kind: 'wait' };
+    }
+    // Still cosmetic after its one retry: the reviewer cannot complete its own
+    // submission. Park with the exact text — the work was never in question, so
+    // the human gets the gap list, not a failed build round.
+    const reason = `Review cannot be code-verified: ${again.cosmetic.join('; ')} — the reviewer was asked once to fix its own submission and could not`;
+    this.store.addArtifact(ticket.id, 'review_feedback', reason, { spanId: retry.spanId });
+    this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'review', payload: { gaps: again.cosmetic, cosmetic: true, retry: true } });
+    return this.needsAttention(ticket, reason, { cosmeticGaps: again.cosmetic });
   }
 
   // --------------------------------------------------------------- approval
@@ -543,12 +752,13 @@ export class Engine {
   // the configured approver route. One slim prompt asks the agent to hand the
   // work over to the human, and the ticket then parks for them.
 
-  async enterApproval(ticket, sessionId) {
+  async enterApproval(ticket, sessionId, { deferred = [] } = {}) {
     const current = this.store.transitionTicket(ticket.id, { phase: 'verify' }, { actor: 'engine', reason: 'review passed; awaiting approval' });
+    const deferredIds = Array.isArray(deferred) ? deferred : [];
     this.appendEvent(current.id, 'approval_requested', {
       phaseFrom: 'review',
       phaseTo: 'verify',
-      payload: { attempt: current.attemptCount },
+      payload: { attempt: current.attemptCount, ...(deferredIds.length > 0 ? { deferred: deferredIds } : {}) },
     });
     const route = this.resolveRoute('approver', current.attemptCount);
     if (route.provider === null || route.model === null) {
@@ -572,6 +782,9 @@ export class Engine {
     const prompt = render(prompts.bodies.approval, {
       key: current.key,
       title: current.title,
+      // Empty for every ticket with nothing deferred, which keeps the hand-over
+      // byte-identical to the one this plugin has always sent.
+      deferred: deferredBlock(deferredIds, this.store.listConditions(current.id)),
     });
     // A manual review submission concludes the human's turn and asks for the
     // approval turn in the same beat; sending into a session whose turn is still
@@ -687,21 +900,32 @@ export class Engine {
       if (ticket.phase !== 'review') throw new StoreError('invalid_phase', `review submitted from ${ticket.phase}`);
       const value = action.value;
       this.store.addArtifact(ticket.id, 'review', JSON.stringify(value, null, 2));
+      // KAN-31: the same code gate and the same three-way routing the engine's
+      // own review uses. A human-submitted review gets no retry turn — there is
+      // no reviewer to send back to — so a cosmetic gap parks with its text
+      // instead of spending an implement attempt on it.
+      const decision = this.reviewDecision(value, this.store.listConditions(ticket.id), this.store.listAcceptance(ticket.id), this.getConfig().confidenceThreshold);
+      if (decision.route === 'approval') {
+        await this.enterApproval(ticket, sessionId, { deferred: decision.deferred });
+        return;
+      }
+      if (decision.route === 'cosmetic') {
+        const reason = `Review cannot be code-verified: ${decision.cosmetic.join('; ')}`;
+        this.store.addArtifact(ticket.id, 'review_feedback', reason);
+        this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'review', payload: { gaps: decision.cosmetic, cosmetic: true, manual: true } });
+        this.needsAttention(ticket, reason, { cosmeticGaps: decision.cosmetic, manual: true });
+        return;
+      }
       if (value.verdict !== 'pass') {
         const instruction = typeof value.instruction === 'string' && value.instruction.trim() !== '' ? value.instruction : (value.reasons ?? []).join('; ');
         this.store.addArtifact(ticket.id, 'review_feedback', instruction);
         this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: `manual review requested changes: ${instruction}` });
         return;
       }
-      const gaps = verifyReview(value, this.store.listConditions(ticket.id), this.store.listAcceptance(ticket.id), this.getConfig().confidenceThreshold);
-      if (gaps.length > 0) {
-        const feedback = `Review cannot be code-verified: ${gaps.join('; ')}`;
-        this.store.addArtifact(ticket.id, 'review_feedback', feedback);
-        this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'implement', payload: { gaps, manual: true } });
-        this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: feedback });
-        return;
-      }
-      await this.enterApproval(ticket, sessionId);
+      const feedback = `Review cannot be code-verified: ${decision.gaps.join('; ')}`;
+      this.store.addArtifact(ticket.id, 'review_feedback', feedback);
+      this.appendEvent(ticket.id, 'review_rejected', { phaseFrom: 'review', phaseTo: 'implement', payload: { gaps: decision.gaps, manual: true } });
+      this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: feedback });
       return;
     }
     throw new StoreError('invalid_phase', `${action.type} cannot be submitted from ${ticket.phase}/${purpose}`);
@@ -1023,6 +1247,44 @@ export class Engine {
       this.store.endSpan(span.id, { status: 'failed', error: String(error?.message ?? error), durationMs: Number(process.hrtime.bigint() - startedMono) / 1e6 });
       return `(could not read git diff in ${cwd}: ${String(error?.message ?? error)})`;
     }
+  }
+
+  /**
+   * KAN-31: the fingerprint of the working tree a rework round starts from —
+   * exactly the git inputs `diff` reads (tracked diff, status, untracked list),
+   * hashed instead of rendered. Null when git cannot answer, because an
+   * unreadable tree must never be the reason a round is called no-progress.
+   */
+  async workingTreeHash(ticket) {
+    const config = this.getConfig();
+    const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
+    try {
+      const [status, diff] = await Promise.all([
+        execFileAsync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: 10_000, maxBuffer: 100_000 }),
+        execFileAsync('git', ['-C', cwd, 'diff', 'HEAD'], { timeout: 10_000, maxBuffer: MAX_DIFF_BYTES }),
+      ]);
+      const untracked = status.stdout
+        .split('\n')
+        .filter((line) => line.startsWith('??'))
+        .map((line) => line.slice(3))
+        .slice(0, 50);
+      return hashText(`${status.stdout}\n${untracked.join('\n')}\n${diff.stdout}`);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The last recorded rework signature, or null when there is none to honour. */
+  reworkSignature(ticket) {
+    const row = this.store.latestArtifact(ticket.id, 'rework_signature');
+    const value = row === undefined ? null : safeJson(row.content);
+    if (value === null || typeof value.diffHash !== 'string' || value.diffHash === '') return null;
+    return { diffHash: value.diffHash, failingIds: Array.isArray(value.failingIds) ? value.failingIds.map(String) : [] };
+  }
+
+  /** Record the tree this rework round starts from and what it has to fix. */
+  saveReworkSignature(ticket, diffHash, failingIds) {
+    this.store.addArtifact(ticket.id, 'rework_signature', JSON.stringify({ diffHash, failingIds }, null, 2));
   }
 
   // --------------------------------------------------------------- utilities

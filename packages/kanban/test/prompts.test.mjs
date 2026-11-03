@@ -236,3 +236,160 @@ test('both plan prompts coach that done_when conditions are agent-verifiable, ne
     assert.equal(prompt.includes('{{'), false, 'the plan prompt still has an unresolved placeholder')
   }
 })
+
+// ------------------------------------------------------------------- KAN-31
+//
+// One definition of done, rendered the same way into every phase: the plan
+// declares a release scope and deferred conditions, the build prompt marks them,
+// the review prompt says how to report them, and the approval hand-over lists
+// them — while a ticket with none gets the exact prompt it always got.
+
+const DEFERRED_PLAN = {
+  summary: 'write the file; the human lands the release',
+  steps: ['create notes.txt'],
+  release_scope: 'stop_before_merge',
+  done_when: [
+    { id: 'notes-exist', statement: 'notes.txt exists', how_verified: 'test -f notes.txt' },
+    {
+      id: 'release-landed',
+      statement: 'merged to main and tagged',
+      how_verified: 'git ls-remote origin refs/tags/v1 prints a sha',
+      deferred: true,
+      human_evidence: 'git ls-remote origin refs/tags/v1 prints a sha',
+    },
+  ],
+}
+const IMPLEMENT_DEFERRED = {
+  status: 'complete',
+  summary: 'created notes.txt',
+  changed_files: ['notes.txt'],
+  done_when: [
+    { id: 'notes-exist', met: true, confidence: 0.95, evidence: 'notes.txt:1 hello' },
+    { id: 'release-landed', met: false, confidence: 0.95, evidence: 'not merged — deferred to approval' },
+  ],
+}
+const REVIEW_DEFERRED = {
+  verdict: 'pass',
+  reasons: ['the code round is complete'],
+  scope_drift: 'none',
+  done_when: [
+    { id: 'notes-exist', met: true, confidence: 0.95, evidence: 'notes.txt:1 hello' },
+    { id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it at approval' },
+  ],
+  acceptance_coverage: [{ condition: 'notes-exist', acceptance: 'note exists' }],
+}
+
+const APPROVAL_BEFORE_KAN31 = [
+  'Without making any further changes, offer the user a selection of a few options for next steps that would enable you to wrap this work up.',
+  '',
+  '`kanban_approve`, `kanban_discard` and `kanban_submit_plan` are available when, and only when, the human asks for one of them.',
+  '',
+].join('\n')
+
+async function deferredRun(queues = {}) {
+  const { store, engine, promptOf } = await setup({
+    'session-1': [{ type: 'plan', value: DEFERRED_PLAN }],
+    'session-2': [
+      { type: 'implementation', value: IMPLEMENT_DEFERRED },
+      { type: 'review', value: REVIEW_DEFERRED },
+    ],
+    ...queues,
+  })
+  const ticket = working(store)
+  await engine.plan(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  await engine.review(store.getTicket(ticket.id))
+  return { store, engine, promptOf, ticket }
+}
+
+test('the approval prompt is byte-identical when nothing is deferred', async () => {
+  const { store, engine, promptOf } = await setup()
+  const ticket = working(store)
+  await engine.plan(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  await engine.review(store.getTicket(ticket.id))
+  const prompt = promptOf('approver_prompt_approval')
+  assert.equal(prompt, APPROVAL_BEFORE_KAN31, 'a plain ticket gets the pre-0.17.0 hand-over, byte for byte')
+})
+
+test('the approval prompt lists the deferred conditions and what the human checks', async () => {
+  const { promptOf } = await deferredRun()
+  const prompt = promptOf('approver_prompt_approval')
+  assert.match(prompt, /Deferred conditions — the human evidences these, not you/)
+  assert.match(prompt, /`release-landed` — merged to main and tagged/)
+  assert.match(prompt, /human evidence: git ls-remote origin refs\/tags\/v1 prints a sha/)
+  // The hand-over still ends the way it always did.
+  assert.match(prompt, /asks for one of them\.\n/)
+})
+
+test('the implement prompt carries the release scope and marks the deferred condition', async () => {
+  const { promptOf } = await deferredRun()
+  assert.match(promptOf('implementer_prompt_implement'), /Release scope: this plan stops before the release/)
+  assert.match(promptOf('implementer_prompt_implement'), /- release-landed: merged to main and tagged\n  verify: git ls-remote origin refs\/tags\/v1 prints a sha \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
+  assert.match(promptOf('implementer_prompt_implement'), /The review is gated on exactly these condition ids/)
+})
+
+test('a plan without a release scope leaves the implement prompt without one', async () => {
+  const { store, engine, promptOf } = await setup()
+  const ticket = working(store)
+  await engine.plan(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  const prompt = promptOf('implementer_prompt_implement')
+  assert.equal(prompt.includes('Release scope:'), false, 'no scope declared, no scope line rendered')
+  assert.equal(prompt.includes('deferred to approval — human evidence'), false, 'no condition asked for the treatment')
+})
+
+test('the rework prompt carries the release scope too', async () => {
+  const fail = { verdict: 'fail', reasons: ['not done'], instruction: 'do it again', scope_drift: 'none', acceptance_coverage: [] }
+  const { store, engine, promptOf } = await setup({
+    'session-1': [{ type: 'plan', value: DEFERRED_PLAN }],
+    'session-2': [
+      { type: 'implementation', value: IMPLEMENT_DEFERRED },
+      { type: 'review', value: fail },
+      { type: 'implementation', value: IMPLEMENT_DEFERRED },
+    ],
+  })
+  const ticket = working(store)
+  await engine.plan(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  await engine.review(store.getTicket(ticket.id))
+  await engine.implement(store.getTicket(ticket.id))
+  assert.match(promptOf('implementer_prompt_implement'), /Release scope: this plan stops before the release/)
+})
+
+test('the review prompt says how to report a deferred condition', async () => {
+  const { promptOf } = await deferredRun()
+  const prompt = promptOf('reviewer_prompt_review')
+  assert.match(prompt, /`release-landed` — merged to main and tagged \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
+  assert.match(prompt, /if the only unmet conditions are deferred ones, the verdict is `pass`/)
+  assert.match(prompt, /one row per \*\*stored\*\* acceptance statement/)
+  assert.match(prompt, /submit an empty array when the ticket stored none/)
+})
+
+test('both plan prompts teach release scope and deferred conditions', async () => {
+  for (const planQuestions of ['interactive', 'autonomous']) {
+    const { store, engine, promptOf } = await setup()
+    const ticket = store.createTicket({
+      title: 'demo',
+      body: 'make the note',
+      acceptance: ['note exists'],
+      workspaceCwd: CWD,
+      planTiming: 'at_pickup',
+      planQuestions,
+      column: 'working',
+    })
+    await engine.plan(store.getTicket(ticket.id))
+    const prompt = promptOf('planner_prompt_plan')
+    assert.match(prompt, /## Release scope and deferred steps/, `${planQuestions} prompt must carry the new section`)
+    assert.match(prompt, /`stop_before_merge`/)
+    assert.match(prompt, /`full_release`/)
+    assert.match(prompt, /`deferred: true`/)
+    assert.match(prompt, /`human_evidence`/)
+    assert.match(prompt, /costs the build no attempt/)
+    // The KAN-19 rule is still there: the new section supplements it.
+    assert.match(prompt, /verifiable by an agent without human input/)
+    // And the KAN-30 sandbox section is untouched.
+    assert.match(prompt, /## Sandbox grants/)
+  }
+})
+

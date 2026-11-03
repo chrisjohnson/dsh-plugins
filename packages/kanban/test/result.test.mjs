@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  classifyGaps,
   continuationPrompt,
   extractJson,
   gateImplement,
@@ -12,6 +13,7 @@ import {
   validatePlan,
   validateReview,
   validateVerification,
+  verifyReview,
 } from '../src/result.mjs'
 
 const conditions = [
@@ -148,4 +150,165 @@ test('continuation carries only the gaps', () => {
   const text = continuationPrompt(['tests: met but evidence is not specific'], 'SCHEMA')
   assert.match(text, /tests: met but evidence/)
   assert.match(text, /SCHEMA/)
+})
+
+// ------------------------------------------------------------------- KAN-31
+//
+// One definition of done, read the same way by the plan, the build and the
+// review: a condition can be deferred to the human's approval step, and a review
+// whose only open conditions are deferred ones is a pass, not a round burned.
+
+const deferredConditions = [
+  { id: 'unit-tests', statement: 'the suites pass', howVerified: 'node --test' },
+  { id: 'release-landed', statement: 'merged to main and tagged', howVerified: 'git ls-remote', deferred: true, humanEvidence: 'git ls-remote origin refs/tags/v1 prints a sha' },
+]
+
+test('release_scope is optional, and only the two declared scopes', () => {
+  const base = { done_when: [{ id: 'a', statement: 's', how_verified: 'v' }] }
+  assert.deepEqual(validatePlan(base), [])
+  assert.deepEqual(validatePlan({ ...base, release_scope: 'stop_before_merge' }), [])
+  assert.deepEqual(validatePlan({ ...base, release_scope: 'full_release' }), [])
+  assert.ok(validatePlan({ ...base, release_scope: 'merge_it' }).some((e) => /release_scope/.test(e)))
+  assert.ok(validatePlan({ ...base, release_scope: null }).some((e) => /release_scope/.test(e)))
+})
+
+test('a deferred condition must say what the human is asked to check', () => {
+  const base = { done_when: [{ id: 'a', statement: 's', how_verified: 'v' }] }
+  assert.deepEqual(validatePlan({ done_when: [{ id: 'a', statement: 's', how_verified: 'v', deferred: true, human_evidence: 'git tag v1 is on main' }] }), [])
+  assert.ok(validatePlan({ done_when: [{ id: 'a', statement: 's', how_verified: 'v', deferred: true }] }).some((e) => /human_evidence is required/.test(e)))
+  assert.ok(validatePlan({ done_when: [{ id: 'a', statement: 's', how_verified: 'v', deferred: true, human_evidence: '  ' }] }).some((e) => /human_evidence is required/.test(e)))
+  assert.ok(validatePlan({ done_when: [{ id: 'a', statement: 's', how_verified: 'v', deferred: 'yes' }] }).some((e) => /deferred must be a boolean/.test(e)))
+  // An inert field on a non-deferred row is not a reason to lose the whole plan.
+  assert.deepEqual(validatePlan({ ...base, done_when: [{ id: 'a', statement: 's', how_verified: 'v', deferred: false, human_evidence: '' }] }), [])
+})
+
+test('normalizePlan carries the scope and the deferred marker, and leaves a plain plan alone', () => {
+  const plan = normalizePlan({
+    summary: 's',
+    release_scope: 'stop_before_merge',
+    done_when: [
+      { id: 'a', statement: 's', how_verified: 'v' },
+      { id: 'b', statement: 't', how_verified: 'w', deferred: true, human_evidence: 'the tag is on main' },
+    ],
+  })
+  assert.equal(plan.releaseScope, 'stop_before_merge')
+  assert.equal('deferred' in plan.conditions[0], false, 'a plain condition keeps its pre-0.17 shape')
+  assert.equal(plan.conditions[1].deferred, true)
+  assert.equal(plan.conditions[1].humanEvidence, 'the tag is on main')
+  const plain = normalizePlan({ summary: 's', done_when: [{ id: 'a', statement: 's', how_verified: 'v' }] })
+  assert.equal('releaseScope' in plain, false)
+})
+
+function reviewOf(rows, extra = {}) {
+  return { verdict: 'pass', reasons: ['ok'], done_when: rows, acceptance_coverage: [], ...extra }
+}
+
+test('a deferred condition reported unmet is collected, not a gap', () => {
+  const out = verifyReview(
+    reviewOf([
+      { id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test: 98 pass, 0 fail' },
+      { id: 'release-landed', met: false, confidence: 0.9, evidence: 'not merged — the human lands it at approval' },
+    ]),
+    deferredConditions,
+    [],
+    0.7,
+  )
+  assert.deepEqual(out.gaps, [])
+  assert.deepEqual(out.deferred, ['release-landed'])
+})
+
+test('a deferred condition still needs a row, and evidence to hand over', () => {
+  const missing = verifyReview(reviewOf([{ id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' }]), deferredConditions, [], 0.7)
+  assert.match(missing.gaps.join('; '), /done_when\.release-landed is missing from the review/)
+  assert.deepEqual(missing.deferred, [])
+  const noEvidence = verifyReview(
+    reviewOf([
+      { id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' },
+      { id: 'release-landed', met: false, confidence: 0.9, evidence: '   ' },
+    ]),
+    deferredConditions,
+    [],
+    0.7,
+  )
+  assert.match(noEvidence.gaps.join('; '), /release-landed is deferred and the review names no human evidence/)
+  // met:true on a deferred condition is accepted like anywhere else.
+  const met = verifyReview(
+    reviewOf([
+      { id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' },
+      { id: 'release-landed', met: true, confidence: 0.9, evidence: 'tag v1 is on main' },
+    ]),
+    deferredConditions,
+    [],
+    0.7,
+  )
+  assert.deepEqual(met.gaps, [])
+  assert.deepEqual(met.deferred, [])
+})
+
+test('an unmet condition that is not deferred is still a real gap', () => {
+  const out = verifyReview(
+    reviewOf([
+      { id: 'unit-tests', met: false, confidence: 0.9, evidence: 'two suites fail' },
+      { id: 'release-landed', met: false, confidence: 0.9, evidence: 'the human lands it' },
+    ]),
+    deferredConditions,
+    [],
+    0.7,
+  )
+  assert.match(out.gaps.join('; '), /done_when\.unit-tests is not met/)
+  assert.deepEqual(out.deferred, ['release-landed'])
+})
+
+test('coverage rows are judged against stored acceptance only', () => {
+  const acceptance = [{ statement: 'the suites pass' }]
+  const rows = [{ condition: 'unit-tests', acceptance: 'the suites pass' }]
+  const condition = [{ id: 'unit-tests', statement: 's', howVerified: 'v' }]
+  assert.deepEqual(verifyReview(reviewOf([{ id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' }], { acceptance_coverage: rows }), condition, acceptance, 0.7).gaps, [])
+  // A row quoting the ticket body is not a stored statement: ignored, not a gap.
+  const invented = verifyReview(
+    reviewOf([{ id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' }], {
+      acceptance_coverage: [...rows, { condition: 'unit-tests', acceptance: 'the panel looks nice' }],
+    }),
+    condition,
+    acceptance,
+    0.7,
+  )
+  assert.deepEqual(invented.gaps, [])
+  // A stored statement left uncovered is still a gap, and a real coverage row must
+  // still name a planned condition.
+  const uncovered = verifyReview(reviewOf([{ id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' }]), condition, [{ statement: 'and the docs say so' }], 0.7)
+  assert.match(uncovered.gaps.join('; '), /acceptance is not covered: and the docs say so/)
+  const badRef = verifyReview(
+    reviewOf([{ id: 'unit-tests', met: true, confidence: 0.9, evidence: 'node --test exits 0' }], { acceptance_coverage: [{ condition: 'nope', acceptance: 'the suites pass' }] }),
+    condition,
+    acceptance,
+    0.7,
+  )
+  assert.match(badRef.gaps.join('; '), /acceptance_coverage\.nope is not a planned condition/)
+})
+
+test('gaps split into what the build must fix and what the reviewer must fix', () => {
+  const { substantive, cosmetic } = classifyGaps([
+    'done_when.unit-tests is not met',
+    'done_when.unit-tests confidence is below 0.7',
+    'done_when.unit-tests has no evidence',
+    'done_when.release-landed is missing from the review',
+    'done_when.extra is not a planned condition',
+    'done_when.unit-tests is duplicated',
+    'done_when contains a row without an id',
+    'acceptance_coverage contains a malformed row',
+    'acceptance is not covered: the suites pass',
+    'done_when.release-landed is deferred and the review names no human evidence',
+  ])
+  assert.deepEqual(substantive, [
+    'done_when.unit-tests is not met',
+    'done_when.unit-tests confidence is below 0.7',
+    'done_when.unit-tests has no evidence',
+  ])
+  assert.equal(cosmetic.length, 7)
+  // An unrecognised shape is not a gap we blame the build for: it gets the
+  // retry-then-park path, which costs no attempt and still lands in front of a
+  // human with its exact text. Nothing is approved by being called cosmetic.
+  assert.deepEqual(classifyGaps(['something new']).substantive, [])
+  assert.deepEqual(classifyGaps(['something new']).cosmetic, ['something new'])
 })

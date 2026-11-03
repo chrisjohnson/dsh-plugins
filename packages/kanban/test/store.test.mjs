@@ -275,3 +275,23 @@ test('creating a ticket with the worktree intent stores no workspace', () => {
   const created = store.listEvents(ticket.id).find((event) => event.kind === 'created')
   assert.equal(created.payload.worktree, true)
 })
+
+// ------------------------------------------------------------------- KAN-31
+
+test('a deferred condition round-trips through the store', () => {
+  const { store } = setup()
+  const ticket = store.createTicket({ title: 't', acceptance: ['a'] })
+  store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'engine', reason: 'plan' })
+  store.replaceConditions(ticket.id, 1, [
+    { id: 'unit-tests', statement: 'the suites pass', howVerified: 'node --test' },
+    { id: 'release-landed', statement: 'merged and tagged', howVerified: 'git ls-remote', deferred: true, humanEvidence: 'the tag is on main' },
+  ], 'plan')
+  const stored = store.listConditions(ticket.id)
+  assert.equal(stored[0].deferred, false, 'a plain condition reads back as not deferred')
+  assert.equal(stored[0].humanEvidence, '')
+  assert.equal(stored[1].deferred, true)
+  assert.equal(stored[1].humanEvidence, 'the tag is on main')
+  // A new plan version replaces the set; the marker does not leak across versions.
+  store.replaceConditions(ticket.id, 2, [{ id: 'only', statement: 's', howVerified: 'v' }], 'plan')
+  assert.equal(store.listConditions(ticket.id)[0].deferred, false)
+})

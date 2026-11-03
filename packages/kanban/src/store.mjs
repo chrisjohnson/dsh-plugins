@@ -544,9 +544,20 @@ export class KanbanStore {
         ordinal += 1;
         this.db
           .prepare(
-            'INSERT INTO conditions (ticket_id, plan_version, ordinal, condition_id, statement, how_verified, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO conditions (ticket_id, plan_version, ordinal, condition_id, statement, how_verified, source, created_at, deferred, human_evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           )
-          .run(ticketId, planVersion, ordinal, String(condition.id), String(condition.statement), String(condition.howVerified), source, at);
+          .run(
+            ticketId,
+            planVersion,
+            ordinal,
+            String(condition.id),
+            String(condition.statement),
+            String(condition.howVerified),
+            source,
+            at,
+            condition.deferred === true ? 1 : 0,
+            condition.humanEvidence === undefined || condition.humanEvidence === null ? '' : String(condition.humanEvidence),
+          );
       }
       this.#event(ticketId, 'conditions_set', { payload: { planVersion, count: conditions.length, source } });
       return this.listConditions(ticketId, planVersion);
@@ -565,6 +576,10 @@ export class KanbanStore {
         source: row.source,
         ordinal: Number(row.ordinal),
         planVersion: Number(row.plan_version),
+        // KAN-31: the deferred marker rides with the condition everywhere the
+        // condition does — plan artifact, build prompt, review gate, approval.
+        deferred: Number(row.deferred) === 1,
+        humanEvidence: row.human_evidence,
       }));
   }
 

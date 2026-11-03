@@ -1649,7 +1649,7 @@ var CSS =
 						h("b", { children: "Questions" }), h("span", { children: t.planQuestions === "autonomous" ? "decide autonomously" : "ask me" }),
 						h("b", { children: "Preset" }), h("span", { children: t.preset || "harness default" }),
 						h("b", { children: "Write mode" }), h("span", { children: t.writeMode || "workspace write" }),
-						h("b", { children: "Attempts" }), h("span", { children: t.attemptCount + " / " + (props.maxAttempts || 3) }),
+						h("b", { children: "Attempts" }), h("span", { children: t.attemptCount + " / " + (d.maxAttempts || 3) }),
 						h("b", { children: "Spend" }), h("span", { children: fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)") }),
 						h("b", { children: "Allow paid" }), h("span", { children: t.allowPaid ? "yes" : "no" }),
 						h("b", { children: "Created" }), h("span", { children: fmtTime(t.createdAt) }),
@@ -1675,7 +1675,7 @@ var CSS =
 						h("table", { className: "kb-table" },
 							h("thead", null, h("tr", null, h("th", { children: "id" }), h("th", { children: "statement" }), h("th", { children: "how verified" }), h("th", { children: "source" }))),
 							h("tbody", null, d.conditions.map(function (c) {
-								return h("tr", { key: c.id }, h("td", null, h("code", { children: c.id })), h("td", { children: c.statement }), h("td", { children: c.howVerified }), h("td", { children: c.source }));
+								return h("tr", { key: c.id }, h("td", null, h("code", { children: c.id })), h("td", null, c.statement, c.deferred ? h("span", { className: "kb-hint", children: " (deferred to approval)" }) : null), h("td", { children: c.howVerified }), h("td", { children: c.source }));
 							})))
 				),
 				// KAN-30: what the plan asked to be allowed outside the sandbox,
