@@ -380,6 +380,32 @@ export function classifyGaps(gaps) {
 }
 
 /**
+ * KAN-31 review: has a `fail` verdict positively proved the build's own work?
+ *
+ * A fail may be read as a pass-equivalent only when every non-deferred condition
+ * carries a row with `met: true`. A missing row proves nothing — the tool lets a
+ * fail omit rows it already bounced, so absence is bookkeeping, not evidence —
+ * and an unmet row is a real gap. Without this check a fail that listed only the
+ * deferred row could reach approval having never checked the code.
+ *
+ * @returns {{ok: boolean, unproven: string[]}}
+ */
+export function nonDeferredProven(value, conditions) {
+  const rows = Array.isArray(value?.done_when) ? value.done_when : [];
+  const byId = new Map();
+  for (const row of rows) {
+    if (row !== null && typeof row === 'object' && typeof row.id === 'string') byId.set(row.id, row);
+  }
+  const unproven = [];
+  for (const condition of Array.isArray(conditions) ? conditions : []) {
+    if (condition.deferred === true) continue;
+    const row = byId.get(condition.id);
+    if (row === undefined || row.met !== true) unproven.push(condition.id);
+  }
+  return { ok: unproven.length === 0, unproven };
+}
+
+/**
  * Check that a passing review actually covers the plan and acceptance with
  * the same condition ids the plan produced.
  *

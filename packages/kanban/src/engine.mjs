@@ -14,7 +14,7 @@ import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
-import { normalizePlan, validatePlan, verifyReview, classifyGaps } from './result.mjs';
+import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 
@@ -626,7 +626,26 @@ export class Engine {
     for (const row of Array.isArray(value.done_when) ? value.done_when : []) {
       if (row !== null && typeof row === 'object' && row.met !== true && row.id !== undefined) failing.add(String(row.id));
     }
-    if (substantive.length === 0 && deferred.length > 0) return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+    // A fail that leaves only deferred conditions open is describing a pass — but
+    // only if it actually proved the build's own conditions. `met: true` for every
+    // non-deferred id is that proof. A missing row is not: the tool lets a fail
+    // omit rows it already bounced, so absence is bookkeeping, never evidence.
+    // Such a review goes back to the reviewer (one retry, then a park) rather than
+    // approving a ticket nobody checked or burning a build round on the reviewer's
+    // own omission.
+    if (substantive.length === 0 && deferred.length > 0) {
+      const proven = nonDeferredProven(value, conditions);
+      if (proven.ok) return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+      const unproven = proven.unproven.map((id) => `done_when.${id} is not proven met by the review`);
+      return {
+        route: 'cosmetic',
+        gaps: [...gaps, ...unproven],
+        substantive,
+        cosmetic: [...cosmetic, ...unproven],
+        deferred,
+        failingIds: [],
+      };
+    }
     return { route: 'implement', gaps, substantive, cosmetic, deferred, failingIds: [...failing] };
   }
 

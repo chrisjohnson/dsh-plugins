@@ -625,3 +625,16 @@ test('the board marks a deferred condition', async () => {
   const client = files['client.mjs']
   assert.match(client, /c\.deferred \? h\("span", \{ className: "kb-hint", children: " \(deferred to approval\)" \}\)/)
 })
+
+test('a fail is read as a pass-equivalent only when it proves every non-deferred condition', async () => {
+  const files = await sources()
+  assert.match(files['result.mjs'], /export function nonDeferredProven\(value, conditions\)/)
+  assert.match(files['result.mjs'], /if \(row === undefined \|\| row\.met !== true\) unproven\.push\(condition\.id\)/)
+  const engine = files['engine.mjs']
+  const decision = engine.slice(engine.indexOf('reviewDecision(value'))
+  // The approval route on the fail branch is gated on the proof, not on the
+  // absence of substantive gaps alone.
+  assert.match(decision, /const proven = nonDeferredProven\(value, conditions\);/)
+  assert.match(decision, /if \(proven\.ok\) return \{ route: 'approval'/)
+  assert.match(decision, /is not proven met by the review/)
+})

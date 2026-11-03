@@ -1153,6 +1153,55 @@ test('a fail whose only unmet conditions are deferred is routed like a pass', as
   assert.deepEqual(requested.payload.deferred, ['release-landed'])
 })
 
+test('a fail that never proves the build condition is retried, not approved', async () => {
+  // KAN-31 review finding: `substantive.length === 0` was not the same as "every
+  // non-deferred condition met". A fail listing only the deferred row proves
+  // nothing about `notes`, so it must not reach approval.
+  const unprovenFail = {
+    verdict: 'fail',
+    reasons: ['the release is not landed'],
+    instruction: 'nothing for the build to do',
+    done_when: [{ id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it at approval' }],
+    acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
+  }
+  const { store, engine, driver } = setup(deferredQueues({
+    review: [{ type: 'review', value: unprovenFail }, { type: 'review', value: REVIEW_DEFERRED }],
+  }))
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  // The retry fixed the submission, and only then did the ticket reach approval.
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 1, 'the reviewer omission cost the build nothing')
+  const retry = store.latestArtifact(ticket.id, 'reviewer_prompt_review-retry').content
+  assert.match(retry, /done_when\.notes is missing from the review/)
+  assert.match(retry, /done_when\.notes is not proven met by the review/)
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  assert.equal(driver.turns.filter((id) => id === buildId).length, 4, 'implement, review, review-retry, approval')
+})
+
+test('a fail that keeps omitting the build condition parks instead of approving', async () => {
+  const unprovenFail = {
+    verdict: 'fail',
+    reasons: ['the release is not landed'],
+    instruction: 'nothing for the build to do',
+    done_when: [{ id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it at approval' }],
+    acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
+  }
+  const { store, engine, driver } = setup(deferredQueues({
+    review: [{ type: 'review', value: unprovenFail }, { type: 'review', value: unprovenFail }],
+  }))
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'review', 'never approved, and never sent back to the build')
+  assert.notEqual(parked.needsAttentionReason, 'Awaiting human approval')
+  assert.match(parked.needsAttentionReason, /not proven met by the review/)
+  assert.equal(parked.attemptCount, 1)
+  assert.equal(store.listSpans(ticket.id).filter((span) => span.name === 'implement').length, 1)
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  assert.equal(driver.turns.filter((id) => id === buildId).length, 3, 'implement, review, one retry — then the park')
+})
+
 test('a cosmetic gap gets exactly one retry turn, in the review session, quoting the gap', async () => {
   const { store, engine, driver } = setup({
     review: [

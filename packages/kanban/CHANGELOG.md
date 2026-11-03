@@ -7,6 +7,18 @@
 
 ### Fixed
 
+- **A `fail` could reach approval without the build's own conditions being
+  checked** (KAN-31 review). The 0.17.0 rule read a fail as a pass-equivalent
+  whenever it left no substantive gaps and had a deferred condition open — but a
+  *missing* row is classified cosmetic, not substantive, so a fail that listed
+  only the deferred row and never mentioned the build's condition was routed
+  straight to the approval park. A fail is now read as a pass-equivalent only
+  when every non-deferred condition carries a `met: true` row (`nonDeferredProven`
+  in `src/result.mjs`); a fail that omits one goes to the reviewer's retry budget
+  like any other bookkeeping failure — one retry, then a park — and never to
+  approval, and never back to the build for the reviewer's omission. Tests cover
+  the retry-then-approve and the retry-then-park paths, and both fail without the
+  fix.
 - **A rework round that committed its work was at risk of being called
   no-progress** (KAN-31 review). The fingerprint read `git diff HEAD`, which is
   relative to HEAD, so a round that finished by committing left a clean tree that
