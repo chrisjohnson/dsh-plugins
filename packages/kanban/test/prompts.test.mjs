@@ -126,7 +126,7 @@ function working(store) {
   return store.getTicket(ticket.id)
 }
 
-test('the review prompt carries the plan ids and the tool contract, not the dumps', async () => {
+test('the review prompt carries the plan ids, the tool contract and the readable restatement', async () => {
   const { store, engine, promptOf } = await setup()
   const ticket = working(store)
   await engine.plan(store.getTicket(ticket.id))
@@ -145,10 +145,11 @@ test('the review prompt carries the plan ids and the tool contract, not the dump
   }
   assert.match(prompt, /adversarial/i)
   assert.match(prompt, /same id/)
-  // The dumps are gone: the session already holds all of it.
-  for (const gone of ['## Plan', '## Diff', '## Implementation result', '## Acceptance', 'how_verified:']) {
-    assert.equal(prompt.includes(gone), false, `review prompt still contains ${gone}`)
+  // The plan, the human's words and the implementer's result are restated as markdown.
+  for (const present of ['## Plan', "## The implementer's result", '## The ticket, as the human wrote it', 'how verified: test -f notes.txt']) {
+    assert.ok(prompt.includes(present), `review prompt lacks ${present}`)
   }
+  assert.equal(prompt.includes('how_verified:'), false)
 })
 
 test('the approval prompt is the one-line hand-over', async () => {
@@ -169,7 +170,7 @@ test('the approval prompt is the one-line hand-over', async () => {
   assert.equal(prompt.includes('{'), false, 'the approval prompt still carries structured data')
 })
 
-test('the rework prompt is one job statement plus a short reminder at most', async () => {
+test('the rework prompt restates the review, the ticket and the plan', async () => {
   const { store, engine, promptOf } = await setup({ 'session-2': [{ type: 'implementation', value: IMPLEMENTATION }, { type: 'review', value: REVIEW_FAIL }] })
   const ticket = working(store)
   await engine.plan(store.getTicket(ticket.id))
@@ -181,12 +182,12 @@ test('the rework prompt is one job statement plus a short reminder at most', asy
   assert.match(prompt, /Review requested changes to kanban ticket/)
   assert.match(prompt, /create notes\.txt and write hello into it/)
   assert.match(prompt, /kanban_submit_implementation/)
-  for (const gone of ['## Plan', '## done_when', '## Acceptance', '## Review']) {
-    assert.equal(prompt.includes(gone), false, `rework prompt still contains ${gone}`)
+  for (const present of ['## Plan', '## done_when', '## The review that sent this back', '## Submission contract']) {
+    assert.ok(prompt.includes(present), `rework prompt lacks ${present}`)
   }
 })
 
-test('a long review instruction is not repeated into the rework prompt', async () => {
+test('a long review instruction is rendered in full into the rework prompt', async () => {
   const long = { ...REVIEW_FAIL, instruction: `fix everything: ${'x'.repeat(400)}` }
   const { store, engine, promptOf } = await setup({ 'session-2': [{ type: 'implementation', value: IMPLEMENTATION }, { type: 'review', value: long }] })
   const ticket = working(store)
@@ -195,11 +196,10 @@ test('a long review instruction is not repeated into the rework prompt', async (
   await engine.review(store.getTicket(ticket.id))
   await engine.implement(store.getTicket(ticket.id))
   const prompt = promptOf('implementer_prompt_implement')
-  assert.equal(prompt.includes('fix everything'), false, 'the long instruction should stay in the transcript only')
-  assert.match(prompt, /reviewer.s verdict and feedback are in this conversation above/)
+  assert.ok(prompt.includes(`fix everything: ${'x'.repeat(400)}`), 'the instruction is rendered verbatim')
 })
 
-test('the implement prompt is unchanged: the full plan and conditions', async () => {
+test('the implement prompt restates the full plan and conditions', async () => {
   const { store, engine, promptOf } = await setup()
   const ticket = working(store)
   await engine.plan(store.getTicket(ticket.id))
@@ -208,7 +208,7 @@ test('the implement prompt is unchanged: the full plan and conditions', async ()
   assert.match(prompt, /Implement the plan for kanban ticket/)
   assert.match(prompt, /## Plan/)
   assert.match(prompt, /## done_when/)
-  assert.match(prompt, /verify: test -f notes\.txt/)
+  assert.match(prompt, /how verified: test -f notes\.txt/)
 })
 
 test('both plan prompts coach that done_when conditions are agent-verifiable, never human', async () => {
@@ -394,7 +394,7 @@ test('the approval prompt lists the deferred conditions and what the human check
 test('the implement prompt carries the release scope and marks the deferred condition', async () => {
   const { promptOf } = await deferredRun()
   assert.match(promptOf('implementer_prompt_implement'), /Release scope: this plan stops before the release/)
-  assert.match(promptOf('implementer_prompt_implement'), /- release-landed: merged to main and tagged\n  verify: git ls-remote origin refs\/tags\/v1 prints a sha \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
+  assert.match(promptOf('implementer_prompt_implement'), /- `release-landed` — merged to main and tagged\n  - how verified: git ls-remote origin refs\/tags\/v1 prints a sha \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
   assert.match(promptOf('implementer_prompt_implement'), /The review is gated on exactly these condition ids/)
 })
 
@@ -429,7 +429,7 @@ test('the rework prompt carries the release scope too', async () => {
 test('the review prompt says how to report a deferred condition', async () => {
   const { promptOf } = await deferredRun()
   const prompt = promptOf('reviewer_prompt_review')
-  assert.match(prompt, /`release-landed` — merged to main and tagged \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
+  assert.match(prompt, /`release-landed` — merged to main and tagged\n  - how verified: git ls-remote origin refs\/tags\/v1 prints a sha \(deferred to approval — human evidence: git ls-remote origin refs\/tags\/v1 prints a sha\)/)
   assert.match(prompt, /if the only unmet conditions are deferred ones, the verdict is `pass`/)
   assert.match(prompt, /one row per \*\*stored\*\* acceptance statement/)
   assert.match(prompt, /submit an empty array when the ticket stored none/)
@@ -462,3 +462,151 @@ test('both plan prompts teach release scope and deferred conditions', async () =
   }
 })
 
+
+// ------------------------------------------------- readable prompts, no JSON
+//
+// The build, rework and review prompts render the stored plan, the implementer's
+// result and the review verdict as markdown, and carry the human's own words.
+
+const IMG = `sha256:${'a'.repeat(64)}`
+const RICH_PLAN = {
+  summary: 'ship the guard',
+  steps: ['write the matcher', 'wire the listener'],
+  release_scope: 'stop_before_merge',
+  sandbox: {
+    grants: { paths: ['/srv/lab/kan9-grant'], commands: ['gh pr create'] },
+    checks: [{ path: '/srv/lab/kan9-grant', check: 'test -w', observed: 'writable' }],
+  },
+  done_when: [
+    { id: 'matcher-tested', statement: 'the matcher has tests', how_verified: 'npm test exits 0' },
+    {
+      id: 'tag-cut',
+      statement: 'the release tag exists',
+      how_verified: 'git ls-remote origin refs/tags/v9',
+      deferred: true,
+      human_evidence: 'ls-remote prints a sha',
+    },
+  ],
+}
+const RICH_IMPLEMENTATION = {
+  status: 'complete',
+  summary: 'matcher written',
+  changed_files: ['src/guard.mjs'],
+  done_when: [
+    { id: 'matcher-tested', met: true, confidence: 0.9, evidence: 'npm test exits 0, test/guard.test.mjs:12' },
+    { id: 'tag-cut', met: false, confidence: 0.9, evidence: 'deferred to approval' },
+  ],
+  residual_risks: ['text rule only'],
+}
+const RICH_REVIEW_FAIL = {
+  verdict: 'fail',
+  reasons: ['the matcher misses a case'],
+  instruction: 'handle the subshell form',
+  scope_drift: 'none',
+  done_when: [{ id: 'matcher-tested', met: false, confidence: 0.8, evidence: 'src/guard.mjs:40 skips $(...)' }],
+  acceptance_coverage: [],
+}
+const BODY_TEXT = 'Please make the guard.\n\n- it must say **why** it denied\n- keep `kan9-plugins` naming'
+
+async function richRun() {
+  const { store, engine, promptOf } = await setup({
+    'session-1': [{ type: 'plan', value: RICH_PLAN }],
+    'session-2': [
+      { type: 'implementation', value: RICH_IMPLEMENTATION },
+      { type: 'review', value: RICH_REVIEW_FAIL },
+      { type: 'implementation', value: RICH_IMPLEMENTATION },
+    ],
+  })
+  engine.ctx = { get: () => undefined, attachments: { imageHostPath: () => '/store/shot.png' } }
+  const created = store.createTicket({
+    title: 'Guard "checkouts" & more',
+    body: `${BODY_TEXT}\n\n![shot](kanban-image:${IMG})`,
+    acceptance: ['a denied ask names the owner', 'closed tickets stay readable'],
+    workspaceCwd: CWD,
+    planTiming: 'at_pickup',
+    planQuestions: 'interactive',
+    column: 'working',
+  })
+  const id = created.id
+  const prompts = {}
+  await engine.plan(store.getTicket(id))
+  await engine.approvePlan(id)
+  await engine.implement(store.getTicket(id))
+  prompts.implement = promptOf('implementer_prompt_implement')
+  await engine.review(store.getTicket(id))
+  prompts.review = promptOf('reviewer_prompt_review')
+  await engine.implement(store.getTicket(id))
+  prompts.rework = promptOf('implementer_prompt_implement')
+  return prompts
+}
+
+function assertNoStoredJson(name, prompt) {
+  assert.equal(prompt.includes('{{'), false, `${name} has an unresolved placeholder`)
+  for (const raw of ['"done_when"', '"conditions"', '"howVerified"', '"how_verified"', '"verdict"', '"reasons"', '"changed_files"', '"releaseScope"', '"steps"', '"sandbox"']) {
+    assert.equal(prompt.includes(raw), false, `${name} embeds raw JSON key ${raw}`)
+  }
+  assert.equal(/^\s*[{[]\s*$/m.test(prompt), false, `${name} has a bare JSON brace line`)
+  assert.equal(/\{\s*\n\s*"/.test(prompt), false, `${name} embeds a pretty-printed JSON object`)
+}
+
+test('build, rework and review prompts carry the human input verbatim and no stored JSON', async () => {
+  const { implement, review, rework } = await richRun()
+  for (const [name, prompt] of Object.entries({ implement, review, rework })) {
+    assertNoStoredJson(name, prompt)
+    assert.ok(prompt.includes('Title: Guard "checkouts" & more'), `${name}: title verbatim`)
+    assert.ok(prompt.includes(BODY_TEXT), `${name}: body verbatim`)
+    assert.ok(prompt.includes('- a denied ask names the owner'), `${name}: acceptance verbatim`)
+    assert.ok(prompt.includes('- closed tickets stay readable'), `${name}: acceptance verbatim`)
+    assert.ok(prompt.includes('- shot: /store/shot.png'), `${name}: image path`)
+  }
+})
+
+test('the build prompt renders the plan, conditions, grants, scope and the submission contract', async () => {
+  const { implement } = await richRun()
+  assert.match(implement, /ship the guard/)
+  assert.match(implement, /1\. write the matcher\n2\. wire the listener/)
+  assert.match(implement, /### Release scope/)
+  assert.match(implement, /### Sandbox grants/)
+  assert.match(implement, /- \/srv\/lab\/kan9-grant/)
+  assert.match(implement, /- gh pr create/)
+  assert.match(implement, /`\/srv\/lab\/kan9-grant` — checked: test -w; observed: writable/)
+  assert.match(implement, /- `matcher-tested` — the matcher has tests\n  - how verified: npm test exits 0\n  - source: plan/)
+  assert.match(implement, /\(deferred to approval — human evidence: ls-remote prints a sha\)/)
+  assert.match(implement, /## Submission contract/)
+  assert.match(implement, /`status` is exactly `complete`, `partial` or `blocked`/)
+  assert.match(implement, /exactly the plan's condition ids: `matcher-tested`, `tag-cut`/)
+  assert.match(implement, /at least 0\.7/)
+  assert.equal(implement.includes('differ from where the previous round started'), false, 'first round has no no-progress clause')
+})
+
+test('the rework prompt renders the review as markdown and adds the no-progress clause', async () => {
+  const { rework } = await richRun()
+  assert.match(rework, /Verdict: fail/)
+  assert.match(rework, /Reasons:\n- the matcher misses a case/)
+  assert.match(rework, /Instruction for the next round:\n\nhandle the subshell form/)
+  assert.match(rework, /- `matcher-tested` — NOT met \(confidence 0\.8\): src\/guard\.mjs:40 skips \$\(\.\.\.\)/)
+  assert.match(rework, /differ from where the previous round started/)
+})
+
+test('the review prompt restates the implementer result as markdown', async () => {
+  const { review } = await richRun()
+  assert.match(review, /## The implementer's result/)
+  assert.match(review, /Status: complete/)
+  assert.match(review, /Changed files:\n- src\/guard\.mjs/)
+  assert.match(review, /- `matcher-tested` — met \(confidence 0\.9\): npm test exits 0, test\/guard\.test\.mjs:12/)
+  assert.match(review, /Residual risks:\n- text rule only/)
+})
+
+test('the build and rework prompts forbid handoff documents', async () => {
+  const { implement, rework } = await richRun()
+  for (const prompt of [implement, rework]) {
+    assert.match(prompt, /Do not create handoff, runbook, deploy-notes, smoke-results or summary documents anywhere in the repository\./)
+    assert.match(prompt, /Report what shipped and what the human still needs to do in your final message, and keep run evidence under the ignored lab directory\./)
+  }
+})
+
+test('the build prompt names the ticket-scoped clone convention', async () => {
+  const { implement } = await richRun()
+  assert.match(implement, /`kan1-plugins` and `kan1-deploy`/)
+  assert.match(implement, /never write to the live production checkout/)
+})

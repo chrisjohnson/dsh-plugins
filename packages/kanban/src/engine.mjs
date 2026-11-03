@@ -14,6 +14,8 @@ import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
+import { cloneNames } from './guard.mjs';
+import { conditionsMarkdown, implementResultMarkdown, planMarkdown, reviewMarkdown, submissionContract } from './render.mjs';
 import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
@@ -93,10 +95,6 @@ function acceptanceBlock(acceptance) {
   return acceptance.length === 0 ? '(none)' : acceptance.map((a) => `- ${a.statement}`).join('\n');
 }
 
-function doneWhenBlock(conditions) {
-  return conditions.map((c) => `${conditionHead(c)}\n  verify: ${c.howVerified}${deferredNote(c)}`).join('\n');
-}
-
 /**
  * KAN-31: the deferred marker, in the one wording the build, the review and the
  * approval prompt all use. A deferred condition is planned work the agent must
@@ -109,10 +107,6 @@ function deferredNote(condition) {
     ? condition.humanEvidence.trim()
     : condition.howVerified;
   return ` (deferred to approval — human evidence: ${evidence})`;
-}
-
-function conditionHead(c) {
-  return `- ${c.id}: ${c.statement}`;
 }
 
 /**
@@ -146,17 +140,6 @@ function questionNote(ticket, submitTool) {
     'Asking is therefore safe: it does not stall the ticket. Ask whenever a real choice exists, put the option you recommend first, ' +
     `and name every choice taken this way in your \`${submitTool}\` report. A question with no options is still a question for a human, and it will wait for one.`
   );
-}
-
-/**
- * The compact condition list the review prompt carries: id plus statement, no
- * how_verified. The reviewer's own session already holds the plan and the diff,
- * so the ids are all it needs to answer against — and the one thing it must not
- * invent is an id.
- */
-function conditionListBlock(conditions) {
-  if (!Array.isArray(conditions) || conditions.length === 0) return '(the plan declared no conditions)';
-  return conditions.map((c) => `- \`${c.id}\` — ${c.statement}${deferredNote(c)}`).join('\n');
 }
 
 /**
@@ -220,19 +203,13 @@ function gapConditionIds(gaps) {
 }
 
 /**
- * The one rework line: the reviewer's instruction, but only when it is short
- * enough to be a reminder. A long instruction is already in the session's own
- * transcript as the review tool call, so repeating it buys tokens and nothing
- * else.
+ * The sentence naming the clones this ticket's build may cut, so the cross-ticket
+ * guard and the prompt agree on one convention. Empty when the key carries no number.
  */
-function reworkLine(review) {
-  if (review === null || review === undefined) return '';
-  const text = typeof review.instruction === 'string' && review.instruction.trim() !== ''
-    ? review.instruction.trim()
-    : (Array.isArray(review.reasons) ? review.reasons.join('; ').trim() : '');
-  if (text === '') return '';
-  if (text.length > 240) return '';
-  return `The reviewer's instruction: ${text}`;
+function cloneNamesLine(ticket) {
+  const names = cloneNames(ticket.key);
+  if (names === null) return '';
+  return `Clone naming: if the work needs its own checkout of the plugins or deploy repository, create it under the worktrees directory as \`${names.plugins}\` and \`${names.deploy}\`. Never read or write another open ticket's workspace, worktree or clone (any path segment named \`kan<number>\` or \`kan<number>-<name>\` for another ticket), and never write to the live production checkout.`;
 }
 
 export class Engine {
@@ -593,11 +570,13 @@ export class Engine {
       key: ticket.key,
       title: ticket.title,
       cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
+      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
       acceptance: acceptanceBlock(acceptance),
-      plan: planArtifact === undefined ? '(no plan)' : planArtifact.content,
-      done_when: doneWhenBlock(conditions),
-      review: rework === null ? '' : JSON.stringify(rework, null, 2),
-      review_line: reworkLine(rework),
+      plan: planMarkdown(planValue),
+      done_when: conditionsMarkdown(conditions, { note: deferredNote }),
+      review: rework === null ? '' : reviewMarkdown(rework),
+      submission_contract: submissionContract({ conditions, threshold: this.thresholdFor(ticket), rework: rework !== null }),
+      clone_names: cloneNamesLine(ticket),
       release_scope: releaseScopeLine(planValue),
       question_note: questionNote(ticket, 'kanban_submit_implementation'),
     });
@@ -724,12 +703,19 @@ export class Engine {
     // The diff is still captured as an artifact, because the board's timeline is
     // where a human looks to see what a round actually changed.
     await this.diff(ticket);
+    const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
+    const planValue = planArtifact === undefined ? null : safeJson(planArtifact.content);
+    const implementedArtifact = this.store.latestArtifact(ticket.id, 'implement_result');
+    const implemented = implementedArtifact === undefined ? null : safeJson(implementedArtifact.content);
     const prompt = render(prompts.bodies.review, {
       key: ticket.key,
       title: ticket.title,
       cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
+      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
       acceptance: acceptanceBlock(acceptance),
-      done_when: conditionListBlock(conditions),
+      plan: planMarkdown(planValue),
+      implementation: implementResultMarkdown(implemented),
+      done_when: conditionsMarkdown(conditions, { note: deferredNote }),
       question_note: questionNote(ticket, 'kanban_submit_review'),
     });
     const runId = this.ensureRun(ticket);

@@ -240,6 +240,55 @@ actually observed rather than an assumption (the KAN-17 `~/dsh-lab` and
 KAN-29 `/tmp` classes of surprise). Platform temp areas are already writable
 under `workspace-write` and need no grant.
 
+## Readable prompts (0.19.0)
+
+The build, rework and review prompts carry no stored JSON. The plan, the
+implementer's result and the review verdict are kept as JSON because the tool-call
+protocol is JSON; the prompts render them back as markdown. A build or rework
+prompt holds, in order: the ticket as the human wrote it (title, body, acceptance
+statements, attached image paths), the plan (summary, steps, release scope,
+sandbox grants and the planner's checks), every `done_when` condition (id,
+statement, how it is verified, source, and the deferred marker), and a
+**Submission contract** that lists exactly what the engine checks before it
+accepts `kanban_submit_implementation` (status vocabulary, field types, one
+`done_when` row per plan id and no invented ids) plus what the review holds each
+claim to (specific evidence, the confidence threshold, deferred conditions
+reported unmet). A rework prompt adds the review that sent the round back, and
+the no-progress rule. The review prompt carries the same ticket and plan plus the
+implementer's result. Build and rework prompts also tell the agent not to create
+handoff, runbook, deploy-notes, smoke-results or summary documents, and to keep run
+evidence under the ignored lab directory. Tool-call argument schemas are unchanged.
+
+## Checkout isolation (0.19.0)
+
+A build session is denied, rather than prompted, when a sandbox escalation reaches
+into somebody else's checkout. The ask resolves `rejected`, a `guard_denied` event
+on the ticket records the tool, the path and the reason (naming the owning
+ticket), and the grant approver and the human are never consulted. Because the
+approval service only carries an outcome, the agent sees an ordinary rejection;
+the explanation is in the event, the log, and the prompt's standing instruction.
+
+| Rule | Denied | Allowed |
+|---|---|---|
+| Another open ticket's checkout | An escalated `write`, `edit` or `bash` whose path is inside another Backlog/Working ticket's workspace, or has a path segment `kan<number>` or `kan<number>-<name>` for another existing open ticket | The session's own workspace and its own clones; any path of a done or discarded ticket |
+| The live checkout | Any escalated write there, and any `bash` segment that runs with the live checkout as its directory or names it, unless it is read-only | Read-only commands (`cat`, `ls`, `git status`/`log`/`diff`, `find` without `-delete`/`-exec`, ...), and the approval-phase pre-stage |
+
+Naming convention: a ticket's clones are `kan<number>-plugins` and
+`kan<number>-deploy` under the worktrees directory (ticket 12 uses `kan12-plugins`);
+build prompts say so. The pre-stage is exactly `git pull --ff-only`, `pnpm install`
+and `pnpm run check`, from the live checkout root (or, for the installs and check,
+its `.dsh/profiles/web`), from a ticket in the approval phase; anything else there,
+including the same commands from any other phase, is denied.
+
+The live checkout is configuration, never a built-in path: set `liveCheckouts` (a
+list of absolute paths) on the `kanban` row and/or `DSH_KANBAN_LIVE_CHECKOUTS`
+(colon-separated). With neither set the live rule is off and only cross-ticket
+isolation applies. The matcher (`src/guard.mjs`) is a text rule like the grant
+denylist, not a sandbox: it cannot see inside an interpreter, a script the build
+wrote, or a relative path run from a directory it never named. It can only remove
+an approval or a prompt, never add one, and any malformed input or exception falls
+through to the next approver.
+
 ## Release scope and deferred conditions (0.17.0)
 
 A ticket's definition of done is written once, in the plan, and read the same way
@@ -324,6 +373,7 @@ Everything below lives on the `kanban` row.
 |---|---|
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
+| `liveCheckouts[]` | absolute paths of live deployment checkouts that build sessions may not modify (see Checkout isolation); `DSH_KANBAN_LIVE_CHECKOUTS` adds to it. Default none. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
 | `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
 | `confidenceThreshold` | default `0.70`. |

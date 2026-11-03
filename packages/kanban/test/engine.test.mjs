@@ -1138,7 +1138,7 @@ test('a review prompt marks the deferred condition for the reviewer', async () =
   const ticket = pickedUp(store)
   await engine.advance(store.getTicket(ticket.id))
   const prompt = store.latestArtifact(ticket.id, 'reviewer_prompt_review').content
-  assert.match(prompt, /`release-landed` — merged to main and tagged \(deferred to approval/)
+  assert.match(prompt, /`release-landed` — merged to main and tagged[\s\S]*\(deferred to approval/)
 })
 
 test('a fail whose only unmet conditions are deferred is routed like a pass', async () => {

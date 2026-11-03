@@ -2,7 +2,7 @@ Review the implementation of kanban ticket {{key}}: "{{title}}".
 
 Working directory: {{cwd}}
 
-The plan, the acceptance statements, the implementer's result and the diff are already in this conversation. If they are not — a session reopened after a restart starts empty — call `kanban_plan` for the plan and its conditions and read the working tree with git before judging anything. Do not edit files. Review adversarially: assume the work is broken until you have proved otherwise, and check every `done_when` condition against the code, not against what the implementer claimed.
+The ticket, the plan and the implementer's result are restated below; read the working tree and the diff with git before judging anything. Do not edit files. Review adversarially: assume the work is broken until you have proved otherwise, and check every `done_when` condition against the code, not against what the implementer claimed.
 
 Then call `kanban_submit_review` with exactly these keys:
 
@@ -16,6 +16,18 @@ Then call `kanban_submit_review` with exactly these keys:
 A complete pass is approved by code and moves the ticket straight to human approval; there is no separate verification session. Deferred conditions travel with it and are listed in the approval hand-over, so passing on them costs the build nothing.
 
 {{question_note}}
+
+## The ticket, as the human wrote it
+
+{{ticket_state}}
+
+## Plan
+
+{{plan}}
+
+## The implementer's result
+
+{{implementation}}
 
 ## The plan's conditions
 
