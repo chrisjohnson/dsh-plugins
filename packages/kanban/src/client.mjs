@@ -402,7 +402,22 @@ var CSS =
 		+ ".kb-md pre code{background:none;padding:0}"
 		+ ".kb-md img{max-width:100%;max-height:360px;border-radius:var(--dsw-radius-sm,8px);border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);display:block;margin:4px 0}"
 		+ ".kb-img-broken{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);background:var(--dsw-alias-bg-layer-2,#eee);color:var(--dsw-alias-label-tertiary,#888);font:500 11px/16px var(--dsw-font-family,sans-serif)}"
-		+ "";
+		// KAN-58: the mobile column reveal bar is a phone-only control; hidden on
+		// desktop, where all three columns already fit side by side.
+		+ ".kb-mobcolbar{display:none}"
+		// KAN-58: on a narrow screen the three-column board (min-width:780px) only
+		// shows ~1.4 columns and scrolls sideways. Collapse to one full-width track,
+		// show Working by default, and tuck Backlog and Done behind the reveal buttons
+		// above the board. Appended last so it wins the cascade over both the dark
+		// base and the light override of .kb-cols.
+		+ "@media (max-width:768px){"
+		+ ".kb-pagehead{padding:16px 12px 0}.kb-title{font-size:17px;line-height:24px}.kb-sub{font-size:11px}.kb-actions{gap:6px}.kb-btn{height:32px;padding:0 10px;font-size:13px}.kb-body{padding:10px 12px 24px}"
+		+ ".kb-cols{grid-template-columns:1fr;min-width:0;gap:10px}.kb-col{max-height:none}"
+		+ ".kb-col-pinned{position:static;height:auto}.kb-col-pinned .kb-list{flex:none;max-height:300px;overflow-y:auto}"
+		+ ".kb-created{display:none}"
+		+ ".kb-mobcolbar{display:flex;gap:8px;margin:0 0 10px}.kb-col-toggle{flex:1 1 0}.kb-col-toggle.on{border-color:var(--dsw-alias-border-l3,#cbd2da);background:var(--dsw-alias-bg-layer-2,#eee)}"
+		+ ".kb-col-backlog,.kb-col-done{display:none}.kb-cols.show-backlog .kb-col-backlog,.kb-cols.show-done .kb-col-done{display:flex}"
+		+ "}";
 
 		function ensureStyles() {
 			var id = "kanban-styles";
@@ -1113,7 +1128,7 @@ var CSS =
 			return h(
 				"div",
 				{
-					className: "kb-col" + (props.column === "done" ? " kb-col-pinned" : "") + (target !== null ? " drop-target" : ""),
+					className: "kb-col kb-col-" + props.column + (props.column === "done" ? " kb-col-pinned" : "") + (target !== null ? " drop-target" : ""),
 					onDragOver: function (ev) {
 						if (!droppable || !dragging) return;
 						ev.preventDefault();
@@ -2707,6 +2722,18 @@ var CSS =
 			var dragId = dr[0], setDragId = dr[1];
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
+			// KAN-58: on a phone the board shows Working and hides Backlog and Done
+			// behind the reveal buttons above it. These flags say which of the two are
+			// currently shown; the CSS only acts on them inside the mobile media query.
+			var mshow = React.useState({ backlog: false, done: false });
+			var mobileShow = mshow[0], setMobileShow = mshow[1];
+			function toggleMobileCol(name) {
+				setMobileShow(function (prev) {
+					var next = { backlog: prev.backlog, done: prev.done };
+					next[name] = !next[name];
+					return next;
+				});
+			}
 			// What the long-lived callbacks need to read: the current selection and
 			// the detail on screen. Callbacks that outlive a render (the cards keep
 			// theirs) read these instead of values captured when they were made.
@@ -2871,7 +2898,11 @@ var CSS =
 						onApprove: function (id) { return act("action", { id: id, action: "approve" }); },
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
-						h("div", { className: "kb-cols" },
+						h("div", { className: "kb-mobcolbar" },
+							h("button", { className: "kb-btn kb-col-toggle" + (mobileShow.backlog ? " on" : ""), "aria-pressed": mobileShow.backlog, onClick: function () { toggleMobileCol("backlog"); }, children: "Backlog" + (columns.backlog.length ? " · " + columns.backlog.length : "") }),
+							h("button", { className: "kb-btn kb-col-toggle" + (mobileShow.done ? " on" : ""), "aria-pressed": mobileShow.done, onClick: function () { toggleMobileCol("done"); }, children: "Done" + (closedItems.length ? " · " + closedItems.length : "") })
+						),
+						h("div", { className: "kb-cols" + (mobileShow.backlog ? " show-backlog" : "") + (mobileShow.done ? " show-done" : "") },
 							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
 							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
 							h(Column, { column: "done", label: "Done / Discarded", items: closedItems, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt })

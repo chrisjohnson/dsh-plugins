@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.25.1
+
+### Fixed
+
+- **The Work board is now usable on a phone.** The board was hard-wired to three
+  columns (`min-width:780px`) with no mobile rule, so on a ~390px screen only
+  about one and a half columns were visible and the whole page scrolled
+  sideways. On a narrow screen (≤768px) the board now collapses to a single
+  full-width track and shows the **Working** column by default; **Backlog** and
+  **Done** are tucked behind two reveal buttons above the board (each showing its
+  count), and the pinned Done column no longer sticks or caps its height. The
+  low-value "created N ago" footer is hidden to give the cards room. Desktop
+  layout is unchanged.
+
 ## 0.25.0
 
 ### Added
