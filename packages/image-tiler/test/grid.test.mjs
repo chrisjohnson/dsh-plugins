@@ -21,7 +21,7 @@ test('needsTiling: over/under/exact boundary and junk input', () => {
   assert.equal(needsTiling({ width: 10, height: 10, cap: 0 }), false);
 });
 
-test('1536x1024 at a 393216 cap tiles into a small overlapping grid', () => {
+test('1536x1024 at a 393216 cap tiles into an aspect-matched grid', () => {
   const p = plan(1536, 1024, 393216);
   assert.ok(p, 'plan exists');
   assert.ok(p.tiles <= 32);
@@ -30,8 +30,25 @@ test('1536x1024 at a 393216 cap tiles into a small overlapping grid', () => {
     assert.ok(r.left >= 0 && r.top >= 0 && r.left + r.width <= 1536 && r.top + r.height <= 1024);
   }
   assert.equal(auditCoverage(1536, 1024, p.rects), true);
-  // A 2x2 grid cannot fit under 0.95 * 393216 with overlap, so expect more tiles.
-  assert.ok(p.tiles > 4, `tiles=${p.tiles}`);
+  // 0.2.0 scoring: 3x2 aspect-matched tiles beat the 5-tile 1x5 sliver grid.
+  assert.equal(p.rows, 3, `rows=${p.rows}`);
+  assert.equal(p.cols, 2, `cols=${p.cols}`);
+});
+
+test('4K screenshots get near-square tiles, not full-height slivers', () => {
+  // The case from production: 3840x2160 at the 393216 cap. The fewest-tiles
+  // answer (0.1.0) was 1x26 strips of 167x2160; squareness must beat it.
+  const p = plan(3840, 2160, 393216);
+  assert.ok(p);
+  assert.equal(auditCoverage(3840, 2160, p.rects), true);
+  const tileAspect = p.tileWidth / p.tileHeight;
+  const sourceAspect = 3840 / 2160;
+  assert.ok(tileAspect > sourceAspect / 2 && tileAspect < sourceAspect * 2, `tile aspect ${tileAspect.toFixed(2)} stays near the source aspect ${sourceAspect.toFixed(2)}`);
+  assert.ok(p.tiles <= 32);
+  // The 2730x1536 shape (dsh-normalized 4K paste) likewise avoids 13x1 strips.
+  const q = plan(2730, 1536, 393216);
+  assert.ok(q);
+  assert.ok(q.rows > 1 && q.cols > 1, `2730x1536 -> ${q.rows}x${q.cols}`);
 });
 
 test('every plan is deterministic and covers the image', () => {
@@ -67,14 +84,18 @@ test('valve: an image no grid within maxTiles can fit returns null', () => {
 test('wide/short and tall/narrow edge cases', () => {
   const wide = plan(10000, 100, 393216);
   assert.ok(wide, 'wide image tiles');
-  assert.equal(wide.rows, 1, 'one row of full-height tiles');
   assert.equal(auditCoverage(10000, 100, wide.rects), true);
+  assert.ok(wide.tiles <= 32);
   for (const r of wide.rects) assert.ok(r.width * r.height <= wide.effectiveCap);
+  // Aspect scoring may pick a short multi-row grid of wide tiles over a
+  // single row of slivers; either way tiles stay wide like the source.
+  assert.ok(wide.tileWidth / wide.tileHeight > 10, 'tiles stay strongly wide');
 
   const tall = plan(100, 10000, 393216);
   assert.ok(tall, 'tall image tiles');
-  assert.equal(tall.cols, 1, 'one column of full-width tiles');
   assert.equal(auditCoverage(100, 10000, tall.rects), true);
+  assert.ok(tall.tiles <= 32);
+  assert.ok(tall.tileHeight / tall.tileWidth > 10, 'tiles stay strongly tall');
 
   // A strip so thin one tile already fits: no tiling needed upstream, but the
   // planner must not crash if asked.

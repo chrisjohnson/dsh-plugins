@@ -166,16 +166,16 @@ test('an over-cap image becomes N tile blocks plus the note, id and source prese
   // original content was [text, image]; output: [text, ...tiles, note]
   const images = out.content.filter((b) => b.type === 'image');
   const texts = out.content.filter((b) => b.type === 'text');
-  // 1536x1024 at a 393216 cap: the fewest-tile grid is 1 row x 5 columns.
-  assert.equal(images.length, 5, 'five tiles for 1536x1024 at this cap');
+  // 1536x1024 at a 393216 cap: aspect scoring picks the 3x2 grid (6 tiles).
+  assert.equal(images.length, 6, 'six tiles for 1536x1024 at this cap');
   assert.equal(texts.length, 2, 'the user text plus one note');
-  assert.match(texts[1].text, /split into 5 overlapping tiles \(1x5 grid\); together they cover the full image/);
+  assert.match(texts[1].text, /split into 6 overlapping tiles \(3x2 grid\); together they cover the full image/);
   for (const block of images) {
     assert.equal(block.type, 'image');
     assert.equal(block.attachment.mediaType, 'image/png');
     assert.ok(block.attachment.width * block.attachment.height <= CAP);
   }
-  assert.equal(service.saved.length, 5);
+  assert.equal(service.saved.length, 6);
   assert.ok(service.saved.every((s) => s.mediaType === 'image/png' && s.data instanceof Uint8Array));
   // The tiles sit where the original block was: after the user's own text.
   assert.equal(out.content[0].type, 'text');
@@ -200,9 +200,9 @@ test('multiple over-cap images in one message each get their own tiles and note'
   const notes = out.content.filter((b) => b.type === 'text');
   assert.equal(notes.length, 2, 'one note per tiled image');
   const images = out.content.filter((b) => b.type === 'image');
-  assert.ok(images.length >= 2 + 6, 'under-cap a2 kept plus tiles for a1 and a3');
+  assert.equal(images.length, 16, 'under-cap a2 kept plus 6 tiles for a1 and 9 for a3');
   assert.ok(out.content.some((b) => b.type === 'image' && b.attachment?.attachmentId === 'a2'), 'under-cap image kept whole');
-  assert.equal(service.saved.length, images.length - 1);
+  assert.equal(service.saved.length, 15);
 });
 
 test('startsRequestSeries and other decision fields survive the rewrite', async () => {
@@ -262,4 +262,88 @@ test('an internal blow-up returns the decision unchanged (fail open)', async () 
   const msg = imageMessage(1536, 1024);
   const decision = await handler({ agent: agentWithHeader('vision-provider', 'small-vlm') }, async () => ({ kind: 'enter', messages: [msg] }));
   assert.equal(decision.messages[0], msg);
+});
+
+// ---- 0.2.0: policy, ask, and pending-selection routing ----------------------
+
+function mountPolicy(overrides, { store, ask, pendingSelection } = {}) {
+  const handler = createPreStepHandler({
+    config: settings(overrides),
+    log: fakeLog,
+    attachments: () => store,
+    probe: stubProbe,
+    tile: stubTile,
+    ask,
+    pendingSelection,
+  });
+  const agent = agentWithHeader('vision-provider', 'small-vlm');
+  return (msg) => handler({ agent, signal: undefined }, async () => ({ kind: 'enter', messages: [msg ?? imageMessage(1536, 1024)] }));
+}
+
+test('policy tile: auto-tiles without asking (0.1.0 behavior)', async () => {
+  const { service } = stubStore();
+  let asked = 0;
+  const run = mountPolicy({ policy: 'tile' }, { store: service, ask: async () => { asked++; return 'tile'; } });
+  const decision = await run();
+  assert.equal(asked, 0, 'no ask under policy tile');
+  assert.equal(decision.messages[0].content.filter((b) => b.type === 'image').length, 6);
+});
+
+test('policy send-whole: keeps the original with the downscale note, never tiles', async () => {
+  const { service } = stubStore();
+  const run = mountPolicy({ policy: 'send-whole' }, { store: service });
+  const msg = imageMessage(1536, 1024);
+  const decision = await run(msg);
+  const out = decision.messages[0];
+  assert.equal(out.content[1], msg.content[1], 'original kept by identity');
+  assert.match(out.content[2].text, /sent whole — the vision backend will likely downscale it/);
+  assert.equal(service.saved.length, 0);
+});
+
+test('policy ask: approve tiles, reject sends whole, non-answer falls back', async () => {
+  for (const [answer, expectTiles] of [['tile', true], ['send-whole', false], [undefined, true], ['garbage', true]]) {
+    const { service } = stubStore();
+    const questions = [];
+    const run = mountPolicy({ policy: 'ask', askFallback: 'tile' }, { store: service, ask: async (_a, q) => { questions.push(q); return answer; } });
+    const decision = await run();
+    const images = decision.messages[0].content.filter((b) => b.type === 'image');
+    assert.equal(images.length, expectTiles ? 6 : 1, `answer=${answer} -> tiles=${expectTiles}`);
+    assert.equal(questions.length, 1);
+    assert.match(questions[0], /Approve to tile it into 6 overlapping tiles \(3x2 grid.*reject to send it whole.*likely downscale/s);
+  }
+});
+
+test('policy ask: a throwing asker falls back and the step still enters', async () => {
+  const { service } = stubStore();
+  const run = mountPolicy({ policy: 'ask', askFallback: 'send-whole' }, { store: service, ask: async () => { throw new Error('no answerer'); } });
+  const msg = imageMessage(1536, 1024);
+  const decision = await run(msg);
+  assert.equal(decision.messages[0].content[1], msg.content[1], 'fallback send-whole kept original');
+  assert.match(decision.messages[0].content[2].text, /sent whole/);
+});
+
+test('pending model selection outranks a stale header and creation options', async () => {
+  const { service } = stubStore();
+  const handler = createPreStepHandler({
+    config: settings({ policy: 'tile' }),
+    log: fakeLog,
+    attachments: () => service,
+    probe: stubProbe,
+    tile: stubTile,
+    pendingSelection: () => ({ provider: 'vision-provider', model: 'small-vlm' }),
+  });
+  // Header and options both name a NO-CAP route; only the pending selection carries the cap.
+  const agent = {
+    options: { provider: 'big', model: 'provider' },
+    session: { requestHeader: () => ({ config: { provider: 'big', model: 'provider' } }) },
+  };
+  const decision = await handler({ agent }, async () => ({ kind: 'enter', messages: [imageMessage(1536, 1024)] }));
+  assert.equal(decision.messages[0].content.filter((b) => b.type === 'image').length, 6, 'tiled via pending selection');
+  // A throwing pendingSelection reader must not break the pass-through.
+  const broken = createPreStepHandler({
+    config: settings({ policy: 'tile' }), log: fakeLog, attachments: () => service, probe: stubProbe, tile: stubTile,
+    pendingSelection: () => { throw new Error('projection gone'); },
+  });
+  const d2 = await broken({ agent: agentWithHeader('vision-provider', 'small-vlm') }, async () => ({ kind: 'enter', messages: [imageMessage(1536, 1024)] }));
+  assert.equal(d2.messages[0].content.filter((b) => b.type === 'image').length, 6, 'header still resolves when the reader throws');
 });

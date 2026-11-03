@@ -45,19 +45,67 @@ export default function imageTiler(ctx, config = {}) {
     }
   };
 
+  // The composer's model pick is durable as a `model/selection` event and
+  // folded into the `modelSelection` projection's `pending` slot until a
+  // request consumes it. Reading it is how the FIRST message of a session (no
+  // minted header yet) and a mid-session switch route to the right cap.
+  const pendingSelection = (agent) => {
+    try {
+      const registry = typeof ctx.get === 'function' ? ctx.get('sessionProjections') : undefined;
+      const state = registry?.stateOf?.(agent?.session, 'modelSelection');
+      return state?.pending ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // `policy: "ask"` rides the harness approval machinery: approve tiles, reject
+  // sends whole; anything else (no answerer, cancelled, policy `never`, no
+  // approval service) returns undefined and the handler applies askFallback.
+  const remembered = new Map(); // agent id -> 'tile' | 'send-whole' (in-memory, per process)
+  const ask = async (agent, question, signal) => {
+    if (settings.rememberPerSession && agent?.id !== undefined && remembered.has(agent.id)) {
+      return remembered.get(agent.id);
+    }
+    let approval;
+    try {
+      approval = (typeof ctx.get === 'function' ? ctx.get('approval') : undefined) ?? ctx.approval;
+    } catch {
+      approval = undefined;
+    }
+    if (typeof approval?.request !== 'function') return undefined;
+    let outcome;
+    try {
+      outcome = await approval.request({ agent, toolName: 'image_tiling', reason: question, signal });
+    } catch (error) {
+      log.warn('approval request failed: %s', String(error?.message ?? error));
+      return undefined;
+    }
+    const mode = outcome === 'allowed-once' ? 'tile' : outcome === 'rejected' ? 'send-whole' : undefined;
+    if (mode !== undefined && settings.rememberPerSession && agent?.id !== undefined) {
+      remembered.set(agent.id, mode);
+    }
+    return mode;
+  };
+
   const handler = createPreStepHandler({
     config: settings,
     log,
     attachments,
     probe: probeImage,
     tile: extractTilePngs,
+    ask,
+    pendingSelection,
   });
 
   ctx.on('agent/pre-step', (payload, next) => handler(payload, next), { global: true });
 
   log.info(
-    'active (enabled=%s, overlapRatio=%s, safetyFactor=%s, maxTilesPerImage=%s, logToStderr=%s, caps=%s)',
+    'active (enabled=%s, policy=%s, askFallback=%s, rememberPerSession=%s, overlapRatio=%s, safetyFactor=%s, maxTilesPerImage=%s, logToStderr=%s, caps=%s)',
     settings.enabled,
+    settings.policy,
+    settings.askFallback,
+    settings.rememberPerSession,
     settings.overlapRatio,
     settings.safetyFactor,
     settings.maxTilesPerImage,

@@ -102,13 +102,25 @@ export function auditCoverage(width, height, rects) {
 }
 
 /**
+ * How badly a grid's tile shape mismatches the source shape:
+ * |ln(tileAspect / sourceAspect)|. 0 means every tile is a scaled-down
+ * miniature of the whole image (best for reading); large means slivers that
+ * cut long runs of content across tile borders.
+ */
+function aspectDistance(tileWidth, tileHeight, width, height) {
+  return Math.abs(Math.log((tileWidth / tileHeight) / (width / height)));
+}
+
+/**
  * Plan the grid. Returns null when no grid within `maxTiles` tiles keeps every
  * tile at or under `floor(cap * safetyFactor)` pixels.
  *
- * Search order: fewest tiles first; among equal tile counts, the smallest
- * tile area (the most overlap). Every candidate is verified by
- * {@link auditCoverage} before it is returned, so a math bug cannot ship a
- * gap to the model.
+ * Scoring (0.2.0): a grid's cost is `tiles * (1 + aspectDistance^2)` — fewest
+ * tiles still dominates, but a badly elongated grid pays a growing penalty, so
+ * a 4K screenshot gets ~20 aspect-matched tiles instead of 26 full-height
+ * slivers. Ties break toward the smaller tile area (more overlap), then fewer
+ * tiles. Every returned grid is verified by {@link auditCoverage}, so a math
+ * bug cannot ship a gap to the model.
  *
  * @returns {{ rows, cols, tiles, tileWidth, tileHeight, effectiveCap, rects } | null}
  */
@@ -125,16 +137,21 @@ export function planGrid({ width, height, cap, overlapRatio, safetyFactor, maxTi
       const tileHeight = Math.min(height, minTileExtent(height, rows, overlapRatio));
       const area = tileWidth * tileHeight;
       if (area > effectiveCap) continue;
-      if (best === null || tiles < best.tiles || (tiles === best.tiles && area < best.tileArea)) {
-        best = { rows, cols, tiles, tileWidth, tileHeight, tileArea: area };
+      const score = tiles * (1 + aspectDistance(tileWidth, tileHeight, width, height) ** 2);
+      const better = best === null
+        || score < best.score - 1e-9
+        || (score <= best.score + 1e-9 && (area < best.tileArea || (area === best.tileArea && tiles < best.tiles)));
+      if (better) {
+        best = { rows, cols, tiles, tileWidth, tileHeight, tileArea: area, score };
       }
     }
   }
   if (best === null) return null;
-  const rects = tileRects(width, height, best.rows, best.cols, best.tileWidth, best.tileHeight);
+  const { score: _score, ...plan } = best;
+  const rects = tileRects(width, height, plan.rows, plan.cols, plan.tileWidth, plan.tileHeight);
   if (!auditCoverage(width, height, rects)) return null;
   for (const r of rects) {
     if (r.width * r.height > effectiveCap) return null;
   }
-  return { ...best, effectiveCap, rects };
+  return { ...plan, effectiveCap, rects };
 }
