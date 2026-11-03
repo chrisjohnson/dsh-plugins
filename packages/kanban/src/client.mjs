@@ -1641,10 +1641,16 @@ var CSS =
 
 		// ---------------------------------------------------------------- detail
 
+		// KAN-54: a recognisable pencil. The old glyph was a bare diagonal bar with a
+		// small loop at the top, which at 15px read as a paperclip. This one is a whole
+		// pencil on the 45° diagonal — sharpened tip with its wood line, a shaft wide
+		// enough to stay hollow at this size, a ferrule band and a flat eraser end.
+		// Three paths, all currentColor stroke, same svg attributes as before.
 		function PencilIcon() {
 			return h("svg", { width: 15, height: 15, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
-				h("path", { d: "M3 11.8V13h1.2l6.9-6.9-1.2-1.2L3 11.8Z", stroke: "currentColor", strokeWidth: 1.8, strokeLinejoin: "round", strokeLinecap: "round" }),
-				h("path", { d: "m10.3 4.3 1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4l-1.4 1.4", stroke: "currentColor", strokeWidth: 1.8, strokeLinejoin: "round", strokeLinecap: "round" })
+				h("path", { d: "M1.92 15.03 2.2 12.2 12.2 2.2A1.1 1.1 0 0 1 12.75 2.75L14.2 4.2A1.1 1.1 0 0 1 14.75 4.75L4.75 14.75Z", stroke: "currentColor", strokeWidth: 1.6, strokeLinejoin: "round", strokeLinecap: "round" }),
+				h("path", { d: "M2.2 12.2 4.75 14.75", stroke: "currentColor", strokeWidth: 1.6, strokeLinejoin: "round", strokeLinecap: "round" }),
+				h("path", { d: "M10.79 3.61 13.33 6.16", stroke: "currentColor", strokeWidth: 1.6, strokeLinejoin: "round", strokeLinecap: "round" })
 			);
 		}
 

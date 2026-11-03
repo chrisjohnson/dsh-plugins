@@ -5,6 +5,18 @@
 
 ## Unreleased
 
+## 0.23.1
+
+### Fixed
+
+- **The edit pencil is now a pencil.** The glyph on the ticket's edit/lock button,
+  on the acceptance-criteria edit button and on the routing edit button was a bare
+  diagonal bar with a small loop at the top, which at 15px read as a paperclip
+  rather than a pencil. It is now a whole pencil on the same 45° diagonal: a
+  sharpened tip with its wood line, a shaft wide enough to stay hollow at this
+  size, a ferrule band and a flat eraser end. Same 15px currentColor stroke style,
+  same button, same tooltip — only the drawing changed.
+
 ## 0.23.0
 
 ### Changed
