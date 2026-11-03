@@ -117,12 +117,10 @@ var CSS =
 		+ ".kb-col{border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-2,#f7f8fa);min-height:120px;display:flex;flex-direction:column;max-height:calc(100vh - 190px)}"
 		+ ".kb-colhead{display:flex;align-items:center;gap:8px;padding:9px 11px 7px;font:600 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-secondary,#555);position:sticky;top:0;z-index:1;background:inherit;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0}"
 		+ ".kb-count{margin-left:auto;font:500 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
-		+ ".kb-list{display:flex;flex-direction:column;gap:7px;padding:0 8px 9px;overflow:auto}"
+		+ ".kb-list{display:flex;flex-direction:column;gap:7px;padding:0 8px 9px}"
 		+ ".kb-card{border:.5px solid var(--dsw-alias-border-l1,#ddd);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-base,#fff);padding:8px 9px;cursor:pointer;display:flex;flex-direction:column;gap:5px}"
 		+ ".kb-card:hover{border-color:var(--dsw-alias-label-tertiary,#999)}"
-		+ ".kb-card.dragging{opacity:.4}"
-		+ ".kb-card-ghost{opacity:.62;border-style:dashed;border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l2,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 5%,var(--dsw-alias-bg-base,#fff));box-shadow:0 5px 16px rgba(15,23,42,.10);pointer-events:none;transform:translateY(1px)}"
-		+ ".kb-card-ghost .kb-next{color:var(--dsw-alias-state-business-primary,#2563eb)}"
+		+ ".kb-card.dragging{opacity:.4}.kb-drop-line{position:relative;height:0;margin-top:-8px;pointer-events:none;z-index:3}.kb-drop-line::before{content:'';position:absolute;left:2px;right:2px;top:-2px;height:4px;border-radius:2px;background:var(--dsw-alias-state-business-primary,#2563eb);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary,#2563eb) 22%,transparent)}"
 		+ ".kb-col.drop-target{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 45%,var(--dsw-alias-border-l1,#ddd));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 3%,var(--dsw-alias-bg-layer-2,#f7f8fa))}"
 		+ ".kb-key{font:600 11px/15px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888)}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}"
@@ -176,19 +174,19 @@ var CSS =
 		+ ".kb-tone-idle{--kb-accent:#64748b}.kb-tone-run{--kb-accent:#2563eb}.kb-tone-warn{--kb-accent:#b45309}.kb-tone-err{--kb-accent:#b91c1c}.kb-tone-ok{--kb-accent:#15803d}.kb-tone-violet{--kb-accent:#7c3aed}"
 		+ ".kb-body{padding:0 clamp(20px,4vw,48px) 48px}"
 		+ ".kb-cols{grid-template-columns:repeat(3,minmax(250px,1fr));gap:14px;min-width:780px}"
-		+ ".kb-col{--kb-accent:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 18%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:color-mix(in srgb,var(--kb-accent) 4%,var(--dsw-alias-bg-layer-2,#f7f8fa));padding-top:3px;max-height:calc(100vh - 280px)}"
+		+ ".kb-col{--kb-accent:#64748b;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 18%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:color-mix(in srgb,var(--kb-accent) 4%,var(--dsw-alias-bg-layer-2,#f7f8fa));padding-top:3px;max-height:none}"
 		+ ".kb-col::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
 		+ ".kb-colhead{padding:9px 12px 7px;color:var(--dsw-alias-label-secondary,#555);background:transparent;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0}"
 		+ ".kb-coldot{width:7px;height:7px;border-radius:50%;background:var(--kb-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-accent) 14%,transparent);flex:none}"
 		+ ".kb-collabel{font:600 11px/16px var(--dsw-font-family,sans-serif);letter-spacing:.06em;text-transform:uppercase}"
-		+ ".kb-count{margin-left:auto;min-width:20px;height:18px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent) 11%,transparent);color:var(--kb-accent);font:600 11px/18px ui-monospace,monospace;text-align:center}"
+		+ ".kb-col-pinned{position:sticky;top:0;height:var(--kb-pin-h,calc(100vh - 220px));max-height:none}.kb-col-pinned .kb-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.kb-count{margin-left:auto;min-width:20px;height:18px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent) 11%,transparent);color:var(--kb-accent);font:600 11px/18px ui-monospace,monospace;text-align:center}"
 		+ ".kb-list{gap:8px;padding:0 9px 11px}"
-		+ ".kb-card{border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 10px;gap:6px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;position:relative}"
+		+ ".kb-card{border:1px solid var(--dsw-alias-border-l2,#e2e6ea);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 10px;gap:6px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;position:relative;overflow:hidden}"
 		+ ".kb-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--kb-accent,#3b82f6) 45%,var(--dsw-alias-border-l2,#e2e6ea));box-shadow:0 8px 22px color-mix(in srgb,var(--kb-accent,#3b82f6) 13%,transparent)}"
 		+ ".kb-card.active{border-color:color-mix(in srgb,#2563eb 42%,var(--dsw-alias-border-l2,#e2e6ea));background:linear-gradient(135deg,color-mix(in srgb,#2563eb 5%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));animation:kb-glow-blue 3.2s ease-in-out infinite}"
-		+ ".kb-card.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#2563eb,#06b6d4)}"
+		+ ".kb-card.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:linear-gradient(180deg,#2563eb,#06b6d4);pointer-events:none}"
 		+ ".kb-card.attention{border-color:color-mix(in srgb,#b91c1c 45%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 6%,var(--dsw-alias-bg-layer-1,#fff))}"
-		+ ".kb-card.attention::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:#b91c1c}"
+		+ ".kb-card.attention::before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:#b91c1c;pointer-events:none}.kb-card.active,.kb-card.attention{padding-left:15px}"
 		+ ".kb-cardtop{display:flex;align-items:center;gap:7px}"
 		+ ".kb-key{font:600 11px/15px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);letter-spacing:.02em}"
 		+ ".kb-statusdot{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}"
@@ -198,30 +196,26 @@ var CSS =
 		+ ".kb-phasechip.plan{--kb-accent:#2563eb}.kb-phasechip.build{--kb-accent:#0d9488}.kb-phasechip.review{--kb-accent:#db2777}.kb-phasechip.approval{--kb-accent:#7c3aed}.kb-phasechip.done{--kb-accent:#15803d}.kb-phasechip.discarded{--kb-accent:#64748b}"
 		+ ".kb-cardtitle{font:600 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);-webkit-line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}"
 		+ ".kb-steps{display:flex;gap:3px;margin:1px 0 2px}"
-		+ ".kb-step{--kb-step-color:#64748b;height:3px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--kb-step-color) 20%,transparent)}"
+		+ ".kb-step{--kb-step-color:#64748b;height:4px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--dsw-alias-label-tertiary,#94a3b8) 24%,transparent)}"
 		+ ".kb-step-intake{--kb-step-color:#64748b}.kb-step-grill{--kb-step-color:#d97706}.kb-step-plan{--kb-step-color:#2563eb}.kb-step-implement{--kb-step-color:#0d9488}.kb-step-verify{--kb-step-color:#7c3aed}.kb-step-review{--kb-step-color:#db2777}.kb-step-closed{--kb-step-color:#15803d}"
-		+ ".kb-step.done{background:var(--kb-step-color);opacity:.72}"
+		+ ".kb-step.done{background:var(--kb-step-color);opacity:.72}.kb-step.todo{background:color-mix(in srgb,var(--dsw-alias-label-tertiary,#94a3b8) 24%,transparent)}"
 		+ ".kb-step.current{background:var(--kb-step-color);box-shadow:0 0 0 1px color-mix(in srgb,var(--kb-step-color) 45%,transparent)}"
 		+ ".kb-meta{gap:5px;font:500 11px/15px var(--dsw-font-family,sans-serif);align-items:center}"
 		+ ".kb-next{display:inline-flex;align-items:center;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--kb-accent,#64748b) 9%,transparent);color:var(--kb-accent,#475569);font-weight:600;white-space:nowrap}"
 		+ ".kb-next.run{--kb-accent:#2563eb}.kb-next.err{--kb-accent:#b91c1c}.kb-next.idle{--kb-accent:#64748b}"
-		+ ".kb-total{color:var(--dsw-alias-label-secondary,#555);font-variant-numeric:tabular-nums;white-space:nowrap}"
-		+ ".kb-age{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary,#999)}"
-		+ ".kb-cardfoot{display:flex;align-items:center;gap:6px;margin-top:1px}"
+		+ ".kb-cardfoot{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:1px;min-height:20px}.kb-worktime{display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary,#555);font:600 11px/15px var(--dsw-font-family,sans-serif);font-variant-numeric:tabular-nums;white-space:nowrap}.kb-created{color:var(--dsw-alias-label-tertiary,#999);font:500 11px/15px var(--dsw-font-family,sans-serif);font-variant-numeric:tabular-nums;white-space:nowrap}.kb-attempt{color:var(--dsw-alias-label-secondary,#555);font-style:italic;white-space:nowrap}.kb-iconbtn.sm{width:22px;height:22px;border-radius:6px}.kb-jump{border-color:transparent;background:transparent}.kb-jump:hover{border-color:var(--dsw-alias-border-l3,#cbd2da)}"
 		+ ".kb-planbtn{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 10px;border:.5px solid color-mix(in srgb,#2563eb 38%,transparent);border-radius:999px;background:color-mix(in srgb,#2563eb 8%,var(--dsw-alias-bg-base,#fff));color:#2563eb;font:600 11px/16px var(--dsw-font-family,sans-serif);cursor:pointer;white-space:nowrap}"
-		+ ".kb-planbtn:hover{background:color-mix(in srgb,#2563eb 16%,var(--dsw-alias-bg-base,#fff));border-color:#2563eb}"
+		+ ".kb-buildbtn{--kb-build:#0d9488;border-color:color-mix(in srgb,#0d9488 38%,transparent);background:color-mix(in srgb,#0d9488 8%,var(--dsw-alias-bg-base,#fff));color:#0d9488}.kb-buildbtn:hover{background:color-mix(in srgb,#0d9488 16%,var(--dsw-alias-bg-base,#fff))!important;border-color:#0d9488!important}.kb-planbtn:hover{background:color-mix(in srgb,#2563eb 16%,var(--dsw-alias-bg-base,#fff));border-color:#2563eb}"
 		+ ".kb-empty{padding:20px 10px;border:1px dashed color-mix(in srgb,var(--kb-accent,#888) 22%,transparent);border-radius:var(--dsw-radius-md,12px);background:transparent;font-size:11px;line-height:16px}"
-		+ ".kb-detail{gap:12px;max-width:1180px}"
+		+ ".kb-detail{display:grid;gap:12px 20px;max-width:1680px;grid-template-columns:minmax(0,4fr) minmax(220px,1fr);grid-template-areas:'head side' 'main side';align-items:start}.kb-detail-head{grid-area:head;display:flex;flex-direction:column;gap:12px;min-width:0}.kb-detail-main{grid-area:main;display:flex;flex-direction:column;gap:12px;min-width:0}.kb-detail-side{grid-area:side;min-width:0;position:sticky;top:0;align-self:start}.kb-side-panel{padding:12px 14px}.kb-side-list{margin:0;display:flex;flex-direction:column;gap:9px}.kb-side-row{min-width:0}.kb-side-row dt{font:600 10px/14px var(--dsw-font-family,sans-serif);letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888)}.kb-side-row dd{margin:1px 0 0;font:400 13px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);overflow-wrap:anywhere}@media (max-width:900px){.kb-detail{grid-template-columns:minmax(0,1fr);grid-template-areas:'head' 'side' 'main'}.kb-detail-side{position:static}.kb-side-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:9px 14px}}"
 		+ ".kb-hero{--kb-accent:#2563eb;position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-lg,16px);background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 7%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff));padding:14px 16px;box-shadow:0 10px 30px rgba(15,23,42,.04)}"
 		+ ".kb-hero::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--kb-accent),color-mix(in srgb,var(--kb-accent) 35%,transparent))}"
 		+ ".kb-hero-backlog{--kb-accent:#64748b}.kb-hero-working{--kb-accent:#64748b}.kb-hero-discarded{--kb-accent:#64748b}.kb-hero-done{--kb-accent:#15803d}.kb-hero-attention{--kb-accent:#b91c1c}"
 		+ ".kb-hero-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}"
 		+ ".kb-hero-title{margin:8px 0 3px;font:500 18px/25px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
-		+ ".kb-hero-meta{display:flex;flex-wrap:wrap;gap:5px 14px;color:var(--dsw-alias-label-tertiary,#888);font-size:11px;line-height:16px}"
-		+ ".kb-hero-meta b{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}"
 		+ ".kb-lifecycle{display:flex;align-items:center;gap:4px;margin-top:12px;flex-wrap:wrap}"
 		+ ".kb-life{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary,#999);font:500 11px/16px var(--dsw-font-family,sans-serif)}"
-		+ ".kb-life+.kb-life::before{content:'';width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px}"
+		+ ".kb-life.link{appearance:none;background:none;border:0;padding:2px 8px;margin:0 -4px;border-radius:999px;cursor:pointer}.kb-life.link:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.kb-life.link:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,#3b82f6)}.kb-life.link .kb-life-label{text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}.kb-life+.kb-life::before{content:'';width:14px;height:1px;background:var(--dsw-alias-border-l2,#ddd);margin-right:1px}"
 		+ ".kb-life-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-bg-layer-2,#eef1f5);border:1px solid var(--dsw-alias-border-l3,#ccc)}"
 		+ ".kb-life-intake{--kb-life-color:#64748b}.kb-life-grill{--kb-life-color:#d97706}.kb-life-plan{--kb-life-color:#2563eb}.kb-life-implement{--kb-life-color:#0d9488}.kb-life-verify{--kb-life-color:#7c3aed}.kb-life-review{--kb-life-color:#db2777}.kb-life-closed{--kb-life-color:#15803d}"
 		+ ".kb-life.done{color:var(--dsw-alias-label-secondary,#555)}.kb-life.done .kb-life-dot{background:var(--kb-life-color);border-color:var(--kb-life-color)}"
@@ -460,13 +454,25 @@ var CSS =
 			return phase === "implement" ? "Build" : phase === "verify" ? "Approval" : phase === "closed" ? "Done" : phase.charAt(0).toUpperCase() + phase.slice(1);
 		}
 		function phaseProgress(ticket) {
-			return h("div", { className: "kb-steps", title: "Lifecycle: " + PHASES.map(phaseLabel).join(" → ") },
-				PHASES.map(function (phase, i) {
-					var done = phaseIndex(ticket.phase) > i || ticket.phase === "closed";
-					var current = phaseIndex(ticket.phase) === i && ticket.phase !== "closed";
-					return h("span", { key: phase, className: "kb-step" + (done ? " done" : "") + (current ? " current" : ""), title: phaseLabel(phase) });
+			var segments = Array.isArray(ticket.segments) && ticket.segments.length > 0 ? ticket.segments : straightSegments(ticket);
+			return h("div", { className: "kb-steps", title: "Lifecycle: " + segments.map(function (seg) { return phaseLabel(seg.phase); }).join(" → ") },
+				segments.map(function (seg, i) {
+					return h("span", {
+						key: i,
+						className: "kb-step kb-step-" + seg.phase + " " + seg.state,
+						title: phaseLabel(seg.phase) + (seg.round > 1 ? " (round " + seg.round + ")" : "") + (seg.state === "todo" ? " — still to come" : "")
+					});
 				})
 			);
+		}
+		// The host sends the real path (a second implement/review round adds
+		// segments). This is only the straight line for a payload that lacks it.
+		function straightSegments(ticket) {
+			var closed = ticket.phase === "closed" || ticket.column === "done";
+			var at = phaseIndex(ticket.phase);
+			return PHASES.map(function (phase, i) {
+				return { phase: phase, round: 1, state: closed || i < at ? "done" : i === at ? "current" : "todo" };
+			});
 		}
 		// Badge tone follows the lifecycle stage, not the column: Plan blue,
 		// Build teal, Review pink, Approval violet, Done green.
@@ -513,20 +519,67 @@ var CSS =
 			return true;
 		}
 
-		function DropGhost(props) {
-			var t = props.ticket;
-			return h("div", { className: "kb-card kb-card-ghost", "aria-hidden": "true" },
-				h("div", { className: "kb-cardtop" },
-					h("span", { className: "kb-key", children: t.key }),
-					h("span", { className: "kb-spacer" }),
-					h("span", { className: "kb-statusdot " + (t.status || "idle"), "aria-hidden": "true" }),
-					h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) })
-				),
-				h("div", { className: "kb-cardtitle", children: t.title }),
-				phaseProgress(t),
-				h("div", { className: "kb-meta" },
-					h("span", { className: "kb-next idle", children: "Drop here" })
-				)
+		// Offer "Start build" exactly where the host would accept it: a planned
+		// ticket (build phase) still sitting in Backlog. Mirrors src/build.mjs for the
+		// same reason canStartPlanning mirrors src/planning.mjs; host-contract and
+		// board-ui tests check the two agree. A parked ticket keeps its button - the
+		// move into Working lifts the park.
+		function canStartBuild(t) {
+			if (!t) return false;
+			if (t.column !== "backlog" || t.phase !== "implement") return false;
+			if ((t.status || "idle") === "active" || t.awaitingQuestion) return false;
+			return true;
+		}
+
+		// Where the pointer sits among a column's cards: the id of the first card
+		// whose midpoint is below it, or null for "after the last card". `rects` are
+		// the column's cards in order with the dragged one left out.
+		function dropBefore(rects, pointerY) {
+			for (var i = 0; i < rects.length; i++) {
+				if (pointerY < rects[i].top + rects[i].height / 2) return rects[i].id;
+			}
+			return null;
+		}
+		// True when dropping dragId before beforeId would leave the column as it is
+		// (right back where it was), so no indicator is drawn and nothing is sent.
+		function dropIsNoop(ids, dragId, beforeId) {
+			var at = ids.indexOf(dragId);
+			if (at < 0) return false;
+			var next = at + 1 < ids.length ? ids[at + 1] : null;
+			return (beforeId === undefined ? null : beforeId) === next;
+		}
+		// The board after a drop, so the card lands before the request returns. Only
+		// the two draggable columns are touched; the input is never mutated.
+		function moveInColumns(columns, id, column, beforeId) {
+			var next = {};
+			var moved = null;
+			Object.keys(columns).forEach(function (name) {
+				next[name] = (columns[name] || []).filter(function (t) {
+					if (t.id === id) { moved = t; return false; }
+					return true;
+				});
+			});
+			if (moved === null || !next[column]) return columns;
+			var list = next[column];
+			var at = beforeId === null || beforeId === undefined ? -1 : list.findIndex(function (t) { return t.id === beforeId; });
+			var item = Object.assign({}, moved, { column: column });
+			if (at < 0) list.push(item);
+			else list.splice(at, 0, item);
+			return next;
+		}
+
+		function JumpIcon() {
+			return h("svg", { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+				h("path", { d: "M9.5 2.5h4v4" }),
+				h("path", { d: "M13.5 2.5 7.5 8.5" }),
+				h("path", { d: "M12 9.5v2.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 3 12V6a1.5 1.5 0 0 1 1.5-1.5H7" })
+			);
+		}
+
+		function ClockIcon() {
+			return h("svg", { width: 12, height: 12, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+				h("circle", { cx: 8, cy: 8, r: 6 }),
+				h("path", { d: "M8 4.8V8l2.2 1.4" })
 			);
 		}
 
@@ -538,30 +591,33 @@ var CSS =
 				{
 					className: "kb-card" + (status === "active" ? " active" : "") + (status === "attention" ? " attention" : "") + (props.dragging ? " dragging" : ""),
 					draggable: true,
+					"data-card-id": t.id,
 					onDragStart: function (ev) {
 						ev.dataTransfer.setData("text/kanban", t.id);
 						ev.dataTransfer.effectAllowed = "move";
 						if (props.onDragStart) props.onDragStart(t.id);
 					},
 					onDragEnd: function () { if (props.onDragEnd) props.onDragEnd(); },
-					onDragOver: function (ev) {
-						ev.preventDefault();
-						ev.stopPropagation();
-						ev.dataTransfer.dropEffect = "move";
-						if (props.onDragOverCard) props.onDragOverCard(props.column, t.id);
-					},
-					onDrop: function (ev) {
-						ev.preventDefault();
-						ev.stopPropagation();
-						var id = ev.dataTransfer.getData("text/kanban");
-						if (id) props.onDropCard(id, props.column, t.id);
-					},
+					// No drag-over or drop handler here: the column owns the whole drop,
+					// computed from the pointer's position among its cards, so a card moving
+					// under the pointer can never change where the drop lands.
 					onClick: function () { props.onOpen(t.id); },
 					title: t.title
 				},
 				h("div", { className: "kb-cardtop" },
 					h("span", { className: "kb-key", children: t.key }),
 					h("span", { className: "kb-spacer" }),
+					// A conditional element, never a conditional hook: Card calls no hooks.
+					// stopPropagation keeps the click off the card's own onClick, which
+					// would open the detail instead of the session.
+					t.sessionId ? h("button", {
+						type: "button",
+						className: "kb-iconbtn sm kb-jump",
+						title: "Open this ticket's session (the active one, else the latest)",
+						"aria-label": "Open the session for " + t.key,
+						draggable: false,
+						onClick: function (ev) { ev.stopPropagation(); if (openSessionById) openSessionById(t.sessionId); }
+					}, h(JumpIcon)) : null,
 					h("span", { className: "kb-statusdot " + status, title: status, "aria-label": "Status: " + status }),
 					h("span", { className: "kb-phasechip " + stageTone(t), children: stageLabel(t) })
 				),
@@ -569,18 +625,12 @@ var CSS =
 				phaseProgress(t),
 				h("div", { className: "kb-meta" },
 					h("span", { className: "kb-next " + statusTone(status), children: nextAction(t) }),
-					t.attemptCount > 0 ? h("span", { children: "try " + t.attemptCount }) : null,
-					t.spentUsd > 0 ? h("span", { children: fmtUsd(t.spentUsd) }) : null,
-					h("span", { className: "kb-total", title: "Total time on ticket", children: fmtDur(t.totalMs !== undefined ? t.totalMs : Date.now() - new Date(t.createdAt).getTime()) }),
-					h("span", { className: "kb-spacer" }),
-					h("span", { className: "kb-age", children: ago(t.updatedAt) })
+					t.attemptLabel ? h("span", { className: "kb-attempt", children: t.attemptLabel }) : null,
+					t.spentUsd > 0 ? h("span", { children: fmtUsd(t.spentUsd) }) : null
 				),
-				// A conditional element, never a conditional hook: Card calls no
-				// hooks, so the button appearing cannot change a hook count.
-				// stopPropagation keeps the click off the card's own onClick,
-				// which would open the detail instead of starting the plan.
-				canStartPlanning(t) ? h("div", { className: "kb-cardfoot" },
-					h("button", {
+				h("div", { className: "kb-cardfoot" },
+					// stopPropagation: the button must not also open the detail.
+					canStartPlanning(t) ? h("button", {
 						type: "button",
 						className: "kb-planbtn",
 						title: "Plan this ticket now, in Backlog, without moving it to Working",
@@ -588,32 +638,68 @@ var CSS =
 							ev.stopPropagation();
 							if (props.onStartPlanning) props.onStartPlanning(t.id);
 						}
-					}, "Start planning")
-				) : null
+					}, "Start planning") : null,
+					canStartBuild(t) ? h("button", {
+						type: "button",
+						className: "kb-planbtn kb-buildbtn",
+						title: "Move this planned ticket to Working and start the build",
+						onClick: function (ev) {
+							ev.stopPropagation();
+							if (props.onStartBuild) props.onStartBuild(t.id);
+						}
+					}, "Start build") : null,
+					h("span", { className: "kb-spacer" }),
+					h("span", { className: "kb-worktime", title: "Time spent actively working on this ticket (not while it waits on you)" },
+						h(ClockIcon), fmtDur(t.workingMs || 0)),
+					h("span", { className: "kb-created", title: "Created " + fmtTime(t.createdAt), children: "created " + ago(t.createdAt) })
+				)
 			);
 		}
 
 		function Column(props) {
 			var items = props.items || [];
 			var dragging = props.dragId !== null && props.dragId !== undefined;
-			var active = dragging && props.dropTarget && props.dropTarget.column === props.column;
-			var ghost = active && props.dragTicket ? h(DropGhost, { key: "drop-ghost", ticket: props.dragTicket, column: props.column }) : null;
-			var rendered = items.map(function (t) { return h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onReorder: props.onReorder, onStartPlanning: props.onStartPlanning, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd, onDragOverCard: props.onDragOverCard, onDropCard: props.onDropCard }); });
-			if (ghost) {
-				var beforeId = props.dropTarget.beforeId;
-				var index = beforeId === null || beforeId === undefined ? -1 : items.findIndex(function (t) { return t.id === beforeId; });
-				if (index < 0) rendered.push(ghost);
-				else rendered.splice(index, 0, ghost);
+			var target = dragging && props.dropTarget && props.dropTarget.column === props.column ? props.dropTarget : null;
+			var ids = items.map(function (t) { return t.id; });
+			var showLine = target !== null && !dropIsNoop(ids, props.dragId, target.beforeId);
+			var droppable = props.column !== "done";
+			// The indicator takes no room (see .kb-drop-line), so showing it, moving it
+			// or hiding it never shifts a card under the pointer.
+			var line = h("div", { key: "drop-line", className: "kb-drop-line", "aria-hidden": "true" });
+			var rendered = [];
+			items.forEach(function (t) {
+				if (showLine && target.beforeId === t.id) rendered.push(line);
+				rendered.push(h(Card, { key: t.id, ticket: t, column: props.column, dragging: props.dragId === t.id, onOpen: props.onOpen, onStartPlanning: props.onStartPlanning, onStartBuild: props.onStartBuild, onDragStart: props.onDragStart, onDragEnd: props.onDragEnd }));
+			});
+			if (showLine && (target.beforeId === null || target.beforeId === undefined)) rendered.push(line);
+			// Where a pointer at ev.clientY would drop: read from the live card boxes,
+			// skipping the dragged card (it stays in place, dimmed, and is not a target).
+			function beforeIdAt(ev) {
+				var nodes = ev.currentTarget.querySelectorAll("[data-card-id]");
+				var rects = [];
+				Array.prototype.forEach.call(nodes, function (node) {
+					var id = node.getAttribute("data-card-id");
+					if (id === props.dragId) return;
+					var box = node.getBoundingClientRect();
+					rects.push({ id: id, top: box.top, height: box.height });
+				});
+				return dropBefore(rects, ev.clientY);
 			}
 			return h(
 				"div",
 				{
-					className: "kb-col" + (active ? " drop-target" : ""),
-					onDragOver: function (ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; if (props.onDragOverColumn) props.onDragOverColumn(props.column); },
+					className: "kb-col" + (props.column === "done" ? " kb-col-pinned" : "") + (target !== null ? " drop-target" : ""),
+					onDragOver: function (ev) {
+						if (!droppable || !dragging) return;
+						ev.preventDefault();
+						ev.dataTransfer.dropEffect = "move";
+						if (props.onDragOverColumn) props.onDragOverColumn(props.column, beforeIdAt(ev));
+					},
 					onDrop: function (ev) {
+						if (!droppable) return;
 						ev.preventDefault();
 						var id = ev.dataTransfer.getData("text/kanban");
-						if (id) { props.onMove(id, props.column); if (props.onDragEnd) props.onDragEnd(); }
+						if (id && props.onDropAt) props.onDropAt(id, props.column, beforeIdAt(ev));
 					}
 				},
 				h("div", { className: "kb-colhead" },
@@ -622,7 +708,7 @@ var CSS =
 					h("span", { className: "kb-count", children: items.length })
 				),
 				h("div", { className: "kb-list" },
-					items.length === 0 && ghost === null
+					items.length === 0 && !showLine
 						? h("div", { className: "kb-empty", children: props.column === "backlog" ? "Nothing queued" : props.column === "working" ? "Nothing in progress" : props.column === "done" ? "Nothing shipped yet" : "Nothing here" })
 						: rendered
 				)
@@ -1433,16 +1519,27 @@ var CSS =
 
 		function Lifecycle(props) {
 			var t = props.ticket;
+			var targets = props.sessions || {};
 			var current = phaseIndex(t.phase);
 			var closed = t.phase === "closed" || t.column === "done";
 			return h("div", { className: "kb-lifecycle" },
 				PHASES.map(function (phase, i) {
 					var done = closed || i < current;
 					var active = !closed && i === current;
-					return h("div", { key: phase, className: "kb-life kb-life-" + phase + (done ? " done" : "") + (active ? " active" : "") },
-						h("span", { className: "kb-life-dot" }),
-						h("span", { className: "kb-life-label", children: phaseLabel(phase) })
-					);
+					var target = targets[phase] || null;
+					var className = "kb-life kb-life-" + phase + (done ? " done" : "") + (active ? " active" : "") + (target ? " link" : "");
+					var dot = h("span", { className: "kb-life-dot" });
+					var label = h("span", { className: "kb-life-label", children: phaseLabel(phase) });
+					// A step with a session is a link to it: plan opens the latest plan
+					// session, build / review / approval open the build session.
+					if (!target) return h("div", { key: phase, className: className }, dot, label);
+					return h("button", {
+						key: phase,
+						type: "button",
+						className: className,
+						title: "Open the " + (phase === "plan" ? "plan" : "build") + " session for " + phaseLabel(phase),
+						onClick: function () { if (props.onOpenSession) props.onOpenSession(target); }
+					}, dot, label);
 				})
 			);
 		}
@@ -1491,6 +1588,33 @@ var CSS =
 			);
 		}
 
+		function TicketMeta(props) {
+			var d = props.detail;
+			var t = d.ticket;
+			var rows = [
+				["Workspace", t.workspaceCwd || "(engine default)"],
+				["Planning", t.planTiming === "now" ? "now" : "when started"],
+				["Questions", t.planQuestions === "autonomous" ? "decide autonomously" : "ask me"],
+				["Preset", t.preset || "harness default"],
+				["Write mode", t.writeMode || "workspace write"],
+				["Attempts", t.attemptCount + " / " + (d.maxAttempts || 3)],
+				["Spend", fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)")],
+				["Allow paid", t.allowPaid ? "yes" : "no"],
+				["Working time", fmtDur(t.workingMs || 0)],
+				["Created", fmtTime(t.createdAt)],
+				["Updated", ago(t.updatedAt)]
+			];
+			if (t.closedAt) rows.push(["Closed", fmtTime(t.closedAt)]);
+			return h("div", { className: "kb-panel kb-side-panel" },
+				h("h3", { children: "Details" }),
+				h("dl", { className: "kb-side-list" }, rows.map(function (row) {
+					return h("div", { key: row[0], className: "kb-side-row" },
+						h("dt", { children: row[0] }),
+						h("dd", { children: row[1] }));
+				}))
+			);
+		}
+
 		function TicketDetail(props) {
 			var d = props.detail;
 			var tabState = React.useState("overview");
@@ -1502,6 +1626,7 @@ var CSS =
 			var detailStatus = d.status || t.status || "idle";
 			var tabs = ["overview", "timeline", "sessions", "events", "ticket analytics"];
 			return h("div", { className: "kb-detail" },
+				h("div", { className: "kb-detail-head" },
 				h("div", { className: "kb-hero " + (detailStatus === "attention" ? "kb-hero-attention" : "kb-hero-" + t.column) },
 					h("div", { className: "kb-hero-top" },
 						h("button", { className: "kb-btn", onClick: props.onBack, children: "← Board" }),
@@ -1533,6 +1658,14 @@ var CSS =
 							title: "Plan this ticket now, in Backlog, without moving it to Working",
 							onClick: function () { props.onAction(t.id, "startPlanning", {}); }
 						}, "Start planning") : null,
+						// The same move as dragging a planned ticket into Working, for a
+						// ticket that is waiting at the build phase in Backlog.
+						canStartBuild({ column: t.column, phase: t.phase, status: detailStatus, awaitingQuestion: d.awaitingQuestion }) ? h("button", {
+							type: "button",
+							className: "kb-btn sm",
+							title: "Move this planned ticket to Working and start the build",
+							onClick: function () { props.onAction(t.id, "startBuild", {}); }
+						}, "Start build") : null,
 						// KAN-17: a mid-turn human wait has no park panel to open
 						// the session from — the engine is still inside the turn —
 						// so the hero itself offers the way to the prompt. A
@@ -1558,15 +1691,11 @@ var CSS =
 						}, "Approve plan") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
-					h("div", { className: "kb-hero-meta" },
-						h("span", null, "workspace ", h("b", { children: t.workspaceCwd || "engine default" })),
-						h("span", null, "attempts ", h("b", { children: t.attemptCount })),
-						h("span", null, "spend ", h("b", { children: fmtUsd(t.spentUsd) })),
-						h("span", null, "updated ", h("b", { children: ago(t.updatedAt) }))
-					),
-					h(Lifecycle, { ticket: t })
+					h(Lifecycle, { ticket: t, sessions: d.phaseSessions, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } })
 				),
-				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null,
+				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); }, onOpenSession: function (sessionId) { if (openSessionById) openSessionById(sessionId); } }) : h(NeedsAttention, { ticket: t, onResolve: props.onResolve })) : null),
+				h("aside", { className: "kb-detail-side" }, h(TicketMeta, { detail: d })),
+				h("div", { className: "kb-detail-main" },
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
@@ -1596,7 +1725,7 @@ var CSS =
 							delete clean.images;
 							return props.onSave(t.id, clean, images || []);
 						}
-					}))
+					})))
 			);
 		}
 
@@ -1647,20 +1776,6 @@ var CSS =
 			var usage = d.usage || {};
 			var models = Object.keys(usage.byModel || {});
 			return h("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
-				h("div", { className: "kb-panel" },
-					h("h3", { children: "Ticket" }),
-					h("div", { className: "kb-kv" },
-						h("b", { children: "Workspace" }), h("span", { children: t.workspaceCwd || "(engine default)" }),
-						h("b", { children: "Planning" }), h("span", { children: t.planTiming === "now" ? "now" : "when started" }),
-						h("b", { children: "Questions" }), h("span", { children: t.planQuestions === "autonomous" ? "decide autonomously" : "ask me" }),
-						h("b", { children: "Preset" }), h("span", { children: t.preset || "harness default" }),
-						h("b", { children: "Write mode" }), h("span", { children: t.writeMode || "workspace write" }),
-						h("b", { children: "Attempts" }), h("span", { children: t.attemptCount + " / " + (d.maxAttempts || 3) }),
-						h("b", { children: "Spend" }), h("span", { children: fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)") }),
-						h("b", { children: "Allow paid" }), h("span", { children: t.allowPaid ? "yes" : "no" }),
-						h("b", { children: "Created" }), h("span", { children: fmtTime(t.createdAt) }),
-						h("b", { children: "Updated" }), h("span", { children: ago(t.updatedAt) }))
-				),
 				h("div", { className: "kb-panel kb-md" },
 					h("h3", { children: "Body" }),
 					t.body && String(t.body).trim() !== "" ? renderMarkdown(t.body) : h("div", { className: "kb-hint", children: "Nothing written yet." })
@@ -1979,6 +2094,26 @@ var CSS =
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
 			var poll = React.useRef(0);
+			// A board response is applied only if no drop has happened since the
+			// request left and none is still in flight: an older answer would put
+			// the card back where it was for one refresh.
+			var boardEpoch = React.useRef(0);
+			var dropsInFlight = React.useRef(0);
+			var bodyRef = React.useRef(null);
+
+			// The Done / Discarded column is pinned at the height of the visible
+			// board, so scrolling the page never moves it. The height is the body's
+			// own scrollport, measured, because the board does not own the viewport.
+			React.useEffect(function () {
+				var el = bodyRef.current;
+				if (!el) return undefined;
+				function measure() { el.style.setProperty("--kb-pin-h", Math.max(240, el.clientHeight - 12) + "px"); }
+				measure();
+				var observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+				if (observer) observer.observe(el);
+				window.addEventListener("resize", measure);
+				return function () { if (observer) observer.disconnect(); window.removeEventListener("resize", measure); };
+			}, []);
 
 			// kanban-goBoardRequest: the sidebar panel row's bridge to this page's
 			// state. Clicking the row while the kanban panel is already active
@@ -1993,7 +2128,9 @@ var CSS =
 			};
 
 			function loadBoard() {
+				var asked = boardEpoch.current;
 				rpc("board", {}).then(function (res) {
+					if (asked !== boardEpoch.current || dropsInFlight.current > 0) return;
 					if (res && res.ok) setBoard(res.value);
 					else if (res && res.error) setNotice(res.error.message);
 				}, function () { setNotice("Could not reach the Host."); });
@@ -2039,7 +2176,9 @@ var CSS =
 
 			var columns = board ? board.columns : { backlog: [], working: [], done: [], discarded: [] };
 			var allTickets = Object.keys(columns).reduce(function (list, column) { return list.concat(columns[column] || []); }, []);
-			var dragTicket = dragId === null ? null : allTickets.find(function (ticket) { return ticket.id === dragId; }) || null;
+			// Done and Discarded share one column, newest closed first (the host
+			// sends it ordered; the concat covers a payload without `closed`).
+			var closedItems = columns.closed || (board && board.closed) || (columns.done || []).concat(columns.discarded || []);
 			return h("div", { className: "kb-root" },
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
@@ -2054,7 +2193,7 @@ var CSS =
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
 					)
 				),
-				h("div", { className: "kb-body" },
+				h("div", { className: "kb-body", ref: bodyRef },
 					notice ? h("div", { className: "kb-notice" }, notice) : null,
 					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); loadDetail(ticket.id); } })),
 					selectedId ? h(TicketDetail, {
@@ -2068,9 +2207,9 @@ var CSS =
 						onRecover: function (sessionId) { return act("action", { id: selectedId, action: "recoverSession", sessionId: sessionId }); }
 					}) : view === "analytics" ? h("div", { style: { maxWidth: 900 } }, h(AnalyticsPanel, { data: analyticsData })) : h("div", null,
 						h("div", { className: "kb-cols" },
-							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow }),
-							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow }),
-							h(Column, { column: "done", label: "Done / Discarded", items: columns.done.concat(columns.discarded), onOpen: open, onMove: move, onReorder: reorder, dragId: dragId, dragTicket: dragTicket, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDragOverCard: dragOverCard, onDropCard: dropCard, onStartPlanning: startPlanningNow })
+							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
+							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
+							h(Column, { column: "done", label: "Done / Discarded", items: closedItems, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt })
 						)
 					)
 				),
@@ -2143,18 +2282,19 @@ var CSS =
 				}, function () { setRoutingError("Could not reach the Host."); }).finally(function () { setRoutingSaving(false); });
 			}
 			function open(id) { setSelectedId(id); loadDetail(id); }
-			function move(id, column) {
-				if (column === "done") return;
-				act("move", { id: id, column: column });
-			}
 			function reorder(id, beforeId) {
-				if (id === beforeId) return;
-				act("reorder", { id: id, beforeId: beforeId });
+				if (id === beforeId) return Promise.resolve(null);
+				var payload = { id: id };
+				if (beforeId) payload.beforeId = beforeId;
+				return rpc("reorder", payload);
 			}
-			// KAN-16: through `act` so a failure lands in the page notice and a
-			// success refreshes the board (and the detail, if one is open).
+			// Through `act` so a failure lands in the page notice and a success
+			// refreshes the board (and the detail, if one is open).
 			function startPlanningNow(id) {
 				return act("action", { id: id, action: "startPlanning" });
+			}
+			function startBuildNow(id) {
+				return act("action", { id: id, action: "startBuild" });
 			}
 			function startDrag(id) {
 				setDragId(id);
@@ -2164,25 +2304,39 @@ var CSS =
 				setDragId(null);
 				setDropTarget(null);
 			}
-			function dragOverColumn(column) {
+			// Called continuously while the pointer moves: only a changed target
+			// is state, so a still pointer re-renders nothing.
+			function dragOverColumn(column, beforeId) {
 				if (dragId === null || column === "done") return;
-				setDropTarget({ column: column, beforeId: null });
+				setDropTarget(function (prev) {
+					return prev && prev.column === column && prev.beforeId === beforeId ? prev : { column: column, beforeId: beforeId };
+				});
 			}
-			function dragOverCard(column, beforeId) {
-				if (dragId === null || column === "done") return;
-				setDropTarget({ column: column, beforeId: beforeId });
-			}
-			function dropCard(id, column, beforeId) {
-				if (column === "done") { finishDrag(); return; }
-				var source = allTickets.find(function (ticket) { return ticket.id === id; });
+			function dropAt(id, column, beforeId) {
 				finishDrag();
+				if (column === "done") return;
+				var source = allTickets.find(function (ticket) { return ticket.id === id; });
 				if (source === undefined) return;
-				if (source.column === column) {
-					reorder(id, beforeId);
-					return;
-				}
-				act("move", { id: id, column: column }).then(function (res) {
-					if (res && res.ok && beforeId) reorder(id, beforeId);
+				var ids = (columns[column] || []).map(function (ticket) { return ticket.id; });
+				var sameColumn = source.column === column;
+				if (sameColumn && dropIsNoop(ids, id, beforeId)) return;
+				// Show the card where it was dropped before the requests return,
+				// and hold back older board answers until they have.
+				boardEpoch.current += 1;
+				dropsInFlight.current += 1;
+				setBoard(function (prev) { return prev ? Object.assign({}, prev, { columns: moveInColumns(prev.columns, id, column, beforeId) }) : prev; });
+				var work = sameColumn ? reorder(id, beforeId) : rpc("move", { id: id, column: column }).then(function (res) {
+					if (res && res.ok && ids.length > 0) return reorder(id, beforeId);
+					return res;
+				});
+				work.then(function (res) {
+					if (res && res.ok === false) setNotice(res.error ? res.error.message : "That did not work.");
+					else setNotice(null);
+				}, function () { setNotice("Could not reach the Host."); }).then(function () {
+					dropsInFlight.current -= 1;
+					boardEpoch.current += 1;
+					loadBoard();
+					if (selectedId) loadDetail(selectedId);
 				});
 			}
 		}
