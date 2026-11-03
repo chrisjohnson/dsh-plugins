@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.24.2
+
 ### Fixed
 
 - **The Preset picker and the ticket Details row now say the harness names.** A
