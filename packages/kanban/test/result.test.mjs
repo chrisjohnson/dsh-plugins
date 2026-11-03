@@ -7,6 +7,7 @@ import {
   extractJson,
   gateImplement,
   isSpecificEvidence,
+  nonDeferredProven,
   normalizePlan,
   validateAdjudication,
   validateGrill,
@@ -311,4 +312,22 @@ test('gaps split into what the build must fix and what the reviewer must fix', (
   // human with its exact text. Nothing is approved by being called cosmetic.
   assert.deepEqual(classifyGaps(['something new']).substantive, [])
   assert.deepEqual(classifyGaps(['something new']).cosmetic, ['something new'])
+})
+
+test('a fail must prove every non-deferred condition with a met:true row', () => {
+  const conditions = [
+    { id: 'A', statement: 'a', howVerified: 'v' },
+    { id: 'B', statement: 'b', howVerified: 'v' },
+    { id: 'D', statement: 'd', howVerified: 'v', deferred: true, humanEvidence: 'he' },
+  ]
+  const row = (id, met) => ({ id, met, confidence: 0.9, evidence: 'x' })
+  assert.deepEqual(nonDeferredProven({ done_when: [row('A', true), row('B', true), row('D', false)] }, conditions), { ok: true, unproven: [] })
+  // A missing row is not proof: the tool lets a fail omit rows it already bounced.
+  assert.deepEqual(nonDeferredProven({ done_when: [row('A', true), row('D', false)] }, conditions), { ok: false, unproven: ['B'] })
+  assert.deepEqual(nonDeferredProven({ done_when: [] }, conditions), { ok: false, unproven: ['A', 'B'] })
+  // An unmet non-deferred row is a real gap, not a lack of proof.
+  assert.deepEqual(nonDeferredProven({ done_when: [row('A', false), row('B', true), row('D', false)] }, conditions), { ok: false, unproven: ['A'] })
+  // Deferred conditions are never required to be proven.
+  assert.deepEqual(nonDeferredProven({ done_when: [row('A', true), row('B', true)] }, conditions), { ok: true, unproven: [] })
+  assert.deepEqual(nonDeferredProven({}, conditions), { ok: false, unproven: ['A', 'B'] })
 })

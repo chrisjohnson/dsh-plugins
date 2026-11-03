@@ -1153,6 +1153,57 @@ test('a fail whose only unmet conditions are deferred is routed like a pass', as
   assert.deepEqual(requested.payload.deferred, ['release-landed'])
 })
 
+test('a fail that never proves the build condition is retried, not approved', async () => {
+  // KAN-31 review finding: `substantive.length === 0` was not the same as "every
+  // non-deferred condition met". A fail listing only the deferred row proves
+  // nothing about `notes`, so it must not reach approval.
+  const unprovenFail = {
+    verdict: 'fail',
+    reasons: ['the release is not landed'],
+    instruction: 'nothing for the build to do',
+    done_when: [{ id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it at approval' }],
+    acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
+  }
+  const { store, engine, driver } = setup(deferredQueues({
+    review: [{ type: 'review', value: unprovenFail }, { type: 'review', value: REVIEW_DEFERRED }],
+  }))
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  // The retry fixed the submission, and only then did the ticket reach approval.
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).attemptCount, 1, 'the reviewer omission cost the build nothing')
+  const retry = store.latestArtifact(ticket.id, 'reviewer_prompt_review-retry').content
+  assert.match(retry, /done_when\.notes is missing from the review/)
+  assert.match(retry, /done_when\.notes is not proven met by the review/)
+  assert.match(retry, /Your review failed, but it cannot be code-verified as submitted/)
+  assert.equal(retry.includes('Your review passed'), false, 'a fail must not be told it passed')
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  assert.equal(driver.turns.filter((id) => id === buildId).length, 4, 'implement, review, review-retry, approval')
+})
+
+test('a fail that keeps omitting the build condition parks instead of approving', async () => {
+  const unprovenFail = {
+    verdict: 'fail',
+    reasons: ['the release is not landed'],
+    instruction: 'nothing for the build to do',
+    done_when: [{ id: 'release-landed', met: false, confidence: 0.95, evidence: 'the human lands it at approval' }],
+    acceptance_coverage: [{ condition: 'notes', acceptance: 'note exists' }],
+  }
+  const { store, engine, driver } = setup(deferredQueues({
+    review: [{ type: 'review', value: unprovenFail }, { type: 'review', value: unprovenFail }],
+  }))
+  const ticket = pickedUp(store)
+  await engine.advance(store.getTicket(ticket.id))
+  const parked = store.getTicket(ticket.id)
+  assert.equal(parked.phase, 'review', 'never approved, and never sent back to the build')
+  assert.notEqual(parked.needsAttentionReason, 'Awaiting human approval')
+  assert.match(parked.needsAttentionReason, /not proven met by the review/)
+  assert.equal(parked.attemptCount, 1)
+  assert.equal(store.listSpans(ticket.id).filter((span) => span.name === 'implement').length, 1)
+  const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
+  assert.equal(driver.turns.filter((id) => id === buildId).length, 3, 'implement, review, one retry — then the park')
+})
+
 test('a cosmetic gap gets exactly one retry turn, in the review session, quoting the gap', async () => {
   const { store, engine, driver } = setup({
     review: [
@@ -1250,6 +1301,48 @@ test('a rework round against an unchanged working tree parks with no progress', 
   assert.match(parked.needsAttentionReason, /notes/, 'the reason names the condition still failing')
   const signature = JSON.parse(store.latestArtifact(ticket.id, 'rework_signature').content)
   assert.deepEqual(signature.failingIds, ['notes'])
+})
+
+test('a rework round that commits its work is not called no-progress', async () => {
+  // The fingerprint reads `git diff HEAD`, which is relative to HEAD: a round
+  // that commits leaves a clean tree and would otherwise hash exactly like the
+  // round that did nothing. HEAD is part of the fingerprint for this case.
+  const cwd = gitRepo()
+  const { store, engine, driver } = setup(
+    {
+      implement: [
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+        { type: 'implementation', value: IMPLEMENTATION },
+      ],
+      review: [
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_FAIL_ROW },
+        { type: 'review', value: REVIEW_PASS },
+      ],
+    },
+    {},
+  )
+  const ticket = pickedUp(store, { workspaceCwd: cwd })
+  const git = (...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' })
+  let buildTurns = 0
+  const sendTurn = driver.sendTurn.bind(driver)
+  driver.sendTurn = async (input) => {
+    if (driver.sessions.get(input.sessionId)?.role === 'implementer') {
+      buildTurns += 1
+      if (buildTurns === 2) {
+        // This round does its work AND commits it: the tree is clean again.
+        writeFileSync(join(cwd, 'notes.txt'), 'hello\n')
+        git('add', 'notes.txt')
+        git('-c', 'user.email=test@example.com', '-c', 'user.name=test', 'commit', '-q', '-m', 'notes')
+      }
+    }
+    return sendTurn(input)
+  }
+  await engine.advance(store.getTicket(ticket.id))
+  assert.equal(buildTurns, 3, 'the third round ran: a committed round is progress, not a repeat')
+  assert.equal(store.getTicket(ticket.id).phase, 'verify')
+  assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
 })
 
 test('a rework round that moves the tree is not called no-progress', async () => {

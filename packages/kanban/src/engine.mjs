@@ -14,7 +14,7 @@ import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
-import { normalizePlan, validatePlan, verifyReview, classifyGaps } from './result.mjs';
+import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 
@@ -626,7 +626,26 @@ export class Engine {
     for (const row of Array.isArray(value.done_when) ? value.done_when : []) {
       if (row !== null && typeof row === 'object' && row.met !== true && row.id !== undefined) failing.add(String(row.id));
     }
-    if (substantive.length === 0 && deferred.length > 0) return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+    // A fail that leaves only deferred conditions open is describing a pass — but
+    // only if it actually proved the build's own conditions. `met: true` for every
+    // non-deferred id is that proof. A missing row is not: the tool lets a fail
+    // omit rows it already bounced, so absence is bookkeeping, never evidence.
+    // Such a review goes back to the reviewer (one retry, then a park) rather than
+    // approving a ticket nobody checked or burning a build round on the reviewer's
+    // own omission.
+    if (substantive.length === 0 && deferred.length > 0) {
+      const proven = nonDeferredProven(value, conditions);
+      if (proven.ok) return { route: 'approval', gaps, substantive, cosmetic, deferred, failingIds: [] };
+      const unproven = proven.unproven.map((id) => `done_when.${id} is not proven met by the review`);
+      return {
+        route: 'cosmetic',
+        gaps: [...gaps, ...unproven],
+        substantive,
+        cosmetic: [...cosmetic, ...unproven],
+        deferred,
+        failingIds: [],
+      };
+    }
     return { route: 'implement', gaps, substantive, cosmetic, deferred, failingIds: [...failing] };
   }
 
@@ -654,9 +673,12 @@ export class Engine {
    * The message is the exact gap text plus the two lists the gate checks against,
    * so the reviewer has nothing to guess.
    */
-  reviewRetryPrompt(conditions, acceptance, cosmetic) {
+  reviewRetryPrompt(conditions, acceptance, cosmetic, verdict = 'pass') {
+    const opening = verdict === 'pass'
+      ? 'Your review passed, but it cannot be code-verified. The gaps are in the review submission itself, not in the work.'
+      : 'Your review failed, but it cannot be code-verified as submitted. The gaps below are in your own answer, not in the work: you left a condition the build is responsible for unproven, so the engine can neither send the build back on it nor treat the review as complete.'
     return [
-      'Your review passed, but it cannot be code-verified. The gaps are in the review submission itself, not in the work — do not change any file, and do not send the build away to fix what only your answer can fix.',
+      opening + ' Do not change any file, and do not send the build away to fix what only your answer can fix.',
       '',
       ...cosmetic.map((gap) => `- ${gap}`),
       '',
@@ -714,7 +736,7 @@ export class Engine {
     // no attempt is spent, and a reviewer that fixes its own answer continues
     // from here exactly as if it had been right the first time.
     this.appendEvent(ticket.id, 'review_retry', { phaseFrom: 'review', phaseTo: 'review', payload: { gaps: decision.cosmetic } });
-    const retryPrompt = this.reviewRetryPrompt(conditions, acceptance, decision.cosmetic);
+    const retryPrompt = this.reviewRetryPrompt(conditions, acceptance, decision.cosmetic, value.verdict);
     let retry = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt: retryPrompt, spanName: 'review-retry', attempt: ticket.attemptCount, runId });
     if (retry.kind !== 'ok') retry = (await this.autoRecover(ticket, retry, 'review')) ?? retry;
     if (retry.kind !== 'ok') return this.failedTurn(ticket, retry, 'review');
@@ -1259,16 +1281,20 @@ export class Engine {
     const config = this.getConfig();
     const cwd = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
     try {
-      const [status, diff] = await Promise.all([
+      const [status, diff, head] = await Promise.all([
         execFileAsync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: 10_000, maxBuffer: 100_000 }),
         execFileAsync('git', ['-C', cwd, 'diff', 'HEAD'], { timeout: 10_000, maxBuffer: MAX_DIFF_BYTES }),
+        // HEAD is part of the fingerprint because `diff HEAD` is relative to it:
+        // a round that committed its work leaves a clean tree and would otherwise
+        // look exactly like a round that did nothing.
+        execFileAsync('git', ['-C', cwd, 'rev-parse', 'HEAD'], { timeout: 10_000, maxBuffer: 1000 }),
       ]);
       const untracked = status.stdout
         .split('\n')
         .filter((line) => line.startsWith('??'))
         .map((line) => line.slice(3))
         .slice(0, 50);
-      return hashText(`${status.stdout}\n${untracked.join('\n')}\n${diff.stdout}`);
+      return hashText(`${head.stdout}\n${status.stdout}\n${untracked.join('\n')}\n${diff.stdout}`);
     } catch {
       return null;
     }
