@@ -137,6 +137,18 @@ var CSS =
 		+ ".kb-detail{max-width:1180px;display:flex;flex-direction:column;gap:14px}"
 		+ ".kb-panel{border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-base,#fff);padding:12px 14px}"
 		+ ".kb-panel h3{margin:0 0 8px;font:600 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-secondary,#555);text-transform:uppercase;letter-spacing:.04em}"
+		// KAN-57: the Plan panel. It sits under the Body and is the thing a parked
+		// ticket is waiting on, so while it waits it wears the same attention red
+		// the cards and banners already use, with a slow glow to catch the eye.
+		+ ".kb-plan-steps{margin:4px 0 0;padding-left:20px;font:400 12px/19px var(--dsw-font-family,sans-serif)}"
+		+ ".kb-plan-steps li{margin:0 0 3px}"
+		// Two classes on purpose: a later `.kb-panel` rule restates border-color,
+		// so a single-class `.kb-plan-await` would lose to it and the panel would
+		// glow with a grey edge.
+		+ ".kb-panel.kb-plan-await{border-color:color-mix(in srgb,#b91c1c 55%,var(--dsw-alias-border-l2,#e2e6ea));background:color-mix(in srgb,#b91c1c 4%,var(--dsw-alias-bg-base,#fff));animation:kb-plan-glow 2.6s ease-in-out infinite}"
+		+ ".kb-plan-await h3{color:#b91c1c}"
+		+ ".kb-plan-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:11px;border-top:.5px solid var(--dsw-alias-border-l2,#e2e6ea)}"
+		+ ".kb-plan-await .kb-plan-actions{border-top-color:color-mix(in srgb,#b91c1c 22%,var(--dsw-alias-border-l2,#e2e6ea))}"
 		+ ".kb-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}"
 		+ ".kb-kv{display:grid;grid-template-columns:130px 1fr;gap:3px 10px;font-size:12px;line-height:18px}"
 		+ ".kb-kv b{font-weight:500;color:var(--dsw-alias-label-tertiary,#888)}"
@@ -370,7 +382,9 @@ var CSS =
 		+ ".kb-banner.warn::before{background:#b91c1c}"
 		+ "@keyframes kb-pulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.5)}70%{box-shadow:0 0 0 6px rgba(37,99,235,0)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}}"
 		+ "@keyframes kb-glow-blue{0%,100%{box-shadow:0 0 0 1px rgba(37,99,235,.08),0 4px 16px rgba(37,99,235,.05)}50%{box-shadow:0 0 0 1.5px rgba(37,99,235,.32),0 8px 28px rgba(37,99,235,.15)}}"
-		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}}"
+		// KAN-57: the same slow glow as an active card, in the attention red.
+		+ "@keyframes kb-plan-glow{0%,100%{box-shadow:0 0 0 1px rgba(185,28,28,.20),0 0 10px rgba(185,28,28,.16)}50%{box-shadow:0 0 0 2px rgba(185,28,28,.46),0 0 24px rgba(185,28,28,.34)}}"
+		+ "@media (prefers-reduced-motion:reduce){.kb-card.active,.kb-statusdot.active,.kb-life.active .kb-life-dot,.kb-seg-indicator,.kb-seg-tab,.kb-switch-thumb{animation:none;transition:none}.kb-plan-await{animation:none;box-shadow:0 0 0 1px rgba(185,28,28,.35)}}"
 		+ "@media (max-width:900px){.kb-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}"
 		+ ".kb-img-row{display:flex;align-items:center;gap:8px;margin:4px 0 2px}"
 		+ ".kb-img-rail{display:flex;flex-wrap:wrap;gap:8px;margin:8px 2px 6px;padding:0 6px}"
@@ -899,6 +913,24 @@ var CSS =
 			if (t.column !== "backlog" || t.phase !== "implement") return false;
 			if ((t.status || "idle") === "active" || t.awaitingQuestion) return false;
 			return true;
+		}
+
+		// KAN-57: the plan park. A plan that declares sandbox grants waits on one
+		// human decision, and the only thing that says so is the attention
+		// reason. This is the test the hero's Approve-plan button used, moved here
+		// so the Plan panel knows when it is the thing being waited on: glow, and
+		// carry the buttons.
+		function planAwaitsApproval(t) {
+			return !!t && t.phase === "plan" && String(t.needsAttentionReason || "").indexOf("Plan ready:") === 0;
+		}
+
+		// The plan's release scope in one line, worded the way the server renders
+		// it in src/render.mjs, so the board and the ticket text describe one plan
+		// the same way.
+		function releaseScopeLabel(scope) {
+			if (scope === "stop_before_merge") return "release scope: stop before the release — merging, tagging and deploying are the human's deferred steps";
+			if (scope === "full_release") return "release scope: full release — this build carries the release through (merge, tag, deploy) unless a condition is deferred";
+			return "release scope: " + String(scope);
 		}
 
 		// Where the pointer sits among a column's cards: the id of the first card
@@ -2130,29 +2162,16 @@ var CSS =
 						}) : null,
 						// Recovery actions. The host decides which apply (d.actions);
 						// these are conditional elements, never conditional hooks.
-						d.actions && d.actions.revisePlan ? h("button", {
-							type: "button",
-							className: "kb-btn sm",
-							title: "Ask the plan session for a revised plan before the build starts",
-							onClick: function () { setModal("revisePlan"); }
-						}, "Revise plan") : null,
+						// KAN-57: the plan's own buttons — Approve plan and Revise
+						// plan — now live in the Plan panel below, next to the plan
+						// they answer. The hero keeps the chip that says a decision
+						// is owed.
 						d.actions && d.actions.markDone ? h("button", {
 							type: "button",
 							className: "kb-btn sm",
 							title: "Close this ticket as done because the work was finished outside the engine",
 							onClick: function () { setModal("markDone"); }
-						}, "Mark done") : null,
-						// KAN-30: a plan that declared sandbox grants parks for
-						// one decision — this button. Approving the plan is the
-						// one-time grant: the build starts with exactly these
-						// escalations pre-approved, and everything else still
-						// asks. A conditional element only, never a hook.
-						t.phase === "plan" && String(t.needsAttentionReason || "").indexOf("Plan ready:") === 0 ? h("button", {
-							type: "button",
-							className: "kb-btn primary sm",
-							title: "Approve the plan and its sandbox grants, and start the build",
-							onClick: function () { props.onResolve(t.id, "approvePlan"); }
-						}, "Approve plan") : null
+						}, "Mark done") : null
 					),
 					h("h2", { className: "kb-hero-title", children: t.title }),
 					h(Lifecycle, { ticket: t, sessions: d.phaseSessions, onOpenSession: function (sessionId) { openOrComplain(sessionId); } })
@@ -2165,7 +2184,7 @@ var CSS =
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
 				})),
-				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onEditAcceptance: function () { setModal("ticket"); } }) : null,
+				tab === "overview" ? h(Overview, { detail: d, onSave: props.onSave, onAction: props.onAction, onResolve: props.onResolve, onRevisePlan: function () { setModal("revisePlan"); }, onEditAcceptance: function () { setModal("ticket"); } }) : null,
 				tab === "timeline" ? h("div", { className: "kb-panel" },
 					h("h3", { children: "Workflow timeline" }),
 					h("div", { className: "kb-row", style: { marginBottom: 8 } },
@@ -2323,6 +2342,41 @@ var CSS =
 					h("h3", { children: "Body" }),
 					t.body && String(t.body).trim() !== "" ? renderMarkdown(t.body) : h("div", { className: "kb-hint", children: "Nothing written yet." })
 				),
+				// KAN-57: the plan itself, directly under the body it answers. The
+				// plan artifact has always arrived on the detail; only its done_when
+				// rows and its sandbox grants were ever drawn, so the person asked to
+				// approve a parked plan was never shown the plan. While the ticket is
+				// parked on that decision the panel glows and carries the buttons that
+				// answer it — they used to sit in the hero, far from what they act on.
+				// A ticket with no plan renders nothing, exactly like the grants panel
+				// below. Conditional elements only, never a conditional hook.
+				d.plan ? h("div", { className: "kb-panel kb-md" + (planAwaitsApproval(t) ? " kb-plan-await" : "") },
+					h("h3", { children: d.plan.planVersion ? "Plan · v" + d.plan.planVersion : "Plan" }),
+					String(d.plan.summary || "").trim() !== "" ? renderMarkdown(d.plan.summary) : h("div", { className: "kb-hint", children: "The plan has no summary." }),
+					(Array.isArray(d.plan.steps) ? d.plan.steps : []).length > 0 ? h("div", { style: { marginTop: 8 } },
+						h("div", { className: "kb-hint", children: "steps" }),
+						h("ol", { className: "kb-plan-steps" }, d.plan.steps.map(function (step, i) {
+							return h("li", { key: i, children: String(step) });
+						}))) : null,
+					d.plan.releaseScope ? h("div", { className: "kb-row", style: { marginTop: 8 } },
+						h("span", { className: "kb-chip", children: releaseScopeLabel(d.plan.releaseScope) })) : null,
+					planAwaitsApproval(t) || (d.actions && d.actions.revisePlan) ? h("div", { className: "kb-plan-actions" },
+						// KAN-30: approving the plan is the one-time grant — the build
+						// then starts with exactly these escalations pre-approved and
+						// everything else still asks.
+						planAwaitsApproval(t) ? h("button", {
+							type: "button",
+							className: "kb-btn primary sm",
+							title: "Approve the plan and its sandbox grants, and start the build",
+							onClick: function () { props.onResolve(t.id, "approvePlan"); }
+						}, "Approve plan") : null,
+						d.actions && d.actions.revisePlan ? h("button", {
+							type: "button",
+							className: "kb-btn sm",
+							title: "Ask the plan session for a revised plan before the build starts",
+							onClick: props.onRevisePlan
+						}, "Revise plan") : null) : null
+				) : null,
 				h("div", { className: "kb-panel" },
 					h("div", { className: "kb-panelhead" },
 						h("h3", { children: "Acceptance — the human's words, verbatim" }),

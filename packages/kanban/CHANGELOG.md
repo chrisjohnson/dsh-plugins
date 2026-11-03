@@ -5,6 +5,19 @@
 
 ## Unreleased
 
+### Added
+
+- **The ticket page now shows the plan.** The plan artifact has always arrived on
+  the detail payload, but only its `done_when` rows and its sandbox grants were
+  ever drawn, so a ticket parked on "Plan ready" asked for a decision without
+  showing the thing being decided on. The Overview renders a **Plan** panel
+  directly below the Body: the summary as markdown, the numbered steps, and the
+  release scope, with the plan version in the heading. While the ticket is parked
+  on that decision the panel wears a red glowing border and carries **Approve
+  plan** and **Revise plan** inside it; both buttons moved out of the ticket hero,
+  which keeps the "awaiting approval" chip. A ticket with no plan renders nothing,
+  exactly as the grants panel already did.
+
 ## 0.24.2
 
 ### Fixed
