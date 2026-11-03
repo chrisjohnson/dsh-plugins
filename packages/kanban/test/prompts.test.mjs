@@ -474,8 +474,8 @@ const RICH_PLAN = {
   steps: ['write the matcher', 'wire the listener'],
   release_scope: 'stop_before_merge',
   sandbox: {
-    grants: { paths: ['/srv/lab/kan9-grant'], commands: ['gh pr create'] },
-    checks: [{ path: '/srv/lab/kan9-grant', check: 'test -w', observed: 'writable' }],
+    grants: { paths: ['/srv/ws/kan9-grant'], commands: ['gh pr create'] },
+    checks: [{ path: '/srv/ws/kan9-grant', check: 'test -w', observed: 'writable' }],
   },
   done_when: [
     { id: 'matcher-tested', statement: 'the matcher has tests', how_verified: 'npm test exits 0' },
@@ -567,9 +567,9 @@ test('the build prompt renders the plan, conditions, grants, scope and the submi
   assert.match(implement, /1\. write the matcher\n2\. wire the listener/)
   assert.match(implement, /### Release scope/)
   assert.match(implement, /### Sandbox grants/)
-  assert.match(implement, /- \/srv\/lab\/kan9-grant/)
+  assert.match(implement, /- \/srv\/ws\/kan9-grant/)
   assert.match(implement, /- gh pr create/)
-  assert.match(implement, /`\/srv\/lab\/kan9-grant` — checked: test -w; observed: writable/)
+  assert.match(implement, /`\/srv\/ws\/kan9-grant` — checked: test -w; observed: writable/)
   assert.match(implement, /- `matcher-tested` — the matcher has tests\n  - how verified: npm test exits 0\n  - source: plan/)
   assert.match(implement, /\(deferred to approval — human evidence: ls-remote prints a sha\)/)
   assert.match(implement, /## Submission contract/)
@@ -601,7 +601,7 @@ test('the build and rework prompts forbid handoff documents', async () => {
   const { implement, rework } = await richRun()
   for (const prompt of [implement, rework]) {
     assert.match(prompt, /Do not create handoff, runbook, deploy-notes, smoke-results or summary documents anywhere in the repository\./)
-    assert.match(prompt, /Report what shipped and what the human still needs to do in your final message, and keep run evidence under the ignored lab directory\./)
+    assert.match(prompt, /Report what shipped and what the human still needs to do in your final message, and keep run evidence under an ignored directory\./)
   }
 })
 
@@ -609,4 +609,27 @@ test('the build prompt names the ticket-scoped clone convention', async () => {
   const { implement } = await richRun()
   assert.match(implement, /`kan1-plugins` and `kan1-deploy`/)
   assert.match(implement, /never write to the live production checkout/)
+})
+
+test('the implement, rework and review prompts no longer restate the working directory', async () => {
+  const { implement, rework, review } = await richRun()
+  for (const [name, prompt] of Object.entries({ implement, rework, review })) {
+    assert.equal(prompt.includes('Working directory'), false, `${name}: no working directory line`)
+    assert.equal(prompt.includes(CWD), false, `${name}: the session's cwd is not repeated`)
+  }
+  // The rest of each prompt is unchanged: the first line is followed directly by the body.
+  assert.match(implement, /^Implement the plan for kanban ticket [^\n]*\n\nBefore starting work/)
+  assert.match(rework, /^Review requested changes to kanban ticket [^\n]*\n\nAddress every reason/)
+  assert.match(review, /^Review the implementation of kanban ticket [^\n]*\n\nThe ticket, the plan/)
+})
+
+test('both plan prompts say what a path grant covers and what needs a command grant', async () => {
+  const prompts = await loadPrompts({}, PACKAGE_DIR)
+  for (const name of ['plan-self', 'plan-human']) {
+    const body = prompts.bodies[name]
+    assert.match(body, /so is a bash call that `cd`s into or names absolute paths only inside that path/, name)
+    assert.match(body, /useful only through that bash coverage/, name)
+    assert.match(body, /Network commands \(`git fetch`, `git push`, `gh`, a `pnpm install` that downloads\) and workspace-relative commands/, name)
+    assert.match(body, /declare each as a command prefix/, name)
+  }
 })

@@ -32,7 +32,7 @@ import { registerActionTools } from './actions.mjs';
 import { TurnActivity } from './activity.mjs';
 import { sessionTitle } from './board-view.mjs';
 import { makeGrantApprover } from './grants.mjs';
-import { makeGuardApprover, resolveLiveCheckouts } from './guard.mjs';
+import { makeGuardApprover, resolveLiveCheckouts, resolveReadOnlyCommands } from './guard.mjs';
 import { askUserToolDefinition, makeQuestionAnswerer } from './questions.mjs';
 
 export class DispatchError extends Error {
@@ -671,7 +671,18 @@ export class SessionDriver {
     // Registered second and prepended, so it runs before the grant approver:
     // a denied target can never be rescued by a grant.
     try {
-      const guard = makeGuardApprover({ store: this.store, log: this.log, getLiveCheckouts: () => resolveLiveCheckouts(this.getConfig()) });
+      const guard = makeGuardApprover({
+        store: this.store,
+        log: this.log,
+        getLiveCheckouts: () => resolveLiveCheckouts(this.getConfig()),
+        getReadOnlyCommands: () => resolveReadOnlyCommands(this.getConfig()),
+        // The approval service tells the model only "the user rejected ...";
+        // steering the reason in keeps a policy denial from reading as a person.
+        steer: (denied, { text, summary }) => denied.steer(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'plugin:dsh-kanban', form: 'notice', summary: summary.slice(0, 120) },
+        })),
+      });
       agentCtx.on('approval/request', guard, { prepend: true });
     } catch (error) {
       this.log.warn('kanban guard: approver could not be registered: %s', String(error?.message ?? error));

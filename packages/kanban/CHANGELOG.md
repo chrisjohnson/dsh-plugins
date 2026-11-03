@@ -5,6 +5,37 @@
 
 ## Unreleased
 
+## 0.24.0
+
+### Added
+
+- A sandbox path grant now also covers bash calls that stay inside it: a call
+  with no command-grant match is auto-approved when it is not denylisted, names
+  only paths inside a granted path, the ticket's workspace or platform temp, and
+  names at least one absolute path (or `cd` target) inside a granted path. Network
+  commands and commands that name no absolute path still need a command grant.
+  `grant_applied` events record `kind` (`path` or `command`).
+- `plan_ready` events carry an `advisory` when a plan declares path grants but no
+  command grants.
+- `liveCheckoutReadOnlyCommands` (default none): command prefixes a deployment
+  treats as read-only inspection from a live checkout.
+- A guard denial steers a notice into the denied session saying it was a policy
+  rule, not a person, naming the rule and path, and what to do instead.
+
+### Changed
+
+- The live-checkout guard allows `git fetch` (no refspec, `--force` or `--prune`)
+  and no longer treats `2>&1` or redirects to `/dev/null` as writes.
+- Both planner prompts and the `kanban_submit_plan` sandbox description say what a
+  path grant covers and that network and workspace-relative commands need command
+  grants.
+- The implement, rework and review prompts no longer restate the working
+  directory; the session already starts there.
+- The new-ticket worktree switch defaults to on when the worktree service is
+  mounted, in the form and on the host `create` path.
+- The implement and rework prompts say to keep run evidence under "an ignored
+  directory" instead of naming one.
+
 ## 0.23.0
 
 ### Changed
@@ -215,8 +246,7 @@
   result. Tool-call argument schemas are unchanged.
 - **Build and rework prompts forbid handoff documents.** They tell the agent not to
   create handoff, runbook, deploy-notes, smoke-results or summary documents, to
-  report in its final message, and to keep run evidence under the ignored lab
-  directory.
+  report in its final message, and to keep run evidence under the ignored directory.
 - **Cross-ticket checkout access is denied, not prompted.** A sandbox escalation
   from one ticket's build session that reaches another open ticket's workspace,
   worktree or clone (a path segment `kan<number>` or `kan<number>-<name>`) resolves
@@ -429,7 +459,7 @@
 - **Plans can front-load their sandbox permissions** (KAN-30). A build session
   that needs to write outside its workspace root, or run a command the standing
   sandbox would deny, used to stop mid-turn and ask a human every single time —
-  the KAN-17 `~/dsh-lab` and KAN-29 `/tmp` classes of surprise. Now the plan
+  the classes of surprise a missing directory or an unwritable `/tmp` cause. Now the plan
   protocol grows an optional `sandbox` section: `grants.paths` (absolute paths
   the build may write) and `grants.commands` (token-prefix bash commands), plus
   `checks` — the read-only `test -w` probes the planner ran for each declared
@@ -474,7 +504,7 @@
   ticket". Human approval is already implicit for every ticket (a passing review
   moves the ticket straight to a human), so when the real acceptance is human
   judgement the plan should carry the strongest agent-verifiable proxy — tests,
-  a lab smoke, a grep or `git ls-remote` check — and leave the judgement to the
+  a smoke run, a grep or `git ls-remote` check — and leave the judgement to the
   approval step. The `kanban_submit_plan` tool's `done_when` description says
   the same at submission time, and a new prompt test pins the coaching into the
   rendered `planner_prompt_plan` artifact.

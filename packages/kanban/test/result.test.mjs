@@ -130,9 +130,9 @@ test('plan normalization carries the sandbox section and leaves a plain plan unt
   const withGrants = normalizePlan({
     summary: 's',
     done_when: [{ id: 'a', statement: 'st', how_verified: 'h' }],
-    sandbox: { grants: { paths: ['/lab/grant'], commands: ['git push'] }, checks: [{ path: '/lab/grant', check: 'test -w /lab/grant', observed: 'writable' }] },
+    sandbox: { grants: { paths: ['/ws/grant'], commands: ['git push'] }, checks: [{ path: '/ws/grant', check: 'test -w /ws/grant', observed: 'writable' }] },
   })
-  assert.deepEqual(withGrants.sandbox.grants, { paths: ['/lab/grant'], commands: ['git push'] })
+  assert.deepEqual(withGrants.sandbox.grants, { paths: ['/ws/grant'], commands: ['git push'] })
   assert.equal(withGrants.sandbox.checks[0].observed, 'writable')
   const plain = normalizePlan({ summary: 's', done_when: [{ id: 'a', statement: 'st', how_verified: 'h' }] })
   assert.equal('sandbox' in plain, false)

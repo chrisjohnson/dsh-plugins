@@ -132,7 +132,7 @@ test('a revised plan that declares sandbox grants waits for the human like any f
   assert.equal(parked.phase, 'plan', 'back to the plan-approval wait')
   assert.equal(isPlanReady(parked.needsAttentionReason), true)
   assert.equal(store.currentPlanVersion(ticket.id), 2)
-  assert.deepEqual(JSON.parse(store.latestArtifact(ticket.id, 'plan').content).sandbox.grants, { paths: ['/lab/grant'], commands: ['git push'] })
+  assert.deepEqual(JSON.parse(store.latestArtifact(ticket.id, 'plan').content).sandbox.grants, { paths: ['/ws/grant'], commands: ['git push'] })
   // And the human approving it is what starts the build, as always.
   await engine.approvePlan(ticket.id)
   assert.equal(store.getTicket(ticket.id).phase, 'implement')
@@ -145,10 +145,10 @@ test('revising a plan in the plan-approval wait: new grants supersede the old, n
   assert.equal(isPlanReady(withGrants.store.getTicket(ticket.id).needsAttentionReason), true)
   assert.equal(withGrants.engine.planRevisionBlock(withGrants.store.getTicket(ticket.id)), null, 'revisable while waiting for plan approval')
   // A narrower plan with fresh grants replaces the old ones.
-  const narrower = { ...PLAN_GRANTS, sandbox: { grants: { paths: ['/lab/other'], commands: [] }, checks: [{ path: '/lab/other', check: 'test -w /lab/other', observed: 'writable' }] } }
+  const narrower = { ...PLAN_GRANTS, sandbox: { grants: { paths: ['/ws/other'], commands: [] }, checks: [{ path: '/ws/other', check: 'test -w /ws/other', observed: 'writable' }] } }
   withGrants.driver.queues.planner.push({ type: 'plan', value: narrower })
-  await revise(withGrants.engine, ticket.id, 'only /lab/other')
-  assert.deepEqual(JSON.parse(withGrants.store.latestArtifact(ticket.id, 'plan').content).sandbox.grants.paths, ['/lab/other'])
+  await revise(withGrants.engine, ticket.id, 'only /ws/other')
+  assert.deepEqual(JSON.parse(withGrants.store.latestArtifact(ticket.id, 'plan').content).sandbox.grants.paths, ['/ws/other'])
   assert.equal(isPlanReady(withGrants.store.getTicket(ticket.id).needsAttentionReason), true, 'still waiting for approval of the new grants')
   assert.equal(withGrants.store.currentPlanVersion(ticket.id), 2)
   // A plan with no grants at all leaves nothing to approve: the park lifts.

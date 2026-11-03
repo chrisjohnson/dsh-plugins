@@ -145,7 +145,7 @@ event, not as spans.
 
 ## Verification evidence
 
-Environment: the default lab at `~/dsh-lab/default` (port 3099), linked to this
+Environment: the default lab at `~/scratch/work/default` (port 3099), linked to this
 checkout with `--preserve-symlinks`, provider route `local-ai-machine` with
 `maxConcurrent: 3`.
 
@@ -436,7 +436,7 @@ person".
 
 A build session confined to its workspace asks a human for every out-of-tree
 write and every denied command, one prompt at a time, mid-turn. The ticket
-already knows — at planning time — that it will need `~/dsh-lab` or a `gh`
+already knows — at planning time — that it will need `~/scratch/work` or a `gh`
 config write. KAN-30 moves that decision to where the human actually is.
 
 - **Plugin-only, through the `approval/request` waterfall.** The harness already

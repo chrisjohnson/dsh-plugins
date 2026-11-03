@@ -19,7 +19,7 @@ import { cloneNames, resolveLiveCheckouts } from './guard.mjs';
 import { archiveSkipReason, archivesColumn, copyIsGone } from './archive.mjs';
 import { conditionsMarkdown, implementResultMarkdown, planMarkdown, reviewMarkdown, submissionContract } from './render.mjs';
 import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
-import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
+import { countGrants, grantAdvisory, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 import { endedOnQuestion, questionParkReason, recoverySummary, restartResumeAllowed } from './recovery.mjs';
 
@@ -679,6 +679,9 @@ export class Engine {
         planVersion: stored.version,
         grantCount: stored.grantCount,
         grants: stored.plan.sandbox?.grants ?? null,
+        // Not an error: a plan with path grants and no command grants is valid,
+        // but its network and workspace-relative commands will still prompt.
+        advisory: grantAdvisory(stored.plan.sandbox),
       },
     });
     return this.store.setNeedsAttention(ticket.id, planReadyReason(stored.grantCount), {
@@ -775,7 +778,6 @@ export class Engine {
     const rendered = resumePrompt !== null ? resumePrompt : render(prompts.bodies[rework === null ? 'implement' : 'rework'], {
       key: ticket.key,
       title: ticket.title,
-      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
       ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
       acceptance: acceptanceBlock(acceptance),
       plan: planMarkdown(planValue),
@@ -927,7 +929,6 @@ export class Engine {
       prompt = render(prompts.bodies.review, {
         key: ticket.key,
         title: ticket.title,
-        cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
         ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
         acceptance: acceptanceBlock(acceptance),
         plan: planMarkdown(planValue),

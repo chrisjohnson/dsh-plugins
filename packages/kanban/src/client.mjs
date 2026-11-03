@@ -1485,7 +1485,7 @@ var CSS =
 		}
 
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, preset: "", writeMode: "workspace-write" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
@@ -1501,6 +1501,10 @@ var CSS =
 				bodyRef
 			);
 			var invalid = false;
+			// null means "untouched": the switch defaults to ON whenever the worktree
+			// service is mounted, so a ticket gets its own working copy unless the
+			// human turns it off. A deployment without the service has nothing to default.
+			var wantWorktree = form.worktree === null ? Boolean(props.worktreeAvailable) : !!form.worktree;
 			function field(key, value) {
 				var next = Object.assign({}, form);
 				next[key] = value;
@@ -1532,11 +1536,11 @@ var CSS =
 						writeMode: form.writeMode,
 						// KAN-18: intent only. The working copy is created when
 						// planning starts, from the latest default branch.
-						worktree: !!form.worktree
+						worktree: wantWorktree
 					}).then(function (res) {
 						setBusy(false);
 						if (res && res.ok) {
-							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: false, preset: "", writeMode: "workspace-write" });
+							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
 							props.onCreated(res.value.ticket);
 						} else {
 							setErr(res && res.error ? res.error.message : "Could not create the ticket.");
@@ -1627,11 +1631,11 @@ var CSS =
 					h("div", { className: "kb-switchrow" },
 						h(Switch, {
 							ariaLabel: "Worktree for this ticket",
-							checked: form.worktree,
+							checked: wantWorktree,
 							onToggle: function (value) { field("worktree", value); }
 						}),
 						h("span", { className: "kb-label", children: "Worktree" })),
-					h("span", { className: "kb-hint", children: "A worktree from the latest main is created when planning starts." })) : null,
+					h("span", { className: "kb-hint", children: "On by default: a worktree from the latest main is created when planning starts. Turn it off to run in the workspace itself." })) : null,
 				err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy || invalid || form.title.trim() === "", onClick: submit, children: busy ? "Creating…" : "Create ticket" }),
