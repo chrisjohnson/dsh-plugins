@@ -84,3 +84,43 @@ test('the Plan panel renders under the Body and owns the plan buttons', async ()
   assert.equal(/React\.use/.test(sliceFunction(src, 'Overview')), false, 'Overview adds no hooks')
   assert.equal((sliceFunction(src, 'TicketDetail').match(/React\.useState/g) || []).length, 2, 'TicketDetail keeps exactly its two state hooks')
 })
+
+// KAN-58: the board was hard-wired to three columns (min-width:780px) with no
+// mobile rule, so on a ~390px phone only ~1.4 columns showed and the page
+// scrolled sideways. On mobile it now collapses to one full-width track, shows
+// Working, and tucks Backlog and Done behind reveal buttons.
+test('the mobile board collapses to one track and reveals Backlog/Done behind buttons', async () => {
+  const src = await clientSource()
+
+  // A phone media query exists and re-declares the grid as a single track. The
+  // literal marker is what the deploy pin-check greps for, so keep it exact.
+  assert.match(src, /@media \(max-width:768px\)\{/, 'a mobile media query was added')
+  assert.ok(src.includes('.kb-cols{grid-template-columns:1fr;min-width:0'), 'the board grid becomes one full-width track')
+  assert.ok(src.includes('.kb-created{display:none}'), 'the low-value "created N ago" footer is hidden on mobile')
+  // Backlog and Done are hidden by default on mobile and shown only when the
+  // matching reveal class is on the grid container.
+  assert.ok(src.includes('.kb-col-backlog,.kb-col-done{display:none}'), 'Backlog and Done start hidden on mobile')
+  assert.ok(
+    src.includes('.kb-cols.show-backlog .kb-col-backlog,.kb-cols.show-done .kb-col-done{display:flex}'),
+    'the reveal classes bring a hidden column back'
+  )
+  // The reveal bar is a phone-only control: hidden in the base sheet.
+  assert.ok(src.includes('.kb-mobcolbar{display:none}'), 'the reveal bar is hidden on desktop')
+
+  // The wiring: each column carries a per-column class the CSS can target.
+  assert.ok(src.includes('"kb-col kb-col-" + props.column'), 'Column tags itself with kb-col-<name>')
+
+  // KanbanPage drives the reveal from one unconditional state hook (never a
+  // conditional hook) and renders the two toggle buttons plus the container
+  // classes the media query keys on.
+  const page = sliceFunction(src, 'KanbanPage')
+  assert.ok(page.includes('React.useState({ backlog: false, done: false })'), 'the reveal state is a single useState')
+  assert.equal(/if[\s\S]{0,40}React\.useState/.test(page), false, 'no useState is called conditionally')
+  assert.ok(page.includes('className: "kb-mobcolbar"'), 'the reveal bar renders')
+  assert.equal((page.match(/kb-col-toggle/g) || []).length, 2, 'there are two reveal buttons')
+  assert.ok(
+    page.includes('"kb-cols" + (mobileShow.backlog ? " show-backlog" : "") + (mobileShow.done ? " show-done" : "")'),
+    'the grid container carries the reveal classes'
+  )
+})
+
