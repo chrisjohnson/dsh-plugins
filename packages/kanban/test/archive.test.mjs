@@ -54,7 +54,12 @@ test('archiveSkipReason: silent without a managed copy, loud for a live checkout
   assert.equal(run(), null)
   assert.deepEqual(run({ ticket: { ...mine, workspaceCwd: null } }), { reason: 'no_workspace', silent: true })
   assert.equal(run({ ticket: { ...mine, workspaceCwd: '/r/p' } }).silent, true)
-  assert.equal(run({ liveCheckouts: ['/r/p'] }).reason, 'live_checkout')
+  assert.equal(run({ liveCheckouts: ['/r/p'] }), null, 'a managed copy under the live checkout is archivable')
+  assert.equal(run({ liveCheckouts: ['/r/p/.dsh-worktrees/otter'] }).reason, 'live_checkout', 'the live root itself is skipped')
+  const nested = { ...mine, workspaceCwd: '/r/p/sub/.dsh-worktrees/otter' }
+  assert.equal(run({ ticket: nested, tickets: [nested], liveCheckouts: ['/r/p'] }).reason, 'live_checkout', 'only a directory directly under the root is managed')
+  const evil = { ...mine, workspaceCwd: '/r/p/.dsh-worktrees-evil/.dsh-worktrees/otter' }
+  assert.equal(run({ ticket: evil, tickets: [evil], liveCheckouts: ['/r/p'] }).reason, 'live_checkout')
   const other = { id: 'b', key: 'KAN-2', workspaceCwd: `${path}/`, column: 'working' }
   assert.equal(run({ tickets: [mine, other] }).reason, 'shared_with_open_ticket')
   const closedOther = { ...other, column: 'done' }

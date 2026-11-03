@@ -14,7 +14,9 @@
 //   checkouts. A write there is denied, except the approval-phase pre-stage:
 //   `git pull --ff-only`, `pnpm install` and `pnpm run check`, run from the
 //   checkout root or its `.dsh/profiles/web` directory, from a ticket in the
-//   approval phase. Read-only commands pass through untouched.
+//   approval phase. Read-only commands pass through untouched. Managed working
+//   copies under a live checkout's `.dsh-worktrees` directory are clones, not the
+//   live checkout, and are not protected by this rule.
 //
 // "Deny" means the ask resolves `rejected` without a human being asked. A pass
 // means `next()`: the grant approver and then the human decide exactly as
@@ -28,6 +30,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 
 import { callArguments, escalationMode } from './grants.mjs';
+import { isInsideLiveCheckout } from './live-checkout.mjs';
 
 const OPEN_COLUMNS = new Set(['backlog', 'working']);
 const SEGMENT = /^kan(\d+)(?:-.+)?$/i;
@@ -189,7 +192,7 @@ export function evaluateGuard({ ticket, tickets, toolName, arguments: args, cwd,
     path,
     message: `${ticket.key} may not use ${path}: it belongs to ${owner.key}, which is still open. Work only in your own workspace and in clones named ${clonePrefix(ticket.key) ?? 'kan<number>'}-<name>.`,
   });
-  const liveOf = (path) => lives.find((l) => isWithin(l, path)) ?? null;
+  const liveOf = (path) => lives.find((l) => isInsideLiveCheckout(l, path)) ?? null;
 
   if (toolName === 'write' || toolName === 'edit') {
     if (typeof args.file_path !== 'string' || args.file_path === '') return pass;

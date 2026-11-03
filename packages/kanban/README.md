@@ -279,6 +279,15 @@ the explanation is in the event, the log, and the prompt's standing instruction.
 | Another open ticket's checkout | An escalated `write`, `edit` or `bash` whose path is inside another Backlog/Working ticket's workspace, or has a path segment `kan<number>` or `kan<number>-<name>` for another existing open ticket | The session's own workspace and its own clones; any path of a done or discarded ticket |
 | The live checkout | Any escalated write there, and any `bash` segment that runs with the live checkout as its directory or names it, unless it is read-only | Read-only commands (`cat`, `ls`, `git status`/`log`/`diff`, `find` without `-delete`/`-exec`, ...), and the approval-phase pre-stage |
 
+Managed working copies are not the live checkout, even when they sit inside it: a
+path counts as inside a live checkout only when it is within the live root and not
+under `<live root>/.dsh-worktrees`. The live root, its `.dsh/` profile and
+everything else beneath it stay protected; a `.dsh-worktrees` directory that is not
+directly under the live root, or a lookalike such as `.dsh-worktrees-evil`, gets no
+exemption. Another open ticket's worktree there is still denied by the cross-ticket
+rule, and `archiveWorkspaceOnClose` applies the same rule (a managed copy under the
+live checkout is archivable). The rule lives in `src/live-checkout.mjs`.
+
 Naming convention: a ticket's clones are `kan<number>-plugins` and
 `kan<number>-deploy` under the worktrees directory (ticket 12 uses `kan12-plugins`);
 build prompts say so. The pre-stage is exactly `git pull --ff-only`, `pnpm install`
@@ -495,7 +504,7 @@ Everything below lives on the `kanban` row.
 | `dbPath` | SQLite file; default `$DSH_HOME/kanban/kanban.db`. |
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
 | `liveCheckouts[]` | absolute paths of live deployment checkouts that build sessions may not modify (see Checkout isolation); `DSH_KANBAN_LIVE_CHECKOUTS` adds to it. Default none. |
-| `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: the copy is removed through `dsh-better-git-worktree` (0.3.0+) only when it sits under a `.dsh-worktrees` root, is not a `liveCheckouts` path and is not used by another open ticket; a copy with uncommitted, unpushed or stashed work, or whose state cannot be read, is left in place and its sessions stay unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
+| `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: the copy is removed through `dsh-better-git-worktree` (0.3.0+) only when it sits under a `.dsh-worktrees` root, is not a live checkout (a `liveCheckouts` path, other than a copy under its `.dsh-worktrees`) and is not used by another open ticket; a copy with uncommitted, unpushed or stashed work, or whose state cannot be read, is left in place and its sessions stay unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
 | `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
 | `confidenceThreshold` | default `0.70`. |

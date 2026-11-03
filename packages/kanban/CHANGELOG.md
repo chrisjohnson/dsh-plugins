@@ -5,6 +5,21 @@
 
 ## Unreleased
 
+## 0.22.1
+
+### Fixed
+
+- **Managed worktrees inside a live checkout are no longer treated as the live
+  checkout.** When a live checkout holds its ticket worktrees and plugin clones
+  under its own `.dsh-worktrees` directory, a build session writing in its own
+  worktree was denied as a live checkout write, and closing a ticket never archived
+  its workspace. A path now counts as inside a live checkout only when it is within
+  the live root and not under `<live root>/.dsh-worktrees`; the live root itself,
+  its profile directory and everything else beneath it stay protected, a
+  `.dsh-worktrees` directory nested deeper (or a lookalike name) gets no
+  exemption, and another open ticket's worktree there is still denied by the
+  cross-ticket rule. The guard and the archive decision share this one rule.
+
 ## 0.22.0
 
 ### Added

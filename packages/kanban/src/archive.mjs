@@ -8,11 +8,9 @@
 import { isAbsolute, normalize } from 'node:path';
 
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
+import { MANAGED_WORKTREES_DIR, isInsideLiveCheckout } from './live-checkout.mjs';
 
 export const ARCHIVE_MODES = ['off', 'done', 'done_and_discarded'];
-
-/** Directory name that holds every managed working copy. */
-const WORKTREES_DIR = '.dsh-worktrees';
 
 /** Canonical form of an absolute path for comparison: normalized, no trailing slash. */
 export function canonicalPath(path) {
@@ -32,12 +30,8 @@ export function isManagedWorktreePath(path) {
   const canonical = canonicalPath(path);
   if (canonical === null) return false;
   const parts = canonical.split('/');
-  const at = parts.indexOf(WORKTREES_DIR);
+  const at = parts.indexOf(MANAGED_WORKTREES_DIR);
   return at !== -1 && at < parts.length - 1;
-}
-
-function within(path, root) {
-  return path === root || path.startsWith(`${root}/`);
 }
 
 /**
@@ -58,7 +52,7 @@ export function archiveSkipReason({ ticket, tickets, openSessions, liveCheckouts
   if (!isManagedWorktreePath(path)) return { reason: 'not_a_managed_worktree', silent: true };
   for (const live of liveCheckouts) {
     const root = canonicalPath(live);
-    if (root !== null && within(path, root)) return { reason: 'live_checkout', silent: false };
+    if (root !== null && isInsideLiveCheckout(root, path)) return { reason: 'live_checkout', silent: false };
   }
   const openByTicket = new Set(openSessions.map((session) => session.ticketId));
   for (const other of tickets) {
