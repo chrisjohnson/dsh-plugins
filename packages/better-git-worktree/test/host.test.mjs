@@ -317,6 +317,7 @@ test('the seam other plugins use carries both halves of the lazy worktree contra
     // exists. Both halves have to be there, or a ticket plans in the wrong place.
     assert.equal(typeof seam.createForPath, 'function', 'createForPath is part of the seam')
     assert.equal(typeof seam.refreshManagedCopy, 'function', 'refreshManagedCopy is part of the seam')
+    assert.equal(typeof seam.removeForPath, 'function', 'removeForPath is part of the seam')
   } finally {
     cleanup()
   }
