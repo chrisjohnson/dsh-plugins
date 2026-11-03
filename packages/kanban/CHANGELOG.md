@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.25.0
+
 ### Added
 
 - **The ticket page now shows the plan.** The plan artifact has always arrived on
