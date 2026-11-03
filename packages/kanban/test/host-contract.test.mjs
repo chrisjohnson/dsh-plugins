@@ -383,6 +383,8 @@ test('capabilities exposes the preset roster with the harness default id', async
   assert.match(body, /ctx\.get\('agentPresets'\)/)
   assert.match(body, /await presets\.list\(\)/)
   assert.match(body, /default: presets\.defaultId \?\? null/)
+  // KAN-56: the wire carries the harness display name, never the bare id.
+  assert.match(body, /name: presetDisplayName\(row\.id, row\.name\)/)
   assert.match(body, /broken: row\.broken !== undefined \&\& row\.broken !== null/)
   // A missing or failing registry says null, it never takes capabilities down.
   assert.match(body, /return null/)
@@ -390,9 +392,12 @@ test('capabilities exposes the preset roster with the harness default id', async
 
 test('the client offers both options in create and edit and shows them in the overview', async () => {
   const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
-  // The picker: harness default first (empty value = null), broken ones labelled.
+  // The picker: harness default first (empty value = null), broken ones labelled,
+  // and every label is display copy — a shipped id reads as the harness name.
   assert.match(client, /function presetOptions\(presets\)/)
-  assert.match(client, /"Harness default \(" \+ def \+ "\)"/)
+  assert.match(client, /"Harness default \(" \+ defLabel \+ "\)"/)
+  assert.match(client, /presetDisplayName\(def, presetNameFromWire\(presets, def\)\)/)
+  assert.match(client, /presetDisplayName\(p\.id, p\.name\)/)
   assert.match(client, /\(p\.broken \? " \(unavailable\)" : ""\)/)
   // The write-mode control carries the closed vocabulary with workspace-write default.
   assert.match(client, /var WRITE_MODE_OPTIONS = \[/)
@@ -407,9 +412,10 @@ test('the client offers both options in create and edit and shows them in the ov
   const editor = client.slice(client.indexOf('function TicketEditor'), client.indexOf('function Timeline'))
   assert.match(editor, /if \(nextPreset !== \(t\.preset === undefined \? null : t\.preset\)\) patch\.preset = nextPreset/)
   assert.match(editor, /if \(form\.writeMode !== \(t\.writeMode \|\| "workspace-write"\)\) patch\.writeMode = form\.writeMode/)
-  // The overview shows the stored choice, naming the default when it is null.
+  // The overview shows the stored choice as display copy, and says the default
+  // is what a ticket that chose nothing tracks (KAN-56).
   const meta = client.slice(client.indexOf('function TicketMeta(props)'), client.indexOf('function TicketDetail(props)'))
-  assert.match(meta, /t\.preset \|\| "harness default"/)
+  assert.match(meta, /t\.preset \? presetDisplayName\(t\.preset, presetNameFromWire\(props\.presets, t\.preset\)\) : "harness default"/)
   assert.match(meta, /t\.writeMode \|\| "workspace write"/)
 })
 
