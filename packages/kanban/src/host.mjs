@@ -23,6 +23,7 @@ import { attentionFacts } from './attention.mjs';
 import { isQuestionPark, planRevisionState } from './recovery.mjs';
 import { startPlanning } from './planning.mjs';
 import { moveToColumn, startBuild } from './build.mjs';
+import { presetDisplayName } from './preset-labels.mjs';
 import { placement } from './ordering.mjs';
 import { phaseSessions } from './board-view.mjs';
 import { compactBoard, createBoardSnapshots, derivedFacts, digest, stableJson } from './board-snapshot.mjs';
@@ -983,6 +984,11 @@ function appendConfigFingerprint(store, ticketId) {
  * every registered preset, with its activation diagnostic kept as a boolean so
  * the client can label a broken entry without parsing it. Null when the
  * registry is unavailable — the client then offers only the harness default.
+ *
+ * `name` is display copy and carries the harness wording (KAN-56): a shipped
+ * preset publishes no name of its own, so the raw id would otherwise be what a
+ * human reads. The id stays the id — it is what a ticket stores and what the
+ * registry resolves.
  */
 async function presetsCapability(ctx, log) {
   const presets = ctx.get('agentPresets');
@@ -991,7 +997,7 @@ async function presetsCapability(ctx, log) {
     const items = await presets.list();
     return {
       default: presets.defaultId ?? null,
-      items: items.map((row) => ({ id: row.id, name: row.name ?? row.id, broken: row.broken !== undefined && row.broken !== null })),
+      items: items.map((row) => ({ id: row.id, name: presetDisplayName(row.id, row.name), broken: row.broken !== undefined && row.broken !== null })),
     };
   } catch (error) {
     log.warn('capabilities: preset roster failed: %s', message(error));

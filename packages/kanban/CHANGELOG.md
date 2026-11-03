@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.24.2
+
+### Fixed
+
+- **The Preset picker and the ticket Details row now say the harness names.** A
+  shipped preset publishes no name of its own, so the board printed its registry
+  id — "standard", "ptc", "minimal", "cordis" — where the harness's own preset UI
+  says "Standard mode", "PTC mode", "Minimal mode", "Creator mode". The
+  new-ticket and edit-ticket dropdowns, the "Harness default (…)" parenthetical
+  and the Details **Preset** row now show that wording, and a custom preset keeps
+  the name its own declaration published. Only the display copy moved: a ticket
+  still stores the registry id, `/api/kanban/capabilities` still carries it as
+  `id`, and plan and verify sessions still run the standard preset.
+
 ## 0.24.1
 
 ### Fixed

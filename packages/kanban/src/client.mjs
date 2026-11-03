@@ -1188,12 +1188,40 @@ var CSS =
 			{ value: "danger-full-access", label: "Full access" }
 		];
 
+		// KAN-56: presets are shown by name, not by registry id. The harness
+		// renders its four shipped presets with locale copy — see
+		// BUILT_IN_PRESET_KEYS and the `en` bundle of
+		// @deepseek-ai/dsh-client-ui-agent-preset ("Standard mode", "PTC mode",
+		// "Minimal mode", "Creator mode") — and a shipped preset publishes no
+		// name of its own, so the raw ids would otherwise be what a human reads
+		// here. This map mirrors src/preset-labels.mjs, which the Host half
+		// imports; this file is a classic script and cannot import anything, so
+		// test/preset-labels.test.mjs fails if the two copies drift.
+		function presetDisplayName(id, publishedName) {
+			var builtIn = { standard: "Standard mode", ptc: "PTC mode", minimal: "Minimal mode", cordis: "Creator mode" };
+			var key = id === null || id === undefined ? "" : String(id);
+			if (Object.prototype.hasOwnProperty.call(builtIn, key)) return builtIn[key];
+			if (publishedName === undefined || publishedName === null || publishedName === "") return key;
+			return String(publishedName);
+		}
+
+		// The name the capabilities roster carries for one id, if it is in it.
+		// The Host already labels its rows; this is the lookup, not a second map.
+		function presetNameFromWire(presets, id) {
+			var items = presets && Array.isArray(presets.items) ? presets.items : [];
+			for (var i = 0; i < items.length; i++) {
+				if (items[i] && items[i].id === id) return items[i].name;
+			}
+			return undefined;
+		}
+
 		function presetOptions(presets) {
 			var def = presets && presets.default ? presets.default : "standard";
-			var out = [{ value: "", label: "Harness default (" + def + ")" }];
+			var defLabel = presetDisplayName(def, presetNameFromWire(presets, def));
+			var out = [{ value: "", label: "Harness default (" + defLabel + ")" }];
 			var items = presets && Array.isArray(presets.items) ? presets.items : [];
 			items.forEach(function (p) {
-				out.push({ value: p.id, label: (p.name || p.id) + (p.broken ? " (unavailable)" : "") });
+				out.push({ value: p.id, label: presetDisplayName(p.id, p.name) + (p.broken ? " (unavailable)" : "") });
 			});
 			return out;
 		}
@@ -2018,7 +2046,7 @@ var CSS =
 				["Workspace", t.workspaceCwd || "(engine default)"],
 				["Planning", t.planTiming === "now" ? "now" : "when started"],
 				["Questions", t.planQuestions === "autonomous" ? "decide autonomously" : "ask me"],
-				["Preset", t.preset || "harness default"],
+				["Preset", t.preset ? presetDisplayName(t.preset, presetNameFromWire(props.presets, t.preset)) : "harness default"],
 				["Write mode", t.writeMode || "workspace write"],
 				["Attempts", t.attemptCount + " / " + (d.maxAttempts || 3)],
 				["Spend", fmtUsd(t.spentUsd) + (t.budgetUsd > 0 ? " / " + fmtUsd(t.budgetUsd) : " (no budget)")],
@@ -2132,7 +2160,7 @@ var CSS =
 				t.needsAttentionReason && !d.awaitingQuestion ? (t.phase === "verify" ? h(ApprovalPanel, { ticket: t, detail: d, onApprove: props.onApprove, onDiscard: function () { props.onAction(t.id, "discard", {}); } }) : h(NeedsAttention, { ticket: t, actions: d.actions, onResolve: props.onResolve, onMarkDone: function () { setModal("markDone"); } })) : null,
 				d.planRevision && d.planRevision.status === "rejected" ? h("div", { className: "kb-banner-line err", role: "alert", children: "Plan revision rejected: " + d.planRevision.reason }) : null,
 				d.planRevision && d.planRevision.status === "pending" ? h("div", { className: "kb-banner-line run", children: "The plan session is revising the plan…" }) : null),
-				h("aside", { className: "kb-detail-side" }, h(TicketMeta, { detail: d })),
+				h("aside", { className: "kb-detail-side" }, h(TicketMeta, { detail: d, presets: props.presets || null })),
 				h("div", { className: "kb-detail-main" },
 				h("div", { className: "kb-tabs" }, tabs.map(function (name) {
 					return h("button", { key: name, className: "kb-tab" + (tab === name ? " on" : ""), onClick: function () { setTab(name); }, children: name });
