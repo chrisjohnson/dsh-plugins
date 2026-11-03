@@ -15,14 +15,16 @@ const source = readFileSync(new URL('../src/client.mjs', import.meta.url), 'utf8
 
 function fakeReact() {
   const stateLog = []
+  const subscribed = []
   return {
     stateLog,
+    subscribed,
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
     Fragment: 'Fragment',
     // State never re-renders here; every value a component sets is recorded instead.
     useState: (initial) => [typeof initial === 'function' ? initial() : initial, (value) => stateLog.push(typeof value === 'function' ? value(initial) : value)],
     useEffect: () => {},
-    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+    useSyncExternalStore: (subscribe, getSnapshot) => (subscribed.push(subscribe), getSnapshot()),
   }
 }
 
@@ -111,7 +113,7 @@ function fakeSlots() {
   return slots
 }
 
-function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, holdTimeouts } = {}) {
+function load({ snapshot, current, betterSidebar, services = {}, timeouts, clipboard, holdTimeouts } = {}) {
   const held = new Map()
   const intervalFns = []
   const slots = fakeSlots()
@@ -120,7 +122,11 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
   const created = []
   const effects = []
   const injected = []
+  const visibility = []
   const document = {
+    hidden: false,
+    addEventListener: (type, fn) => { if (type === 'visibilitychange') visibility.push(fn) },
+    removeEventListener: () => {},
     createElement: () => ({ dataset: {}, remove() {} }),
     head: { append: (node) => created.push(node) },
   }
@@ -132,7 +138,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
     if (endpoint === 'remove' && flags.failRemove) {
       return { ok: true, json: async () => ({ ok: false, error: { message: 'refusing to remove' } }) }
     }
-    const value = endpoint === 'snapshot' ? await (typeof snapshot === 'function' ? snapshot(JSON.parse(init.body)) : snapshot) : endpoint === 'remove' ? { removed: true } : { status: null }
+    const value = endpoint === 'snapshot' ? withCurrent(await (typeof snapshot === 'function' ? snapshot(JSON.parse(init.body)) : snapshot), current, JSON.parse(init.body)) : endpoint === 'remove' ? { removed: true } : { status: null }
     if (value && value.__http) return { ok: false, status: value.__http, json: async () => ({}) }
     if (value && value.__fail) return { ok: true, json: async () => ({ ok: false, error: { message: value.__fail } }) }
     return { ok: true, json: async () => ({ ok: true, value }) }
@@ -152,7 +158,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
   }
   const navigatorStub = clipboard === undefined ? undefined : { clipboard }
   new Function('window', 'document', 'fetch', 'navigator', 'console', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', source)(
-    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, (fn) => (intervalFns.push(fn), 0), () => {}, setTimeoutStub, (id) => held.delete(id),
+    window, document, fetchStub, navigatorStub, { ...console, warn: (...a) => warnings.push(a.join(' ')), error() {} }, (fn) => (intervalFns.push(fn), intervalFns.length), (id) => { intervalFns[id - 1] = null }, setTimeoutStub, (id) => held.delete(id),
   )
   const exports = loaded.factory(require)
   const sidebarTabs = []
@@ -165,7 +171,7 @@ function load({ snapshot, betterSidebar, services = {}, timeouts, clipboard, hol
       if (betterSidebar !== undefined) callback({ betterSidebar, effect: (fn, label) => effects.push({ run: fn, label }) })
     },
   }
-  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, held, poll: () => intervalFns.forEach((fn) => fn()), failRemove: () => { flags.failRemove = true } }
+  return { id: loaded.id, exports, ctx, slots, fetched, created, effects, injected, sidebarTabs, react, warnings, held, poll: () => intervalFns.forEach((fn) => fn?.()), activeTimers: () => intervalFns.filter(Boolean).length, document, setVisible: (visible) => { document.hidden = !visible; visibility.forEach((fn) => fn()) }, failRemove: () => { flags.failRemove = true } }
 }
 
 const DECLARED = [
@@ -210,6 +216,12 @@ function registerOfficialArchive(t) {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+/** A host that answers for the session on screen in the same response, when asked to. */
+function withCurrent(value, current, body) {
+  if (current === undefined || value === undefined || value === null || value.__http || value.__fail || typeof body.statusSessionId !== 'string') return value
+  return { ...value, current: typeof current === 'function' ? current(body) : current }
+}
 
 const SNAPSHOT = {
   worktrees: [
@@ -763,4 +775,167 @@ test('there is no inlined workspace client, no election and no file import left 
   assert.doesNotMatch(source, /officialWorkspace|OFFICIAL_WORKSPACE|ui-workspace.*disabled|__OFFICIAL/)
   assert.doesNotMatch(source, /^\s*import\s/m)
   assert.doesNotMatch(source, /Outline16|Outline14/, 'icons use the 0.2.0 Regular/Medium names')
+})
+
+// ---------------------------------------------------------------------------
+// Polling and request budget: what the page asks the host, and when.
+// ---------------------------------------------------------------------------
+
+const requestsTo = (t, endpoint) => t.fetched.filter((f) => f.url.endsWith('/' + endpoint))
+
+/** Render the header pill for `sessionId`, which is what makes the store track that session. */
+function trackSession(t, sessionId) {
+  const actions = t.slots.winners('conversation.session.header.actions')[0].component
+  const react = t.react
+  const original = react.useEffect
+  react.useEffect = (fn) => { fn() }
+  try {
+    expand(actions({ sessionId, services: {} }))
+  } finally {
+    react.useEffect = original
+  }
+}
+
+test('one poll is one request, and it asks for the session on screen in the same call', async () => {
+  const t = mountClient({ snapshot: SNAPSHOT, current: { path: '/work/project', state: 'clean' } })
+  await flush()
+  trackSession(t, 'plain-session')
+  await flush()
+  t.fetched.length = 0
+  t.poll()
+  await flush()
+  assert.equal(t.fetched.length, 1, 'a poll is a single request')
+  assert.ok(t.fetched[0].url.endsWith('/snapshot'))
+  assert.equal(t.fetched[0].body.statusSessionId, 'plain-session')
+  assert.equal(t.fetched[0].body.force, undefined, 'the poll does not bypass the host cache')
+  assert.equal(t.fetched[0].body.forceStatus, undefined)
+  assert.equal(requestsTo(t, 'status').length, 0)
+})
+
+test('an explicit refresh after an action still bypasses the status cache for the session on screen', async () => {
+  const t = mountClient({ snapshot: SNAPSHOT, current: { path: '/work/project' } })
+  await flush()
+  t.fetched.length = 0
+  trackSession(t, 'plain-session')
+  await flush()
+  const forced = t.fetched.find((f) => f.body.statusSessionId === 'plain-session')
+  assert.ok(forced, 'tracking a session reads it at once')
+  assert.equal(forced.body.forceStatus, true)
+})
+
+test('a poll while another request is still in flight shares it instead of starting a second', async () => {
+  let release
+  const t = mountClient({ snapshot: () => new Promise((resolve) => { release = () => resolve(SNAPSHOT) }) })
+  await flush()
+  const before = t.fetched.length
+  t.poll()
+  t.poll()
+  t.poll()
+  await flush()
+  assert.ok(t.fetched.length - before <= 1, 'three ticks, at most one new request')
+  release()
+  await flush()
+})
+
+test('a hidden tab stops polling and an immediate refresh happens when it is shown again after a while', async (ctx) => {
+  let now = 1_000_000
+  ctx.mock.method(Date, 'now', () => now)
+  const t = mountClient({ snapshot: SNAPSHOT })
+  await flush()
+  assert.equal(t.activeTimers(), 1)
+  t.setVisible(false)
+  assert.equal(t.activeTimers(), 0, 'no timer while hidden')
+  const before = t.fetched.length
+  t.poll()
+  await flush()
+  assert.equal(t.fetched.length, before, 'nothing is requested while hidden')
+  now += 60_000
+  t.setVisible(true)
+  await flush()
+  assert.equal(t.fetched.length, before + 1, 'refreshed on return')
+  assert.equal(t.activeTimers(), 1, 'polling resumed')
+})
+
+test('showing the tab again right away does not refresh a second time', async (ctx) => {
+  let now = 1_000_000
+  ctx.mock.method(Date, 'now', () => now)
+  const t = mountClient({ snapshot: SNAPSHOT })
+  await flush()
+  t.setVisible(false)
+  now += 2_000
+  const before = t.fetched.length
+  t.setVisible(true)
+  await flush()
+  assert.equal(t.fetched.length, before)
+  assert.equal(t.activeTimers(), 1)
+})
+
+test('a tab that is hidden when the page loads starts no timer until it is shown', async () => {
+  const hiddenDocument = { hidden: true }
+  const t = load({ snapshot: SNAPSHOT })
+  t.document.hidden = true
+  for (const slot of DECLARED) t.slots.declare(slot)
+  t.exports.apply(t.ctx)
+  t.effects.forEach((effect) => effect.run())
+  void hiddenDocument
+  assert.equal(t.activeTimers(), 0)
+  t.setVisible(true)
+  assert.equal(t.activeTimers(), 1)
+})
+
+test('disposing the plugin clears the poll timer', async () => {
+  const t = mountClient({ snapshot: SNAPSHOT })
+  await flush()
+  assert.equal(t.activeTimers(), 1)
+  t.disposers.forEach((dispose) => typeof dispose === 'function' && dispose())
+  assert.equal(t.activeTimers(), 0)
+})
+
+test('an unchanged answer does not re-render anything; a changed one does', async () => {
+  let current = SNAPSHOT
+  const t = mountClient({ snapshot: () => current })
+  await flush()
+  // Rendering a badge subscribes it to the store, the way React would.
+  t.slots.winners('sidebar.session.row.leading')[0].component({ sessionId: 'session-wt' })
+  const subscribe = t.react.subscribed.at(-1)
+  let renders = 0
+  subscribe(() => { renders += 1 })
+  t.poll()
+  await flush()
+  t.poll()
+  await flush()
+  assert.equal(renders, 0, 'two identical answers, no re-render')
+  current = { ...SNAPSHOT, worktrees: [{ ...SNAPSHOT.worktrees[0], decoration: { ...SNAPSHOT.worktrees[0].decoration, state: 'clean', label: 'Clean' } }, SNAPSHOT.worktrees[1]] }
+  t.poll()
+  await flush()
+  assert.equal(renders, 1, 'a changed badge re-renders once')
+})
+
+test('a host that does not send the session on screen is asked for it with status', async () => {
+  const t = mountClient({ snapshot: SNAPSHOT })
+  await flush()
+  trackSession(t, 'plain-session')
+  await flush()
+  assert.ok(requestsTo(t, 'status').length >= 1, 'fell back to the status endpoint')
+  assert.equal(requestsTo(t, 'status')[0].body.sessionId, 'plain-session')
+})
+
+test('a failed poll keeps the previous answer, reports the error once, and recovers', async () => {
+  let mode = 'ok'
+  const t = mountClient({ snapshot: () => (mode === 'ok' ? SNAPSHOT : { __fail: 'host busy' }) })
+  await flush()
+  t.slots.winners('sidebar.session.row.leading')[0].component({ sessionId: 'session-wt' })
+  const subscribe = t.react.subscribed.at(-1)
+  let renders = 0
+  subscribe(() => { renders += 1 })
+  mode = 'bad'
+  t.poll()
+  await flush()
+  const badge = t.slots.winners('sidebar.session.row.leading')[0].component
+  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the last good answer is still shown')
+  assert.equal(renders, 1)
+  mode = 'ok'
+  t.poll()
+  await flush()
+  assert.equal(renders, 2, 'recovery re-renders')
 })

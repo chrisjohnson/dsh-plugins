@@ -379,7 +379,8 @@ export default function betterGitWorktree(ctx, config = {}) {
 
   const refresh = () => {
     retryPending()
-    service.warmAll()
+    // Only while a page is attached: nothing else reads the warmed statuses.
+    service.warmIfWatched()
   }
   const timer = ctx.get('timer')
   if (timer !== undefined && typeof timer.interval === 'function') {

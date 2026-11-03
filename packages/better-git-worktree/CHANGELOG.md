@@ -5,6 +5,25 @@
 
 ## Unreleased
 
+## 0.2.1
+
+### Changed
+
+- **Polling is cheap, and absent when nobody is looking.** The page's 10 s refresh is
+  one `snapshot` request that also answers for the session on screen; a refresh that
+  arrives while another is in flight shares it; a plain refresh uses the host's
+  status cache; nothing re-renders when the answer matches the last one; and a hidden
+  tab makes no requests, refreshing once when it is shown again after a while.
+  Explicit refreshes after an action and the archive dialog's fresh reads still
+  bypass the cache.
+- The host's 15 s background status warm-up runs only while a page has talked to the
+  host in the last two minutes. With no page attached it spawns no git processes.
+- `snapshot` reads the registered copies side by side (registry order kept) and checks
+  each repository's ignore file once.
+- `snapshot` accepts `statusSessionId` (and `forceStatus`) and returns that session's
+  status as `current`. A page that gets no `current` from a host that does not send it
+  asks with `status`.
+
 ## 0.2.0
 
 ### Added
