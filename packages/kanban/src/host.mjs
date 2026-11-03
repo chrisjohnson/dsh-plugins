@@ -21,6 +21,7 @@ import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows 
 import { cardStatus } from './lifecycle.mjs';
 import { startPlanning } from './planning.mjs';
 import { moveToColumn, startBuild } from './build.mjs';
+import { placement } from './ordering.mjs';
 import { attemptLabel, closedNewestFirst, jumpSession, phaseSegments, phaseSessions, workingMs } from './board-view.mjs';
 import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
 
@@ -580,21 +581,18 @@ export default async function kanban(ctx, config = {}) {
             return fail('bad_request', `unknown action ${action}`);
           }
           case 'reorder': {
+            // Drop a ticket before another one of its column (or at the end when
+            // beforeId is absent or null). The arithmetic lives in src/ordering.mjs.
             const ticket = requireTicket(String(p.id));
-            const before = p.beforeId === undefined ? undefined : requireTicket(String(p.beforeId));
-            const target = store.getTicket(ticket.id);
-            let sortOrder = target.sortOrder;
-            if (before !== undefined) {
-              const siblings = store.listTickets({ columns: [target.column] });
-              const index = siblings.findIndex((s) => s.id === before.id);
-              const prev = index > 0 ? siblings[index - 1] : undefined;
-              sortOrder = prev === undefined ? before.sortOrder - 500 : (prev.sortOrder + before.sortOrder) / 2;
-            } else {
-              const siblings = store.listTickets({ columns: [target.column] });
-              const last = siblings[siblings.length - 1];
-              sortOrder = (last?.sortOrder ?? 0) + 1000;
-            }
-            const updated = store.updateTicket(ticket.id, { sortOrder }, { actor: 'human', reason: 'reorder' });
+            const beforeId = p.beforeId === undefined || p.beforeId === null ? null : requireTicket(String(p.beforeId)).id;
+            const siblings = store.listTickets({ columns: [ticket.column] });
+            const plan = placement(siblings, ticket.id, beforeId);
+            if (!plan.ok) return fail(plan.code, plan.message);
+            for (const other of plan.renumber) store.updateTicket(other.id, { sortOrder: other.sortOrder }, { actor: 'human', reason: 'reorder' });
+            const patch = { sortOrder: plan.sortOrder };
+            if (plan.priority !== ticket.priority) patch.priority = plan.priority;
+            const updated = store.updateTicket(ticket.id, patch, { actor: 'human', reason: 'reorder' });
+            void engineRef.current.tick();
             return { ok: true, value: { ticket: updated } };
           }
           case 'export': {

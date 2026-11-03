@@ -86,9 +86,15 @@ export function assertTransition(from, to, { actor = 'engine', reason = '' } = {
   return { ok: true };
 }
 
-/** Queue order: priority desc, then creation order. */
+/**
+ * Queue order: priority desc, then the order a human arranged (sortOrder asc;
+ * new tickets are appended, so it starts out as creation order), then creation.
+ * The board lists and the engine launches in this one order.
+ */
 export function compareQueue(a, b) {
   if (b.priority !== a.priority) return b.priority - a.priority;
+  const byOrder = Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0);
+  if (byOrder !== 0) return byOrder;
   return String(a.createdAt).localeCompare(String(b.createdAt));
 }
 

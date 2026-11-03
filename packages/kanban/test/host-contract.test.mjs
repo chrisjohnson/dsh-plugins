@@ -219,7 +219,7 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   assert.match(update, /prepareBodyImages\(\{ body: draftBody, images: uploads, attachments: attachments\(\) \}\)/)
   assert.equal(/store\.updateTicket\(/.test(update), false, 'the update endpoint must not bypass the guard')
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
-  assert.match(host, /store\.updateTicket\(ticket\.id, \{ sortOrder \}, \{ actor: 'human', reason: 'reorder' \}\)/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
   assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
 })
