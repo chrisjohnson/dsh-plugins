@@ -6,6 +6,7 @@
 // tools; no phase result is parsed out of assistant prose.
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 
@@ -14,7 +15,8 @@ import { StoreError } from './store.mjs';
 import { TERMINAL_COLUMNS, canMarkDone, canRerunReview } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
-import { cloneNames } from './guard.mjs';
+import { cloneNames, resolveLiveCheckouts } from './guard.mjs';
+import { archiveSkipReason, archivesColumn, copyIsGone } from './archive.mjs';
 import { conditionsMarkdown, implementResultMarkdown, planMarkdown, reviewMarkdown, submissionContract } from './render.mjs';
 import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
@@ -227,6 +229,8 @@ export class Engine {
     this.reactivations = new Map();
     /** ticketId -> { phase, sessionId } for a session a restart interrupted and the engine resumes on its own */
     this.resumeMarks = new Map();
+    /** in-flight post-close archive steps, so a test (or stop) can wait for them */
+    this.postCloseTasks = new Set();
     this.configHash = null;
     this.timer = null;
     this.ticking = false;
@@ -1117,6 +1121,7 @@ export class Engine {
     const done = this.store.transitionTicket(ticket.id, { column: 'done', phase: 'closed' }, { actor: 'human', reason: 'approved' });
     this.endRun(ticket.id);
     this.appendEvent(ticket.id, 'done', { phaseFrom: 'verify', phaseTo: 'closed', actor: 'human', payload: { attempt: ticket.attemptCount, message } });
+    this.postClose(done);
     return done;
   }
 
@@ -1127,7 +1132,118 @@ export class Engine {
     const discarded = this.store.transitionTicket(ticket.id, { column: 'discarded', phase: 'closed' }, { actor: 'human', reason: reason || 'discarded' });
     this.endRun(ticket.id);
     this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo: 'closed', actor: 'human', payload: { reason } });
+    this.postClose(discarded);
     return discarded;
+  }
+
+  /**
+   * After a ticket closes: clear its managed worktree and archive its sessions,
+   * when `archiveWorkspaceOnClose` asks for it. Fire-and-forget by design — it
+   * runs after the close has committed and can never fail or delay it; every
+   * outcome, including a failure, is a log line and a ticket event.
+   */
+  postClose(ticket) {
+    let task;
+    try {
+      task = Promise.resolve(this.archiveClosedWorkspace(ticket))
+        .catch((error) => this.recordArchive(ticket, 'workspace_archive_skipped', { reason: 'error', detail: errorText(error) }))
+        .finally(() => this.postCloseTasks.delete(task));
+    } catch (error) {
+      this.log.warn('ticket %s workspace archive failed to start: %s', ticket?.key, errorText(error));
+      return;
+    }
+    this.postCloseTasks.add(task);
+  }
+
+  /** Resolve once every post-close archive step started so far has finished. */
+  async settlePostClose() {
+    while (this.postCloseTasks.size > 0) await Promise.allSettled([...this.postCloseTasks]);
+  }
+
+  recordArchive(ticket, kind, payload) {
+    try {
+      this.log.info('ticket %s %s: %s', ticket.key, kind, JSON.stringify(payload));
+      this.appendEvent(ticket.id, kind, { phaseFrom: 'closed', phaseTo: 'closed', actor: 'engine', payload });
+    } catch (error) {
+      this.log.warn('ticket %s could not record %s: %s', ticket.key, kind, errorText(error));
+    }
+  }
+
+  async archiveClosedWorkspace(closed) {
+    const config = this.getConfig();
+    if (!archivesColumn(config.archiveWorkspaceOnClose, closed.column)) return;
+    const ticket = this.store.getTicket(closed.id) ?? closed;
+    if (!archivesColumn(config.archiveWorkspaceOnClose, ticket.column)) return;
+    const skip = archiveSkipReason({
+      ticket,
+      tickets: this.store.listTickets(),
+      openSessions: this.store.listOpenSessions(),
+      liveCheckouts: resolveLiveCheckouts(config),
+    });
+    if (skip !== null) {
+      if (!skip.silent) this.recordArchive(ticket, 'workspace_archive_skipped', { reason: skip.reason, detail: skip.detail ?? null, path: ticket.workspaceCwd });
+      return;
+    }
+    const alreadyDone = this.store.listEvents(ticket.id, { limit: 50 }).some((event) => event.kind === 'workspace_archived');
+    if (alreadyDone) return;
+    const path = ticket.workspaceCwd;
+
+    // The worktree service is looked up now: plugin mount order is not fixed, and
+    // a deployment without it (or on an older release) simply keeps its copies.
+    let service;
+    try {
+      service = this.ctx.get('betterGitWorktree');
+    } catch {
+      service = undefined;
+    }
+    if (typeof service?.removeForPath !== 'function') {
+      this.recordArchive(ticket, 'workspace_archive_skipped', { reason: 'worktree_service_unavailable', path });
+      return;
+    }
+    const result = await service.removeForPath({ path });
+    if (!copyIsGone(result, existsSync(path))) {
+      this.recordArchive(ticket, 'workspace_archive_skipped', {
+        reason: result?.refused === true ? 'removal_refused' : 'not_removed',
+        code: result?.code ?? null,
+        detail: result?.reason ?? null,
+        path,
+      });
+      return;
+    }
+
+    const sessionIds = [...new Set(this.store.listSessions(ticket.id).map((session) => session.sessionId))];
+    const registry = this.ctx.get('workspaceRegistry');
+    const archived = [];
+    const unknown = [];
+    const failed = [];
+    for (const sessionId of sessionIds) {
+      if (typeof registry?.archiveSession !== 'function') {
+        failed.push({ sessionId, error: 'no workspaceRegistry.archiveSession' });
+        continue;
+      }
+      let lastError = null;
+      let outcome = 'failed';
+      for (let attempt = 0; attempt < 3 && outcome === 'failed'; attempt++) {
+        try {
+          await registry.archiveSession(sessionId);
+          outcome = 'archived';
+        } catch (error) {
+          lastError = error;
+          if (error?.name === 'WorkspaceUnknownSessionError') outcome = 'unknown';
+          else await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+        }
+      }
+      if (outcome === 'archived') archived.push(sessionId);
+      else if (outcome === 'unknown') unknown.push(sessionId);
+      else failed.push({ sessionId, error: errorText(lastError) });
+    }
+    this.recordArchive(ticket, 'workspace_archived', {
+      path,
+      removed: result.removed === true,
+      sessionsArchived: archived.length,
+      sessionsUnknown: unknown.length,
+      sessionsFailed: failed,
+    });
   }
 
   async submitApprovalPlan(ticketId, value) {
@@ -1256,6 +1372,7 @@ export class Engine {
         wasParked: Boolean(ticket.needsAttentionReason),
       },
     });
+    this.postClose(done);
     return done;
   }
 
@@ -1967,6 +2084,10 @@ export class Engine {
   async abortTicket(ticketId) {
     await this.closeTicketSessions(ticketId);
   }
+}
+
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function safeJson(text) {

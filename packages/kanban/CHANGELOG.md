@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+## 0.22.0
+
+### Added
+
+- **Archive a closed ticket's workspace** (`archiveWorkspaceOnClose`: `off`, `done`,
+  `done_and_discarded`; default `off`). After a ticket is approved, marked done or
+  (if configured) discarded, its managed working copy is removed through the
+  worktree plugin's new `removeForPath` and all of its sessions are archived. A copy
+  is removed only when it sits under a `.dsh-worktrees` root, is not a configured live
+  checkout and is not used by another open ticket or open session; one holding
+  uncommitted, unpushed or stashed work, or whose state cannot be read, is refused and
+  left in place with its sessions unarchived. The step runs after the close commits,
+  never fails or delays it, is idempotent, and records `workspace_archived` or
+  `workspace_archive_skipped` (with the reason) as a ticket event. With an older
+  worktree plugin that lacks `removeForPath`, nothing is removed and the skip is
+  recorded. A ticket without a worktree is untouched.
+
 ## 0.21.0
 
 ### Added

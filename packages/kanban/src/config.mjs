@@ -97,6 +97,13 @@ export const DEFAULT_CONFIG = {
   /** Directory holding prompt markdown. `null` resolves to the package's `prompts/`. */
   promptsDir: null,
 
+  /**
+   * Clear a closed ticket's managed worktree and archive its sessions: `off`,
+   * `done` (approved or marked done) or `done_and_discarded`. Only a copy under a
+   * `.dsh-worktrees` root that holds no unsaved work is ever removed.
+   */
+  archiveWorkspaceOnClose: 'off',
+
   /** New-ticket defaults. */
   defaultPlanTiming: 'at_pickup',
   defaultPlanQuestions: 'interactive',
@@ -298,6 +305,9 @@ export function resolveConfig(input = {}) {
     errors.push(new ConfigError('must be an integer >= 1', 'retentionDays'));
   }
   optionalString(config.promptsDir, 'promptsDir', errors);
+  if (!['off', 'done', 'done_and_discarded'].includes(config.archiveWorkspaceOnClose)) {
+    errors.push(new ConfigError('must be off, done or done_and_discarded', 'archiveWorkspaceOnClose'));
+  }
   if (!['now', 'at_pickup'].includes(config.defaultPlanTiming)) {
     errors.push(new ConfigError('must be now or at_pickup', 'defaultPlanTiming'));
   }
