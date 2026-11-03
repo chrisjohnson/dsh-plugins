@@ -673,9 +673,12 @@ export class Engine {
    * The message is the exact gap text plus the two lists the gate checks against,
    * so the reviewer has nothing to guess.
    */
-  reviewRetryPrompt(conditions, acceptance, cosmetic) {
+  reviewRetryPrompt(conditions, acceptance, cosmetic, verdict = 'pass') {
+    const opening = verdict === 'pass'
+      ? 'Your review passed, but it cannot be code-verified. The gaps are in the review submission itself, not in the work.'
+      : 'Your review failed, but it cannot be code-verified as submitted. The gaps below are in your own answer, not in the work: you left a condition the build is responsible for unproven, so the engine can neither send the build back on it nor treat the review as complete.'
     return [
-      'Your review passed, but it cannot be code-verified. The gaps are in the review submission itself, not in the work — do not change any file, and do not send the build away to fix what only your answer can fix.',
+      opening + ' Do not change any file, and do not send the build away to fix what only your answer can fix.',
       '',
       ...cosmetic.map((gap) => `- ${gap}`),
       '',
@@ -733,7 +736,7 @@ export class Engine {
     // no attempt is spent, and a reviewer that fixes its own answer continues
     // from here exactly as if it had been right the first time.
     this.appendEvent(ticket.id, 'review_retry', { phaseFrom: 'review', phaseTo: 'review', payload: { gaps: decision.cosmetic } });
-    const retryPrompt = this.reviewRetryPrompt(conditions, acceptance, decision.cosmetic);
+    const retryPrompt = this.reviewRetryPrompt(conditions, acceptance, decision.cosmetic, value.verdict);
     let retry = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt: retryPrompt, spanName: 'review-retry', attempt: ticket.attemptCount, runId });
     if (retry.kind !== 'ok') retry = (await this.autoRecover(ticket, retry, 'review')) ?? retry;
     if (retry.kind !== 'ok') return this.failedTurn(ticket, retry, 'review');

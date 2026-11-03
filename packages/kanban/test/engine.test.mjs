@@ -1175,6 +1175,8 @@ test('a fail that never proves the build condition is retried, not approved', as
   const retry = store.latestArtifact(ticket.id, 'reviewer_prompt_review-retry').content
   assert.match(retry, /done_when\.notes is missing from the review/)
   assert.match(retry, /done_when\.notes is not proven met by the review/)
+  assert.match(retry, /Your review failed, but it cannot be code-verified as submitted/)
+  assert.equal(retry.includes('Your review passed'), false, 'a fail must not be told it passed')
   const buildId = driver.ticketSessions.get(`${ticket.id}:build`)
   assert.equal(driver.turns.filter((id) => id === buildId).length, 4, 'implement, review, review-retry, approval')
 })
