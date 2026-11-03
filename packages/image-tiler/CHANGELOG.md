@@ -4,6 +4,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project f
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-03
+
+### Added
+
+- `policy: "ask" | "tile" | "send-whole"` (default `ask`): an over-cap image
+  now poses the choice to the human through the harness approval machinery —
+  approve tiles, reject sends whole with a note that the backend will likely
+  downscale. `askFallback` resolves asks no human can answer (headless,
+  cancelled, `never` policy, no approval service); `rememberPerSession` lets
+  the first answer decide the rest of a session.
+- Route resolution now reads the session's *pending* model selection first, so
+  the first message after a composer model pick (no minted header yet) and
+  mid-session switches get the right cap. Previously the first paste after
+  choosing a capped model passed through until the header minted.
+
+### Changed
+
+- Grid scoring is `tiles × (1 + aspectDistance²)` instead of plain fewest
+  tiles: aspect-matched grids beat sliver grids when the tile budget allows
+  (a 4K screenshot now gets ~25 near-square tiles instead of 26 full-height
+  strips). Coverage audit and cap adherence are unchanged and still enforced.
+
 ## [0.1.0] - 2026-11-02
 
 Initial release.

@@ -15,12 +15,30 @@
 import { needsTiling, planGrid } from './grid.mjs';
 
 /**
- * The "provider/model" key for the route this agent's next request uses.
- * Resolution order mirrors dsh-compaction-basic: the last minted request
- * header first (it is what the next step continues from), falling back to the
- * agent's own options before any header exists.
+ * The "provider/model" key for the route this agent's NEXT request will use.
+ * Resolution order (0.2.0):
+ *   1. the durable pending model selection — a composer pick not yet consumed
+ *      by any request (this is what a mid-session switch, or the very first
+ *      message of a session, actually routes to);
+ *   2. the last minted request header (what the next step continues from);
+ *   3. the agent's own creation options.
+ * 1-before-2 matters: after a switch the header still names the OLD model
+ * until the new one mints (the same staleness dsh-compaction-basic documents).
+ *
+ * @param {object} agent - the live agent.
+ * @param {(agent: object) => {provider?: string, model?: string} | undefined} [pendingSelection]
+ *   host-injected reader for the session's pending model selection.
  */
-export function routeKeyFor(agent) {
+export function routeKeyFor(agent, pendingSelection) {
+  let sel;
+  try {
+    sel = pendingSelection?.(agent);
+  } catch {
+    sel = undefined;
+  }
+  if (typeof sel?.provider === 'string' && typeof sel?.model === 'string' && sel.provider !== '' && sel.model !== '') {
+    return `${sel.provider}/${sel.model}`;
+  }
   let config;
   try {
     config = agent?.session?.requestHeader?.()?.config;
@@ -36,8 +54,8 @@ export function routeKeyFor(agent) {
 }
 
 /** The pixel cap for one agent, or undefined when its route has none. */
-export function capForAgent(agent, config) {
-  const key = routeKeyFor(agent);
+export function capForAgent(agent, config, pendingSelection) {
+  const key = routeKeyFor(agent, pendingSelection);
   if (key === undefined) return undefined;
   const cap = config.caps[key];
   return Number.isInteger(cap) && cap > 0 ? cap : undefined;
@@ -52,23 +70,39 @@ function messageHasTileable(message) {
 }
 
 /**
+ * Resolve the `ask` policy for one over-cap image through the host-injected
+ * asker. Any absence or blow-up falls back to `config.askFallback` — the turn
+ * must proceed even when no human can answer.
+ * @returns {Promise<'tile' | 'send-whole'>}
+ */
+async function resolveAsk(agent, signal, config, log, ask, whole, plan, cap) {
+  if (typeof ask !== 'function') return config.askFallback;
+  const question = `${whole} exceeds this model's ${cap}-pixel cap. `
+    + `Approve to tile it into ${plan.tiles} overlapping tiles (${plan.rows}x${plan.cols} grid, full detail); `
+    + `reject to send it whole — the vision backend will likely downscale it.`;
+  try {
+    const answer = await ask(agent, question, signal);
+    if (answer === 'tile' || answer === 'send-whole') return answer;
+    log.info('no human answer for %s; using askFallback=%s', whole, config.askFallback);
+  } catch (error) {
+    log.warn('ask failed for %s: %s; using askFallback=%s', whole, String(error?.message ?? error), config.askFallback);
+  }
+  return config.askFallback;
+}
+
+/**
  * Decide one over-cap image block.
  * @returns {Promise<null | { blocks?: object[], note?: string }>}
  *   `null` keeps the block untouched; `blocks` replaces it (tile image
  *   blocks); `note` is always appended after whatever stays.
  */
-async function decideBlock(block, { cap, config, log, attachments, probe, tile }) {
+async function decideBlock(block, { agent, signal, cap, config, log, attachments, probe, tile, ask, pendingSelection }) {
   const ref = block.attachment;
   const width = ref?.width;
   const height = ref?.height;
   if (!needsTiling({ width, height, cap })) return null;
 
   const whole = `Image ${width}x${height}`;
-  const store = attachments();
-  if (store === undefined || store === null || typeof store.readImage !== 'function' || typeof store.saveImages !== 'function') {
-    log.warn('no attachments service: %s is over the %d-pixel cap but cannot be tiled; sent whole', whole, cap);
-    return { note: `${whole} exceeds this model's ${cap}-pixel cap, but no attachment store is available to tile it; sent whole.` };
-  }
 
   const plan = planGrid({
     width,
@@ -81,6 +115,19 @@ async function decideBlock(block, { cap, config, log, attachments, probe, tile }
   if (plan === null) {
     log.info('valve: %s (%d px) exceeds the %d-pixel cap and cannot be split into at most %d tiles; sent whole', whole, width * height, cap, config.maxTilesPerImage);
     return { note: `${whole} (${width * height} px) exceeds this model's ${cap}-pixel cap and cannot be split into at most ${config.maxTilesPerImage} tiles; sent whole.` };
+  }
+
+  let mode = config.policy;
+  if (mode === 'ask') mode = await resolveAsk(agent, signal, config, log, ask, whole, plan, cap);
+  if (mode === 'send-whole') {
+    log.info('%s exceeds the %d-pixel cap; sent whole per policy (backend will likely downscale)', whole, cap);
+    return { note: `${whole} exceeds this model's ${cap}-pixel cap; sent whole — the vision backend will likely downscale it.` };
+  }
+
+  const store = attachments();
+  if (store === undefined || store === null || typeof store.readImage !== 'function' || typeof store.saveImages !== 'function') {
+    log.warn('no attachments service: %s is over the %d-pixel cap but cannot be tiled; sent whole', whole, cap);
+    return { note: `${whole} exceeds this model's ${cap}-pixel cap, but no attachment store is available to tile it; sent whole.` };
   }
 
   let stored;
@@ -139,15 +186,19 @@ async function decideBlock(block, { cap, config, log, attachments, probe, tile }
  * @param {() => object|undefined} deps.attachments - lazy attachment store.
  * @param {(data: Uint8Array) => Promise<{animated: boolean}>} deps.probe
  * @param {(data: Uint8Array, rects: object[]) => Promise<Uint8Array[]>} deps.tile
+ * @param {(agent: object, question: string, signal: AbortSignal) => Promise<'tile'|'send-whole'|undefined>} [deps.ask]
+ *   host asker for `policy: "ask"`; any non-answer falls back to askFallback.
+ * @param {(agent: object) => {provider, model}|undefined} [deps.pendingSelection]
+ *   reader for the session's pending (not yet consumed) model selection.
  * @returns {(payload: object, next: () => Promise<object>) => Promise<object>}
  */
-export function createPreStepHandler({ config, log, attachments, probe, tile }) {
+export function createPreStepHandler({ config, log, attachments, probe, tile, ask, pendingSelection }) {
   return async function preStep(payload, next) {
     const decision = await next();
     if (!config.enabled || decision?.kind !== 'enter' || !Array.isArray(decision.messages)) {
       return decision;
     }
-    const cap = capForAgent(payload?.agent, config);
+    const cap = capForAgent(payload?.agent, config, pendingSelection);
     if (cap === undefined) return decision;
 
     try {
@@ -165,7 +216,18 @@ export function createPreStepHandler({ config, log, attachments, probe, tile }) 
             content.push(block);
             continue;
           }
-          const result = await decideBlock(block, { cap, config, log, attachments, probe, tile });
+          const result = await decideBlock(block, {
+            agent: payload?.agent,
+            signal: payload?.signal,
+            cap,
+            config,
+            log,
+            attachments,
+            probe,
+            tile,
+            ask,
+            pendingSelection,
+          });
           if (result === null) {
             content.push(block);
             continue;

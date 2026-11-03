@@ -24,7 +24,7 @@ already under its cap. The plugin is inert until you add one `caps` entry.
 ## Install
 
 ```sh
-dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-tiler-v0.1.0&path:/packages/image-tiler"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-image-tiler-v0.2.0&path:/packages/image-tiler"
 ```
 
 Then add a configuration row to your profile's `cordis.patch.yml` (see
@@ -44,6 +44,9 @@ Every key is optional; an absent row is the documented inert state. A row's
 | `safetyFactor` | `0.95` | Every tile stays at or under `cap * safetyFactor` pixels, `(0, 1]`. The margin absorbs encoder rounding and per-route accounting differences. |
 | `maxTilesPerImage` | `32` | Valve. If no grid within this many tiles fits under the cap, the original image is sent whole with a note instead. Bounds the damage of a pathological aspect ratio or a tiny cap. Maximum accepted value is 256. |
 | `logToStderr` | `false` | Forward this plugin's own log lines (every tiling, every fallback) to stderr, where a service manager captures them. |
+| `policy` | `"ask"` | What happens to an over-cap image: `"ask"` poses the choice to the human (below), `"tile"` always tiles (the 0.1.0 behavior), `"send-whole"` always sends the original whole with a note. |
+| `askFallback` | `"tile"` | What `"ask"` resolves to when no human can answer: headless session (subagent, scheduled), the turn was cancelled, the session's approval policy is `never`, or no approval service is mounted. |
+| `rememberPerSession` | `false` | When true, the first answered ask in a session decides every later over-cap paste in that session (in-memory; a service restart clears it). When false, every over-cap paste is asked. |
 
 Example row:
 
@@ -52,23 +55,44 @@ Example row:
   config:
     caps:
       "my-vision-provider/small-vlm": 393216
+    policy: ask
     overlapRatio: 0.12
     maxTilesPerImage: 32
     logToStderr: true
 ```
 
+## The ask (`policy: "ask"`)
+
+When an over-cap image arrives and a grid plan is feasible, the plugin raises
+a normal harness approval on the open turn — the same card that gates tool
+approvals — phrased as a choice, not a permission:
+
+> Image 2730×1536 exceeds this model's 393216-pixel cap. **Approve** to tile it
+> into 16 overlapping tiles (4x4 grid, full detail); **reject** to send it
+> whole — the vision backend will likely downscale it.
+
+Approve = tile, reject = send whole. The question carries the real tile count
+and grid shape because the plan is computed before asking. Cancelling the turn
+withdraws the question through its abort signal; an unattended session or a
+`never` approval policy resolves through `askFallback`. The step is never lost
+to the question.
+
 ## How it decides
 
-- **Route**: the cap is looked up from the session's last minted request
-  header (`session.requestHeader()?.config`), falling back to the agent's own
-  `options.provider`/`options.model` before any header exists — the same
-  resolution order the core compaction plugin uses. Mid-session model switches
-  are therefore honoured from the next step.
+- **Route**: the cap is looked up for the route the next request will actually
+  use: first the session's *pending* model selection (a composer pick not yet
+  consumed by any request — this is what makes the first message of a session
+  and mid-session switches route correctly), then the last minted request
+  header, then the agent's own creation options.
 - **Size**: the stored (normalized) image dimensions on the attachment
   reference decide, not the browser-side original. An image at exactly the cap
-  passes through.
-- **Grid**: smallest tile count wins; among equals, the smallest tile area.
-  Every candidate grid is verified by a full-coverage audit before use; a grid
+  passes through. Note dsh itself normalizes attachments to its own limit
+  first, so the tiler always sees the stored bytes.
+- **Grid**: cost is `tiles × (1 + aspectDistance²)` — fewest tiles still
+  dominates, but tiles strongly elongated relative to the source pay a
+  penalty, so a 4K screenshot gets ~25 aspect-matched tiles instead of 26
+  full-height slivers. Ties break toward smaller tile area, then fewer tiles.
+  Every returned grid is verified by a full-coverage audit before use; a grid
   that fails the audit is treated as infeasible (original sent whole).
 - **Tiles** are PNG-encoded and committed through `ctx.attachments.saveImages`,
   so they are durable, content-addressed attachments like any pasted image.
@@ -84,6 +108,9 @@ happen, and the session log says so.
   with more than one frame), or no attachment store in the profile, or a
   tile-encode/storage error, or the grid exceeding `maxTilesPerImage` → the
   original image block stays, followed by a text note explaining what happened.
+- An `ask` that cannot be answered (headless, cancelled, `never` policy, no
+  approval service) resolves through `askFallback`; the question itself never
+  blocks or breaks the turn.
 - An unexpected internal error → the step is entered exactly as the rest of the
   waterfall produced it; the failure is logged.
 - Already-offloaded image blocks (`offloaded: true`) are never re-read or tiled.

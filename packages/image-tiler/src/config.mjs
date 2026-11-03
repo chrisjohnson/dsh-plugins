@@ -23,9 +23,17 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxTilesPerImage: 32,
   /** Forward this plugin's log lines to stderr (the service log captures it). */
   logToStderr: false,
+  /** What to do with an over-cap image: ask the human, always tile, or always send whole. */
+  policy: 'ask',
+  /** What `ask` falls back to when no human can answer (headless session, cancel, no approval service). */
+  askFallback: 'tile',
+  /** When true, the first answered ask in a session decides the rest of that session (in-memory). */
+  rememberPerSession: false,
 });
 
 const TOP_LEVEL = new Set(Object.keys(DEFAULT_CONFIG));
+const POLICIES = new Set(['ask', 'tile', 'send-whole']);
+const FALLBACKS = new Set(['tile', 'send-whole']);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -56,6 +64,13 @@ export function resolveConfig(input = {}) {
     warnings.push(`logToStderr must be true or false (got ${JSON.stringify(raw.logToStderr)}); using ${settings.logToStderr}`);
   }
 
+  settings.policy = enumValue(raw.policy, DEFAULT_CONFIG.policy, POLICIES, 'policy', warnings);
+  settings.askFallback = enumValue(raw.askFallback, DEFAULT_CONFIG.askFallback, FALLBACKS, 'askFallback', warnings);
+  settings.rememberPerSession = typeof raw.rememberPerSession === 'boolean' ? raw.rememberPerSession : DEFAULT_CONFIG.rememberPerSession;
+  if (raw.rememberPerSession !== undefined && typeof raw.rememberPerSession !== 'boolean') {
+    warnings.push(`rememberPerSession must be true or false (got ${JSON.stringify(raw.rememberPerSession)}); using ${settings.rememberPerSession}`);
+  }
+
   settings.overlapRatio = numberInRange(raw.overlapRatio, DEFAULT_CONFIG.overlapRatio, { min: 0, max: 0.75, name: 'overlapRatio', warnings });
   settings.safetyFactor = numberInRange(raw.safetyFactor, DEFAULT_CONFIG.safetyFactor, { min: 0, minExclusive: true, max: 1, maxExclusive: false, name: 'safetyFactor', warnings });
   settings.maxTilesPerImage = positiveInteger(raw.maxTilesPerImage, DEFAULT_CONFIG.maxTilesPerImage, 256, 'maxTilesPerImage', warnings);
@@ -80,6 +95,15 @@ export function resolveConfig(input = {}) {
   }
 
   return { settings, warnings };
+}
+
+function enumValue(value, fallback, allowed, name, warnings) {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !allowed.has(value)) {
+    warnings.push(`${name} must be one of ${[...allowed].map((v) => `"${v}"`).join(', ')} (got ${JSON.stringify(value)}); using ${fallback}`);
+    return fallback;
+  }
+  return value;
 }
 
 function numberInRange(value, fallback, { min, max, name, warnings, minExclusive = false, maxExclusive = true }) {

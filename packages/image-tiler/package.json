@@ -1,6 +1,6 @@
 {
   "name": "dsh-image-tiler",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automatic image tiling for DeepSeek Harness: a user-attached image that exceeds the routed model's pixel cap is split into overlapping under-cap tiles before the step is committed, so oversized screenshots reach a small-vision local model whole instead of being refused or silently downscaled.",
   "type": "module",
   "license": "MIT",

@@ -80,3 +80,22 @@ test('unknown keys warn and are ignored', () => {
   assert.ok(warnings.every((w) => w.includes('unknown config key')));
   assert.deepEqual(Object.keys(settings).sort(), Object.keys(DEFAULT_CONFIG).sort());
 });
+
+test('policy, askFallback and rememberPerSession validate with fallbacks', () => {
+  const good = resolveConfig({ policy: 'send-whole', askFallback: 'tile', rememberPerSession: true });
+  assert.equal(good.settings.policy, 'send-whole');
+  assert.equal(good.settings.askFallback, 'tile');
+  assert.equal(good.settings.rememberPerSession, true);
+  assert.deepEqual(good.warnings, []);
+
+  assert.equal(resolveConfig({}).settings.policy, 'ask'); // default asks now
+  assert.equal(resolveConfig({}).settings.askFallback, 'tile');
+  assert.equal(resolveConfig({}).settings.rememberPerSession, false);
+
+  const bad = resolveConfig({ policy: 'autoscale', askFallback: 'ask', rememberPerSession: 'yes' });
+  assert.equal(bad.settings.policy, 'ask');
+  assert.equal(bad.settings.askFallback, 'tile');
+  assert.equal(bad.settings.rememberPerSession, false);
+  assert.equal(bad.warnings.length, 3);
+  assert.ok(bad.warnings.some((w) => w.includes('policy')));
+});
