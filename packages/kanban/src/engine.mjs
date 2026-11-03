@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 
 import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
-import { TERMINAL_COLUMNS } from './lifecycle.mjs';
+import { TERMINAL_COLUMNS, canMarkDone, canRerunReview } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { cloneNames } from './guard.mjs';
@@ -19,6 +19,7 @@ import { conditionsMarkdown, implementResultMarkdown, planMarkdown, reviewMarkdo
 import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredProven } from './result.mjs';
 import { countGrants, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
+import { endedOnQuestion, questionParkReason, recoverySummary, restartResumeAllowed } from './recovery.mjs';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
@@ -224,6 +225,8 @@ export class Engine {
     this.runIds = new Map();
     /** ticketId -> { sessionId, reason } while a human-driven turn holds a ticket in flight */
     this.reactivations = new Map();
+    /** ticketId -> { phase, sessionId } for a session a restart interrupted and the engine resumes on its own */
+    this.resumeMarks = new Map();
     this.configHash = null;
     this.timer = null;
     this.ticking = false;
@@ -309,19 +312,52 @@ export class Engine {
   async recover() {
     const openTickets = new Map();
     for (const session of this.store.listOpenSessions()) {
-      if (session.ticketId !== null && session.ticketId !== undefined) openTickets.set(session.ticketId, session);
+      if (session.ticketId === null || session.ticketId === undefined) continue;
+      const list = openTickets.get(session.ticketId) ?? [];
+      list.push(session);
+      openTickets.set(session.ticketId, list);
     }
-    for (const [ticketId, session] of openTickets) {
+    for (const [ticketId, sessions] of openTickets) {
+      const session = sessions[sessions.length - 1];
       await this.driver.closeTicketSessions(ticketId);
-      this.store.markSessionClosed(session.sessionId);
+      for (const open of sessions) this.store.markSessionClosed(open.sessionId);
       const ticket = this.store.getTicket(ticketId);
       if (ticket === undefined || ticket.column === 'done' || ticket.column === 'discarded') continue;
       const phase = ticket.phase === 'verify' ? 'approval' : ticket.phase;
-      const reason = `${phase} session was interrupted by a restart; open the existing session to continue, or retry`;
+      // A ticket that was already parked when the service went down keeps the
+      // reason it was parked for: the restart interrupted nothing.
+      if (ticket.needsAttentionReason) {
+        this.appendEvent(ticketId, 'restart_recovered', {
+          phaseFrom: ticket.phase,
+          phaseTo: ticket.phase,
+          payload: { sessionId: session.sessionId, phase, autoResume: false, kept: true, reason: ticket.needsAttentionReason },
+        });
+        continue;
+      }
+      // The engine only drives a ticket in Working, or a plan-now ticket planning
+      // in Backlog: those were mid-flight. One automatic resume, and only if the
+      // previous automatic resume of this ticket got anywhere before another
+      // restart arrived.
+      const driven = ticket.column === 'working' || (ticket.column === 'backlog' && ticket.phase === 'plan' && ticket.planTiming === 'now');
+      const resumable = driven && ['plan', 'implement', 'review', 'verify'].includes(ticket.phase);
+      const events = this.store.listEvents(ticketId, { limit: 500 });
+      if (resumable && restartResumeAllowed(events)) {
+        const reason = `${phase} session was interrupted by a restart; resuming it automatically`;
+        this.appendEvent(ticketId, 'restart_recovered', {
+          phaseFrom: ticket.phase,
+          phaseTo: ticket.phase,
+          payload: { sessionId: session.sessionId, phase, autoResume: true, reason },
+        });
+        this.resumeMarks.set(ticketId, { phase: ticket.phase, sessionId: session.sessionId });
+        continue;
+      }
+      const reason = resumable
+        ? `${phase} session was interrupted by a restart again before the automatic resume made progress; open the existing session to continue, or retry`
+        : `${phase} session was interrupted by a restart; open the existing session to continue, or retry`;
       this.appendEvent(ticketId, 'restart_recovered', {
         phaseFrom: ticket.phase,
         phaseTo: ticket.phase,
-        payload: { sessionId: session.sessionId, reason },
+        payload: { sessionId: session.sessionId, phase, autoResume: false, reason },
       });
       this.store.setNeedsAttention(ticketId, reason, {
         restartRecovery: true,
@@ -388,17 +424,170 @@ export class Engine {
         ticket = this.store.getTicket(ticket.id);
         continue;
       }
+      // Approval is a park, not a loop: the only thing the engine does here on
+      // its own is pick up a hand-over a restart cut off.
+      if (ticket.phase === 'verify' && this.resumeMarks.has(ticket.id)) await this.resumeApproval(ticket);
       return;
     }
   }
 
+  // ------------------------------------------------------ session continuity
+  //
+  // A round of work should continue in the conversation that holds it. When the
+  // session is live it is simply reused; when it is only on disk (a restart, a
+  // park that closed it) the driver reopens it. Only when nothing can be brought
+  // back does the engine start cold, and then the first prompt carries a summary
+  // of what the lost conversation knew.
+
+  /** The live-or-reopened session of one purpose, or `{ ok: false, reason, none }`. */
+  async continuity(ticket, purpose) {
+    const live = this.driver.liveTicketSession?.(ticket.id, purpose);
+    if (live !== undefined && live !== null) return { ok: true, sessionId: live, via: 'live' };
+    if (typeof this.driver.reactivateSession !== 'function') {
+      return { ok: false, none: true, reason: 'the driver cannot reopen a session' };
+    }
+    const result = await this.driver.reactivateSession(ticket.id, purpose);
+    if (result.ok) {
+      this.appendEvent(ticket.id, 'session_resumed', {
+        phaseFrom: ticket.phase,
+        phaseTo: ticket.phase,
+        payload: { sessionId: result.sessionId, purpose, via: result.via },
+      });
+    }
+    return result;
+  }
+
+  /** True when the ticket has earlier build work a fresh session would not know about. */
+  hasBuildHistory(ticket) {
+    if (this.store.listSessions(ticket.id).some((session) => (session.purpose ?? 'build') === 'build')) return true;
+    return this.store.latestArtifact(ticket.id, 'implement_result') !== undefined
+      || this.store.latestArtifact(ticket.id, 'review') !== undefined;
+  }
+
+  /**
+   * The summary a cold build session starts from: attempt history, the last
+   * review and whether it passed, what shipped, what is left.
+   */
+  buildSeed(ticket) {
+    const config = this.getConfig();
+    const conditions = this.store.listConditions(ticket.id);
+    const reviewRow = this.store.latestArtifact(ticket.id, 'review');
+    const review = reviewRow === undefined ? null : safeJson(reviewRow.content);
+    const implementRow = this.store.latestArtifact(ticket.id, 'implement_result');
+    const implementation = implementRow === undefined ? null : safeJson(implementRow.content);
+    let passedReview = false;
+    let failingIds = [];
+    if (review !== null) {
+      try {
+        const decision = this.reviewDecision(review, conditions, this.store.listAcceptance(ticket.id), config.confidenceThreshold);
+        passedReview = decision.route === 'approval';
+        failingIds = decision.failingIds;
+      } catch {
+        passedReview = false;
+      }
+      // The ticket moved on from this review (a later approval follow-up plan
+      // sent it back): a pass that no longer stands is not a pass.
+      if (passedReview && ticket.phase === 'implement' && this.store.latestArtifact(ticket.id, 'review_feedback')?.id > reviewRow.id) {
+        passedReview = false;
+      }
+    }
+    const events = this.store.listEvents(ticket.id, { limit: 500 });
+    return recoverySummary({
+      ticket,
+      attempts: events.filter((event) => event.kind === 'implemented').length,
+      maxAttempts: config.maxAttempts,
+      events,
+      implementation,
+      review,
+      passedReview,
+      failingIds,
+      conditions,
+    });
+  }
+
+  /**
+   * The newest human instruction this role has not been spoken to since. The
+   * instruction is written when the human retries; it only reaches a model if a
+   * prompt carries it, and a prompt recorded after it already did.
+   */
+  pendingInstruction(ticket, role) {
+    const feedback = this.store.latestArtifact(ticket.id, 'attempt_feedback');
+    if (feedback === undefined) return '';
+    const last = this.store.latestArtifactIdWithPrefix(ticket.id, `${role}_prompt_`);
+    return feedback.id > last ? feedback.content : '';
+  }
+
+  /** A prompt plus the optional blocks that follow it, blank-line separated. */
+  composePrompt(base, ...extras) {
+    return [base, ...extras].filter((part) => typeof part === 'string' && part.trim() !== '').join('\n\n');
+  }
+
+  /** True once, when a restart interrupted this phase and the engine is picking it back up. */
+  takeResumeMark(ticketId, phase) {
+    const mark = this.resumeMarks.get(ticketId);
+    if (mark === undefined || mark.phase !== phase) return null;
+    this.resumeMarks.delete(ticketId);
+    return mark;
+  }
+
+  resumePrompt(submitTool, what) {
+    return [
+      `The service restarted while you were ${what}. Your conversation is intact.`,
+      `Continue from where you stopped: check the workspace for what is already done, finish what is left, and end by calling \`${submitTool}\`.`,
+      `Ending the turn without calling \`${submitTool}\` parks the ticket for a human.`,
+    ].join(' ');
+  }
+
+  /** The park for a restart-interrupted session that could not be reopened. */
+  resumeFailed(ticket, phaseName, reason) {
+    return this.needsAttention(ticket, `${phaseName} session could not be reopened after a restart (${reason}); a human Retry starts a fresh session from a summary of the work so far`, {
+      restartRecovery: true,
+    });
+  }
+
   // ------------------------------------------------------------------ plan
 
-  async plan(ticket) {
-    if (this.stopped(ticket.id)) return { kind: 'stopped' };
+  /**
+   * The full planning prompt a new plan session starts from, with the note that
+   * says when the planner is standing on an old commit (it would otherwise plan
+   * against code that is not current and nobody would tell it why).
+   */
+  renderPlanPrompt(ticket, prep = {}) {
     const config = this.getConfig();
     const prompts = this.getPrompts();
     const acceptance = this.store.listAcceptance(ticket.id);
+    const promptFile = ticket.planQuestions === 'autonomous' ? 'plan-self' : 'plan-human';
+    const rendered = render(prompts.bodies[promptFile] ?? prompts.bodies['plan-human'], {
+      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
+      acceptance: acceptanceBlock(acceptance),
+      key: ticket.key,
+      title: ticket.title,
+      // The planner has to know what the build session will be standing
+      // on to declare the grants it will actually need — the mode it writes
+      // under and the root that mode confines it to.
+      write_mode: ticket.writeMode ?? 'workspace-write',
+      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
+    });
+    return typeof prep.note === 'string' && prep.note !== '' ? `${rendered}\n\n${prep.note}\n` : rendered;
+  }
+
+  /**
+   * A turn ended without the structured submission its phase needs. If it ended
+   * on a question the person has to answer, say so: the ticket parks on the
+   * question, with the session to answer it in, instead of on a generic failure.
+   */
+  endedWithoutSubmission(ticket, turn, phaseName, fallbackReason) {
+    const question = endedOnQuestion(turn.finalText);
+    if (question === null) return this.needsAttention(ticket, fallbackReason);
+    return this.needsAttention(ticket, questionParkReason(phaseName, question), {
+      awaitingAnswer: true,
+      sessionId: turn.sessionId ?? null,
+      phase: phaseName,
+    });
+  }
+
+  async plan(ticket) {
+    if (this.stopped(ticket.id)) return { kind: 'stopped' };
     const route = this.resolveRoute('planner', 1);
     const admission = this.admit(ticket, route, 'planner', { attempt: 1 });
     if (!admission.ok) return this.hold(ticket, admission);
@@ -415,28 +604,24 @@ export class Engine {
     } catch (error) {
       return this.failedTurn(ticket, { kind: 'failed', error: String(error?.message ?? error) }, 'plan');
     }
-    const promptFile = ticket.planQuestions === 'autonomous' ? 'plan-self' : 'plan-human';
-    const rendered = render(prompts.bodies[promptFile] ?? prompts.bodies['plan-human'], {
-      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
-      acceptance: acceptanceBlock(acceptance),
-      key: ticket.key,
-      title: ticket.title,
-      // KAN-30: the planner has to know what the build session will be standing
-      // on to declare the grants it will actually need — the mode it writes
-      // under and the root that mode confines it to.
-      write_mode: ticket.writeMode ?? 'workspace-write',
-      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
-    });
-    // The planner has to know when it is standing on an old commit, or it plans
-    // against code that is not current and nobody tells it why.
-    const prompt = typeof prep.note === 'string' && prep.note !== '' ? `${rendered}\n\n${prep.note}\n` : rendered;
+    // A restart that interrupted planning resumes the same conversation with a
+    // short continuation; if that conversation cannot be reopened the ticket
+    // parks with the reason rather than planning blind in a new session.
+    let prompt;
+    if (this.takeResumeMark(ticket.id, 'plan') !== null) {
+      const resumed = await this.continuity(ticket, 'plan');
+      if (!resumed.ok) return this.resumeFailed(ticket, 'plan', resumed.reason);
+      prompt = this.composePrompt(this.resumePrompt('kanban_submit_plan', 'planning this ticket'), this.pendingInstruction(ticket, 'planner'));
+    } else {
+      prompt = this.composePrompt(this.renderPlanPrompt(ticket, prep), this.pendingInstruction(ticket, 'planner'));
+    }
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan', attempt: 1, runId, preparedCwd: prep.cwd });
     if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'plan')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'plan');
     const action = turn.action;
     if (action === null || action.type !== 'plan') {
-      return this.needsAttention(ticket, 'plan session ended without calling kanban_submit_plan');
+      return this.endedWithoutSubmission(ticket, turn, 'plan', 'plan session ended without calling kanban_submit_plan');
     }
     const errors = validatePlan(action.value);
     if (errors.length > 0) return this.needsAttention(ticket, `plan rejected: ${errors.join('; ')}`);
@@ -534,7 +719,10 @@ export class Engine {
       this.store.transitionTicket(ticket.id, { phase: 'plan' }, { actor: 'engine', reason: 'done_when required' });
       return { kind: 'continue' };
     }
-    const attempt = ticket.attemptCount + 1;
+    // A restart that cut the build off resumes it; that is the same attempt
+    // continuing, not another one spent.
+    const resuming = this.resumeMarks.get(ticket.id)?.phase === 'implement';
+    const attempt = resuming ? Math.max(1, ticket.attemptCount) : ticket.attemptCount + 1;
     if (attempt > config.maxAttempts) {
       return this.needsAttention(ticket, `attempt budget exhausted (${config.maxAttempts}) — a human Retry with instruction grants a fresh budget`);
     }
@@ -556,17 +744,32 @@ export class Engine {
     if (rework !== null) {
       const held = this.reworkSignature(ticket);
       const now = await this.workingTreeHash(ticket);
-      if (held !== null && now !== null && now === held.diffHash) {
-        const ids = held.failingIds.length > 0 ? held.failingIds.join(', ') : 'the conditions the last review named';
-        return this.needsAttention(ticket, `no progress: the working tree is unchanged since the round that last failed ${ids}`, {
+      // The guard speaks about conditions: it fires only when the round before
+      // failed named ones. A failure that named none (a bookkeeping rejection)
+      // gives it nothing to say was not fixed, so the round goes ahead.
+      if (held !== null && held.failingIds.length > 0 && now !== null && now === held.diffHash && !resuming) {
+        return this.needsAttention(ticket, `no progress: the working tree is unchanged since the round that last failed ${held.failingIds.join(', ')}`, {
           noProgress: true,
           failingIds: held.failingIds,
         });
       }
-      if (now !== null) this.saveReworkSignature(ticket, now, reworkFailingIds(rework));
+      if (now !== null) this.saveReworkSignature(ticket, now, this.reworkNamedIds(ticket, rework));
+    }
+    // Where the round runs: a resumed or still-live session carries its own
+    // history; a replacement for a lost one is told what the lost one knew.
+    let sessionNote = '';
+    let resumePrompt = null;
+    if (resuming) {
+      this.resumeMarks.delete(ticket.id);
+      const resumed = await this.continuity(ticket, 'build');
+      if (!resumed.ok) return this.resumeFailed(ticket, 'build', resumed.reason);
+      resumePrompt = this.resumePrompt('kanban_submit_implementation', 'working on this ticket');
+    } else {
+      const continued = await this.continuity(ticket, 'build');
+      if (!continued.ok && this.hasBuildHistory(ticket)) sessionNote = this.buildSeed(ticket);
     }
     this.store.setAttempt(ticket.id, attempt, route.rung);
-    const prompt = render(prompts.bodies[rework === null ? 'implement' : 'rework'], {
+    const rendered = resumePrompt !== null ? resumePrompt : render(prompts.bodies[rework === null ? 'implement' : 'rework'], {
       key: ticket.key,
       title: ticket.title,
       cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
@@ -580,12 +783,13 @@ export class Engine {
       release_scope: releaseScopeLine(planValue),
       question_note: questionNote(ticket, 'kanban_submit_implementation'),
     });
+    const prompt = this.composePrompt(sessionNote, rendered, this.pendingInstruction(ticket, 'implementer'));
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'implementer', purpose: 'build', route, prompt, spanName: 'implement', attempt, runId });
     if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'implement')) ?? turn;
     if (turn.kind !== 'ok') return this.failedTurn(ticket, turn, 'implement');
     if (turn.action === null || turn.action.type !== 'implementation') {
-      return this.needsAttention(ticket, 'implementer ended without calling kanban_submit_implementation');
+      return this.endedWithoutSubmission(ticket, turn, 'build', 'implementer ended without calling kanban_submit_implementation');
     }
     const value = turn.action.value;
     this.store.addArtifact(ticket.id, 'implement_result', JSON.stringify(value, null, 2), { spanId: turn.spanId });
@@ -691,8 +895,9 @@ export class Engine {
   async review(ticket) {
     if (this.stopped(ticket.id)) return { kind: 'stopped' };
     const config = this.getConfig();
-    const route = this.resolveRoute('reviewer', ticket.attemptCount);
-    const admission = this.admit(ticket, route, 'reviewer', { attempt: ticket.attemptCount });
+    const reviewAttempt = Math.max(1, ticket.attemptCount);
+    const route = this.resolveRoute('reviewer', reviewAttempt);
+    const admission = this.admit(ticket, route, 'reviewer', { attempt: reviewAttempt });
     if (!admission.ok) return this.hold(ticket, admission);
     const prompts = this.getPrompts();
     const acceptance = this.store.listAcceptance(ticket.id);
@@ -703,21 +908,32 @@ export class Engine {
     // The diff is still captured as an artifact, because the board's timeline is
     // where a human looks to see what a round actually changed.
     await this.diff(ticket);
-    const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
-    const planValue = planArtifact === undefined ? null : safeJson(planArtifact.content);
-    const implementedArtifact = this.store.latestArtifact(ticket.id, 'implement_result');
-    const implemented = implementedArtifact === undefined ? null : safeJson(implementedArtifact.content);
-    const prompt = render(prompts.bodies.review, {
-      key: ticket.key,
-      title: ticket.title,
-      cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
-      ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
-      acceptance: acceptanceBlock(acceptance),
-      plan: planMarkdown(planValue),
-      implementation: implementResultMarkdown(implemented),
-      done_when: conditionsMarkdown(conditions, { note: deferredNote }),
-      question_note: questionNote(ticket, 'kanban_submit_review'),
-    });
+    let prompt;
+    let sessionNote = '';
+    if (this.takeResumeMark(ticket.id, 'review') !== null) {
+      const resumed = await this.continuity(ticket, 'build');
+      if (!resumed.ok) return this.resumeFailed(ticket, 'review', resumed.reason);
+      prompt = this.resumePrompt('kanban_submit_review', 'reviewing this ticket');
+    } else {
+      const continued = await this.continuity(ticket, 'build');
+      if (!continued.ok && this.hasBuildHistory(ticket)) sessionNote = this.buildSeed(ticket);
+      const planArtifact = this.store.latestArtifact(ticket.id, 'plan');
+      const planValue = planArtifact === undefined ? null : safeJson(planArtifact.content);
+      const implementedArtifact = this.store.latestArtifact(ticket.id, 'implement_result');
+      const implemented = implementedArtifact === undefined ? null : safeJson(implementedArtifact.content);
+      prompt = render(prompts.bodies.review, {
+        key: ticket.key,
+        title: ticket.title,
+        cwd: ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd(),
+        ticket_state: ticketStateBlock(ticket, acceptance, attachedImages(this.ctx, ticket.body)),
+        acceptance: acceptanceBlock(acceptance),
+        plan: planMarkdown(planValue),
+        implementation: implementResultMarkdown(implemented),
+        done_when: conditionsMarkdown(conditions, { note: deferredNote }),
+        question_note: questionNote(ticket, 'kanban_submit_review'),
+      });
+    }
+    prompt = this.composePrompt(sessionNote, prompt, this.pendingInstruction(ticket, 'reviewer'));
     const runId = this.ensureRun(ticket);
     let turn = await this.roleTurn({ ticket, role: 'reviewer', purpose: 'build', route, prompt, spanName: 'review', attempt: ticket.attemptCount, runId });
     if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'review')) ?? turn;
@@ -814,6 +1030,53 @@ export class Engine {
       // byte-identical to the one this plugin has always sent.
       deferred: deferredBlock(deferredIds, this.store.listConditions(current.id)),
     });
+    return this.approvalTurn(current, route, prompt);
+  }
+
+  /**
+   * Pick a hand-over back up after a restart cut it off. The conversation is
+   * reopened and asked again for the same hand-over; if it cannot be reopened
+   * the ticket parks with the reason (the approval park is the safe place for it).
+   */
+  async resumeApproval(ticket) {
+    this.resumeMarks.delete(ticket.id);
+    const route = this.resolveRoute('approver', ticket.attemptCount);
+    const resumed = await this.continuity(ticket, 'build');
+    if (!resumed.ok) {
+      this.resumeFailed(ticket, 'approval', resumed.reason);
+      return { kind: 'wait' };
+    }
+    if (route.provider === null || route.model === null) {
+      this.store.setNeedsAttention(ticket.id, 'Awaiting human approval');
+      return { kind: 'wait' };
+    }
+    if (this.driver.isLive?.(resumed.sessionId) === true) {
+      this.driver.setPhase(resumed.sessionId, 'approver');
+      this.driver.setRoute(resumed.sessionId, route);
+    }
+    const reviewRow = this.store.latestArtifact(ticket.id, 'review');
+    const review = reviewRow === undefined ? null : safeJson(reviewRow.content);
+    let deferred = [];
+    if (review !== null) {
+      try {
+        deferred = this.reviewDecision(review, this.store.listConditions(ticket.id), this.store.listAcceptance(ticket.id), this.getConfig().confidenceThreshold).deferred;
+      } catch {
+        deferred = [];
+      }
+    }
+    const prompt = this.composePrompt(
+      'The service restarted while you were handing this work over. Your conversation is intact; give the hand-over again.',
+      render(this.getPrompts().bodies.approval, {
+        key: ticket.key,
+        title: ticket.title,
+        deferred: deferredBlock(deferred, this.store.listConditions(ticket.id)),
+      }),
+    );
+    return this.approvalTurn(ticket, route, prompt);
+  }
+
+  /** The approval turn itself: send the hand-over, then park for the human unless the agent already closed the ticket. */
+  async approvalTurn(current, route, prompt) {
     // A manual review submission concludes the human's turn and asks for the
     // approval turn in the same beat; sending into a session whose turn is still
     // finishing is rejected as busy, so let it go quiet first.
@@ -888,6 +1151,244 @@ export class Engine {
     // a fresh build session rather than continuing the approval conversation.
     this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'approval follow-up plan' });
     return this.store.transitionTicket(ticket.id, { phase: 'implement' }, { actor: 'human', reason: 'approval follow-up plan' });
+  }
+
+  // --------------------------------------------------- human recovery actions
+
+  /**
+   * A human retry is a fresh budget, not one more round of a budget the engine
+   * already spent. Without this the counter only ever climbs, so the second park
+   * after an exhausted run says "retry grants a fresh budget" while the code
+   * would refuse the very next attempt. Both retry endpoints share this one path
+   * so the reset cannot be forgotten by one of them.
+   *
+   * The instruction is recorded as an artifact and reaches the next prompt of
+   * the role that resumes (see `pendingInstruction`); the session that holds
+   * the earlier work is reopened by that prompt's turn, or replaced by one that
+   * starts from a summary of it.
+   */
+  retry(ticket, { instruction, patch } = {}) {
+    if (typeof instruction === 'string' && instruction.trim() !== '') {
+      this.store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${instruction}`);
+    }
+    if (patch !== undefined && patch !== null && typeof patch === 'object') {
+      this.store.updateTicket(ticket.id, patch, { actor: 'human', reason: 'needs_attention resolution' });
+    }
+    const resumePhase = this.retryPhase(ticket);
+    this.store.setAttempt(ticket.id, 0, 0);
+    this.store.appendEvent(ticket.id, 'budget_reset', {
+      phaseFrom: ticket.phase,
+      phaseTo: resumePhase,
+      actor: 'human',
+      payload: { from: ticket.attemptCount, to: 0, reason: 'human retry' },
+    });
+    // A human retry is new input, so the unchanged-tree guard starts over: the
+    // tree it remembers was left by a round the human has now responded to.
+    if (this.store.latestArtifact(ticket.id, 'rework_signature') !== undefined) {
+      this.store.addArtifact(ticket.id, 'rework_signature', JSON.stringify({ diffHash: null, failingIds: [], reset: 'human retry' }, null, 2));
+    }
+    this.resumeMarks.delete(ticket.id);
+    // Retry lifts the park and relaunches the ticket in the column it is in: a
+    // Working ticket runs again immediately; a Backlog one waits idle until it is
+    // dragged to Working (or plans in place if it is a plan-now ticket back at
+    // the plan phase).
+    this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
+    const updated = this.store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
+    void this.tick();
+    return updated;
+  }
+
+  /**
+   * Resume a parked ticket at the review phase: its implement phase has nothing
+   * left to do, so the only thing missing is a review of the work that exists.
+   * The attempt budget is untouched; nothing is spent until the review sends
+   * the work back.
+   */
+  async rerunReview(ticketId, message = '') {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    const check = canRerunReview(ticket, { hasConditions: this.store.listConditions(ticketId).length > 0 });
+    if (!check.ok) throw new StoreError('bad_request', check.reason);
+    if (typeof message === 'string' && message.trim() !== '') {
+      this.store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${message}`);
+    }
+    this.resumeMarks.delete(ticket.id);
+    this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 're-run review' });
+    this.appendEvent(ticket.id, 'review_rerun', {
+      phaseFrom: ticket.phase,
+      phaseTo: 'review',
+      actor: 'human',
+      payload: { priorReason: ticket.needsAttentionReason, message: typeof message === 'string' ? message : '' },
+    });
+    const updated = this.store.transitionTicket(ticket.id, { phase: 'review' }, { actor: 'human', reason: 're-run review' });
+    void this.tick();
+    return updated;
+  }
+
+  /**
+   * Close a ticket as done when its work was finished outside the engine. Any
+   * open ticket qualifies, in any column and any phase, parked or not: the human
+   * is stating that the outcome the ticket asked for already exists. The reason
+   * is required and recorded, and the done event says the engine did not do it.
+   */
+  async markDone(ticketId, reason) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    const check = canMarkDone(ticket);
+    if (!check.ok) throw new StoreError('bad_request', check.reason);
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (why === '') throw new StoreError('bad_request', 'a reason is required to mark a ticket done');
+    this.resumeMarks.delete(ticket.id);
+    this.reactivations.delete(ticket.id);
+    await this.closeTicketSessions(ticket.id);
+    const done = this.store.transitionTicket(ticket.id, { column: 'done', phase: 'closed' }, { actor: 'human', reason: why, outsideEngine: true });
+    this.endRun(ticket.id);
+    this.appendEvent(ticket.id, 'done', {
+      phaseFrom: ticket.phase,
+      phaseTo: 'closed',
+      actor: 'human',
+      payload: {
+        attempt: ticket.attemptCount,
+        message: why,
+        reason: why,
+        outsideEngine: true,
+        fromColumn: ticket.column,
+        wasParked: Boolean(ticket.needsAttentionReason),
+      },
+    });
+    return done;
+  }
+
+  // ------------------------------------------------------------ revise plan
+
+  /** Why a plan cannot be revised right now, or null when it can. */
+  planRevisionBlock(ticket) {
+    if (TERMINAL_COLUMNS.includes(ticket.column)) return `ticket is already ${ticket.column}`;
+    if (this.active.has(ticket.id) || this.busy(ticket)) return 'a turn is in flight on this ticket';
+    if (this.store.latestArtifact(ticket.id, 'plan') === undefined) return 'the ticket has no plan yet';
+    if (ticket.phase === 'plan') {
+      if (!isPlanReady(ticket.needsAttentionReason)) return 'the plan is still being written';
+    } else if (ticket.phase !== 'implement') {
+      return `a plan can only be revised before the build starts, not in ${ticket.phase}`;
+    }
+    if (this.buildStarted(ticket)) return 'the build has already started; a plan can only be revised before then';
+    return null;
+  }
+
+  /** True once any build work exists for the ticket. */
+  buildStarted(ticket) {
+    if (this.store.listSessions(ticket.id).some((session) => (session.purpose ?? 'build') === 'build')) return true;
+    return this.store.latestArtifact(ticket.id, 'implement_result') !== undefined || ticket.attemptCount > 0;
+  }
+
+  /**
+   * Ask the plan session for a revised plan. The instruction goes to the same
+   * conversation that wrote the plan (reopened if it is only on disk), and its
+   * resubmission replaces the plan and done_when as a new plan version through
+   * the same path every plan takes, so sandbox grants supersede exactly as they
+   * do for any new version. The call returns once the revision is under way;
+   * `done` settles when it has been applied or rejected.
+   */
+  async revisePlan(ticketId, instruction) {
+    const ticket = this.store.getTicket(ticketId);
+    if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
+    const text = typeof instruction === 'string' ? instruction.trim() : '';
+    if (text === '') throw new StoreError('bad_request', 'an instruction is required to revise the plan');
+    const blocked = this.planRevisionBlock(ticket);
+    if (blocked !== null) throw new StoreError('bad_request', blocked);
+    this.appendEvent(ticket.id, 'plan_revision_requested', {
+      phaseFrom: ticket.phase,
+      phaseTo: ticket.phase,
+      actor: 'human',
+      payload: { instruction: text, planVersion: this.store.currentPlanVersion(ticket.id) },
+    });
+    const done = this.runPlanRevision(ticket, text)
+      .catch((error) => {
+        this.log.error('ticket %s plan revision failed: %s', ticket.key, error?.stack ?? String(error));
+        return this.rejectPlanRevision(ticket, `the revision failed: ${String(error?.message ?? error)}`, text);
+      })
+      .finally(() => {
+        this.active.delete(ticket.id);
+        // The revision held the ticket; now that it has let go, whatever the
+        // new plan unblocks (a Working ticket's build) starts on this tick.
+        void this.tick();
+      });
+    this.active.set(ticket.id, done);
+    return { ticket: this.store.getTicket(ticket.id), done };
+  }
+
+  /** Say, on the ticket, that a revision did not take: an event and an artifact the detail view shows. */
+  rejectPlanRevision(ticket, reason, instruction) {
+    this.appendEvent(ticket.id, 'plan_revision_rejected', {
+      phaseFrom: ticket.phase,
+      phaseTo: ticket.phase,
+      payload: { reason, instruction },
+    });
+    this.store.addArtifact(ticket.id, 'plan_revision_rejected', reason);
+    return { kind: 'rejected', reason };
+  }
+
+  async runPlanRevision(ticket, instruction) {
+    const route = this.resolveRoute('planner', 1);
+    const admission = this.admit(ticket, route, 'planner', { attempt: 1 });
+    if (!admission.ok) return this.rejectPlanRevision(ticket, admission.message ?? 'dispatch refused', instruction);
+    const planRow = this.store.latestArtifact(ticket.id, 'plan');
+    const continued = await this.continuity(ticket, 'plan');
+    let prompt;
+    if (continued.ok) {
+      prompt = [
+        'The human asked for a revised plan. Their instruction:',
+        '',
+        instruction,
+        '',
+        'Revise the plan you wrote accordingly, re-reading the workspace where the instruction needs it, and call `kanban_submit_plan` with the complete revised plan (summary, steps, done_when, and sandbox / release_scope where they apply). The submission replaces the current plan and its done_when conditions. Do not start building.',
+      ].join('\n');
+    } else {
+      prompt = this.composePrompt(
+        this.renderPlanPrompt(ticket),
+        `The ticket already has a plan, shown below. The human asked for it to be revised.\n\nCurrent plan:\n${planRow.content}\n\nInstruction:\n${instruction}\n\nCall \`kanban_submit_plan\` with the complete revised plan. It replaces the current plan and its done_when conditions.`,
+      );
+    }
+    const runId = this.ensureRun(ticket);
+    let turn = await this.roleTurn({ ticket, role: 'planner', purpose: 'plan', route, prompt, spanName: 'plan-revision', attempt: 1, runId });
+    if (turn.kind !== 'ok') turn = (await this.autoRecover(ticket, turn, 'plan')) ?? turn;
+    this.endRun(ticket.id);
+    if (turn.kind !== 'ok') return this.rejectPlanRevision(ticket, `the plan session's turn failed: ${turn.error ?? 'unknown'}`, instruction);
+    const action = turn.action;
+    if (action === null || action.type !== 'plan') {
+      const question = endedOnQuestion(turn.finalText);
+      return this.rejectPlanRevision(
+        ticket,
+        question === null
+          ? 'the plan session ended without resubmitting a plan; the current plan is unchanged'
+          : `the plan session asked a question instead of resubmitting a plan (${question}); answer it in the plan session, or send the instruction again`,
+        instruction,
+      );
+    }
+    const errors = validatePlan(action.value);
+    if (errors.length > 0) return this.rejectPlanRevision(ticket, `the revised plan was rejected: ${errors.join('; ')}; the current plan is unchanged`, instruction);
+    if (!Array.isArray(action.value.done_when) || action.value.done_when.length === 0) {
+      return this.rejectPlanRevision(ticket, 'the revised plan was rejected: no done_when conditions; the current plan is unchanged', instruction);
+    }
+    const fresh = this.store.getTicket(ticket.id);
+    if (fresh === undefined || TERMINAL_COLUMNS.includes(fresh.column)) return { kind: 'stopped' };
+    const stored = this.storePlan(fresh, action.value, {
+      spanId: turn.spanId,
+      phaseFrom: fresh.phase,
+      phaseTo: 'implement',
+      payload: { revised: true },
+    });
+    await this.closeSession(turn.sessionId);
+    if (stored.grantCount > 0) {
+      // New grants are not covered by any earlier approval: the plan goes back
+      // to the human, and the ticket waits for it exactly as a first plan does.
+      if (fresh.phase !== 'plan') this.store.transitionTicket(fresh.id, { phase: 'plan' }, { actor: 'engine', reason: 'plan revised with sandbox grants' });
+      this.parkPlanReady(this.store.getTicket(fresh.id), stored);
+    } else {
+      this.store.clearNeedsAttention(fresh.id, { actor: 'engine', reason: 'plan revised' });
+      if (fresh.phase !== 'implement') this.store.transitionTicket(fresh.id, { phase: 'implement' }, { actor: 'engine', reason: 'plan revised' });
+    }
+    return { kind: 'applied', version: stored.version };
   }
 
   async handleManualAction({ ticketId, purpose, sessionId, action }) {
@@ -1314,6 +1815,22 @@ export class Engine {
     return { diffHash: value.diffHash, failingIds: Array.isArray(value.failingIds) ? value.failingIds.map(String) : [] };
   }
 
+  /**
+   * The condition ids a review named as not done: its unmet rows plus the
+   * conditions the code gate found wanting. Empty is honest — a failure that is
+   * pure bookkeeping names nothing.
+   */
+  reworkNamedIds(ticket, rework) {
+    const ids = reworkFailingIds(rework);
+    try {
+      const decision = this.reviewDecision(rework, this.store.listConditions(ticket.id), this.store.listAcceptance(ticket.id), this.getConfig().confidenceThreshold);
+      for (const id of decision.failingIds) if (!ids.includes(id)) ids.push(id);
+    } catch {
+      // A review the gate cannot read names whatever its own rows name.
+    }
+    return ids;
+  }
+
   /** Record the tree this rework round starts from and what it has to fix. */
   saveReworkSignature(ticket, diffHash, failingIds) {
     this.store.addArtifact(ticket.id, 'rework_signature', JSON.stringify({ diffHash, failingIds }, null, 2));
@@ -1378,6 +1895,10 @@ export class Engine {
   }
 
   needsAttention(ticket, reason, payload = {}) {
+    // A ticket a human closed while a turn was winding down is not parked: the
+    // late failure belongs to work that no longer matters.
+    const current = this.store.getTicket(ticket.id);
+    if (current === undefined || TERMINAL_COLUMNS.includes(current.column)) return { kind: 'stopped' };
     if (this.driver?.isTicketBusy?.(ticket.id) === true) {
       this.log.info('ticket %s failure ignored: another session is still active', ticket.key);
       return { kind: 'busy' };

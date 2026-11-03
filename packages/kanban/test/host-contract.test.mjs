@@ -166,20 +166,18 @@ test('nothing opens a session on its own', async () => {
   // No effect anywhere in the client may navigate: every remaining call sits on
   // the same line as the click that caused it, or is the definition itself.
   const callers = client.split('\n').filter((line) => line.includes('openSessionById'))
-  // One definition, the hero's Open-session button for a mid-turn human wait,
-  // the card's jump icon and the ticket page's progress steps - every one a
-  // click on a control the human pressed - plus the sessions table and panels.
-  assert.equal(callers.length, 7, 'one definition and six click handlers, nothing else')
+  // Every open goes through a handler that reports a failure: the button
+  // component, or the alert helper for controls with no room for a message.
+  assert.equal(callers.length, 4, 'one declaration, one definition and the two reporting handlers, nothing else')
   for (const line of callers) {
     const allowed = line.includes('var openSessionById = null;')
       || line.includes('openSessionById = function')
-      || line.includes('onClick')
-      || line.includes('onOpenSession')
-    assert.equal(allowed, true, `not a click handler: ${line.trim()}`)
+      || line.includes('var opening = openSessionById')
+    assert.equal(allowed, true, `not the declaration, the definition or the click handler: ${line.trim()}`)
   }
-  // The explicit buttons stay.
-  assert.match(client, /props\.onOpenSession\(sessionId\)/)
-  assert.match(client, /openSessionById\(session\.sessionId\)/)
+  // The explicit buttons stay, all of them the loading-and-error button.
+  assert.match(client, /h\(OpenSessionButton, \{ sessionId: session\.sessionId, label: "Open"/)
+  assert.match(client, /h\(OpenSessionButton, \{ sessionId: sessionId, label: "Open build session" \}\)/)
   assert.match(client, /children: "Recover tools"/)
 })
 
@@ -222,7 +220,7 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
   assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
-  assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
+  assert.match((await sources())['engine.mjs'], /this\.store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
 })
 
 // --------------------------------------------------------------- KAN-7
@@ -491,7 +489,8 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
 
   // The host feeds both flags to the card status and surfaces them on the board
   // and in the detail, with a reason that names which ask is pending.
-  assert.match(host, /awaitingApproval: isAwaitingApproval\(ticket\)/)
+  assert.match(host, /attentionFacts\(ticket, \{ engine, driver \}\)\.status/)
+  assert.match((await sources())['attention.mjs'], /awaitingApproval,\n\s*\}\);|awaitingUser: awaitingQuestion,\n\s*awaitingApproval,/)
   assert.match(host, /item\.awaitingApproval = isAwaitingApproval\(ticket\)/)
   assert.match(host, /'Awaiting your approval'/)
   assert.match(host, /awaitingApproval,\n\s*status:/, 'the detail payload carries the flag')
@@ -501,10 +500,9 @@ test('KAN-17: a mid-turn human wait reaches the board as attention', async () =>
 
   // The client labels both cases and offers the way to the prompt.
   assert.match(client, /t\.awaitingApproval \? "Awaiting approval"/)
-  assert.match(client, /t\.awaitingQuestion \? "Waiting on you"/)
+  assert.match(client, /\(t\.awaitingQuestion \|\| t\.parkedOnQuestion\) \? "Waiting on you"/)
   assert.match(client, /d\.awaitingApproval \? "awaiting approval"/)
-  assert.match(client, /openSessionById\(d\.approvalSessionId\)/)
-  assert.match(client, /"Open session"/)
+  assert.match(client, /sessionId: d\.approvalSessionId,\s*label: "Open session"/)
 })
 
 // ---------------------------------------------------------------- KAN-18 lazy worktree
@@ -597,14 +595,14 @@ test('a human retry resets the attempt budget on both endpoints and records it',
   const host = files['host.mjs']
   // One shared path, wired on both endpoints, so the reset cannot be forgotten.
   assert.equal((host.match(/retryWithFreshBudget\(/g) || []).length, 2, 'one definition, two call sites')
-  assert.match(host, /const retryWithFreshBudget = \(ticket, \{ instruction, patch \} = \{\}\) => \{/)
-  assert.match(host, /store\.setAttempt\(ticket\.id, 0, 0\)/)
-  assert.match(host, /'budget_reset'/)
-  assert.match(host, /from: ticket\.attemptCount,\s*to: 0, reason: 'human retry'/)
-  // The reset happens before the phase transition, so the next round is round one.
-  const body = host.slice(host.indexOf('const retryWithFreshBudget'), host.indexOf("case 'action'"))
-  assert.ok(body.indexOf('setAttempt') < body.indexOf("transitionTicket"), 'the budget is reset before the ticket moves')
+  assert.match(host, /const retryWithFreshBudget = \(ticket, \{ instruction, patch \} = \{\}\) =>\s*engineRef\.current\.retry\(ticket, \{ instruction, patch \}\)/)
   const engine = files['engine.mjs']
+  assert.match(engine, /this\.store\.setAttempt\(ticket\.id, 0, 0\)/)
+  assert.match(engine, /'budget_reset'/)
+  assert.match(engine, /from: ticket\.attemptCount, to: 0, reason: 'human retry'/)
+  // The reset happens before the phase transition, so the next round is round one.
+  const body = engine.slice(engine.indexOf('  retry(ticket,'), engine.indexOf('  async rerunReview('))
+  assert.ok(body.indexOf('setAttempt') < body.indexOf('transitionTicket'), 'the budget is reset before the ticket moves')
   assert.match(engine, /a human Retry with instruction grants a fresh budget/)
 })
 
@@ -712,4 +710,47 @@ test('the build and review prompts carry the autonomous questions note', async (
   // And the interactive planning prompt states the auto-decide rule.
   const planHuman = await readFile(join(PACKAGE_DIR, 'prompts', 'plan-human.md'), 'utf8')
   assert.match(planHuman, /auto-decided by the board/)
+})
+
+// ------------------------------------------------------------- recovery actions
+
+test('the recovery actions are wired on both endpoints and the engine owns every rule', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  assert.equal((host.match(/await recoveryAction\(ticket, action, p\)/g) || []).length, 2, 'resolve and action both route through the one helper')
+  assert.match(host, /engineRef\.current\.markDone\(ticket\.id,/)
+  assert.match(host, /engineRef\.current\.rerunReview\(ticket\.id,/)
+  assert.match(host, /engineRef\.current\.revisePlan\(ticket\.id,/)
+  // Dragging to Done stays refused: a drag carries no reason.
+  assert.match(host, /done is set by human approval, not by dragging/)
+  // The detail tells the client which buttons the engine would accept.
+  assert.match(host, /markDone: canMarkDone\(ticket\)\.ok/)
+  assert.match(host, /revisePlan: engine\.planRevisionBlock\(ticket\) === null/)
+  assert.match(host, /planRevision: planRevisionState\(events\)/)
+})
+
+test('the client draws the recovery buttons from the detail and reports why a session did not open', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /d\.actions && d\.actions\.markDone/)
+  assert.match(client, /d\.actions && d\.actions\.revisePlan/)
+  assert.match(client, /props\.actions && props\.actions\.rerunReview/)
+  assert.match(client, /children: "Re-run review"/)
+  assert.match(client, /props\.onResolve\(props\.ticket\.id, "rerunReview", instruction\)/)
+  assert.match(client, /props\.onAction\(t\.id, "markDone", \{ reason: reason \}\)/)
+  assert.match(client, /props\.onAction\(t\.id, "revisePlan", \{ instruction: instruction \}\)/)
+  // Mark done and Revise plan need their text, so the submit is dead without it.
+  assert.match(client, /disabled: busy \|\| text\.trim\(\) === ""/)
+  // The rejection of a plan revision is on the page, not only in the events list.
+  assert.match(client, /"Plan revision rejected: " \+ d\.planRevision\.reason/)
+  // A session open shows a loading label and the failure, never nothing.
+  assert.match(client, /state\.phase === "loading" \? "Opening…" : props\.label/)
+  assert.match(client, /state\.phase === "error" \? h\("span", \{ className: "kb-open-error", role: "alert"/)
+  assert.match(client, /function failed\(text\) \{ resolveOpen\(\{ ok: false, error: text \}\); \}/)
+  assert.equal(/best-effort navigation/.test(client), false, 'the swallowing catch is gone')
+})
+
+test('the question-park chip and the live-wait chip say the same thing', async () => {
+  const client = await readFile(join(SRC, 'client.mjs'), 'utf8')
+  assert.match(client, /\(d\.awaitingQuestion \|\| d\.parkedOnQuestion\) \? "waiting on your answer"/)
+  assert.match(client, /\(d\.awaitingApproval \|\| d\.awaitingQuestion \|\| d\.parkedOnQuestion\) && d\.approvalSessionId/)
 })

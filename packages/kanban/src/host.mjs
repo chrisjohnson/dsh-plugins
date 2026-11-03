@@ -18,7 +18,9 @@ import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
-import { cardStatus } from './lifecycle.mjs';
+import { canMarkDone, canRerunReview } from './lifecycle.mjs';
+import { attentionFacts } from './attention.mjs';
+import { isQuestionPark, planRevisionState } from './recovery.mjs';
 import { startPlanning } from './planning.mjs';
 import { moveToColumn, startBuild } from './build.mjs';
 import { placement } from './ordering.mjs';
@@ -164,35 +166,33 @@ export default async function kanban(ctx, config = {}) {
     };
 
     /**
-     * KAN-31: a human retry is a fresh budget, not one more round of a budget the
-     * engine already spent. Without this the counter only ever climbs, so the
-     * second park after an exhausted run says "retry grants a fresh budget" while
-     * the code would refuse the very next attempt. Both retry endpoints share this
-     * one path so the reset cannot be forgotten by one of them.
+     * A human retry is a fresh budget, not one more round of a budget the engine
+     * already spent. Both retry endpoints share the engine's one path so the
+     * reset cannot be forgotten by one of them.
      */
-    const retryWithFreshBudget = (ticket, { instruction, patch } = {}) => {
-      if (typeof instruction === 'string' && instruction.trim() !== '') {
-        store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${instruction}`);
+    const retryWithFreshBudget = (ticket, { instruction, patch } = {}) =>
+      engineRef.current.retry(ticket, { instruction, patch });
+
+    /**
+     * The human recovery actions both endpoints accept: close a ticket whose work
+     * happened outside the engine, resume a parked one at review, and ask the
+     * plan session for a revised plan. Returns undefined for any other action so
+     * the caller keeps its own routing.
+     */
+    const recoveryAction = async (ticket, action, p) => {
+      if (action === 'markDone') {
+        const updated = await engineRef.current.markDone(ticket.id, typeof p.reason === 'string' ? p.reason : '');
+        return { ok: true, value: { ticket: updated } };
       }
-      if (patch !== undefined && patch !== null && typeof patch === 'object') {
-        store.updateTicket(ticket.id, patch, { actor: 'human', reason: 'needs_attention resolution' });
+      if (action === 'rerunReview') {
+        const updated = await engineRef.current.rerunReview(ticket.id, typeof p.instruction === 'string' ? p.instruction : '');
+        return { ok: true, value: { ticket: updated } };
       }
-      const resumePhase = engineRef.current.retryPhase(ticket);
-      store.setAttempt(ticket.id, 0, 0);
-      store.appendEvent(ticket.id, 'budget_reset', {
-        phaseFrom: ticket.phase,
-        phaseTo: resumePhase,
-        actor: 'human',
-        payload: { from: ticket.attemptCount, to: 0, reason: 'human retry' },
-      });
-      // Retry lifts the park and relaunches the ticket in the column it
-      // is in: a Working ticket runs again immediately; a Backlog one
-      // waits idle until it is dragged to Working (or plans in place if
-      // it is a plan-now ticket back at the plan phase).
-      store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
-      const updated = store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
-      void engineRef.current.tick();
-      return updated;
+      if (action === 'revisePlan') {
+        const started = await engineRef.current.revisePlan(ticket.id, typeof p.instruction === 'string' ? p.instruction : '');
+        return { ok: true, value: { ticket: started.ticket } };
+      }
+      return undefined;
     };
 
     /**
@@ -206,12 +206,7 @@ export default async function kanban(ctx, config = {}) {
     const isAwaitingApproval = (ticket) => driver.isAwaitingApproval(ticket.id);
 
     /** The card-level visual status: attention | active | idle. Never a column. */
-    const statusOf = (ticket) =>
-      cardStatus(ticket, {
-        active: engine.active.has(ticket.id) || driver.isTicketBusy(ticket.id),
-        awaitingUser: isAwaitingUser(ticket),
-        awaitingApproval: isAwaitingApproval(ticket),
-      });
+    const statusOf = (ticket) => attentionFacts(ticket, { engine, driver }).status;
 
     /** The facts a card shows that no ticket column holds: phase path, working time, attempt wording, jump target. */
     const derived = (ticket, telemetry, now) => {
@@ -233,7 +228,11 @@ export default async function kanban(ctx, config = {}) {
       for (const ticket of tickets) {
         const item = { ...summary(ticket, store.isEditable(ticket.id)), ...derived(ticket, telemetry.get(ticket.id), now) };
         if (ticket.phase === 'plan') item.planSessionId = driver.liveTicketSession(ticket.id, 'plan') ?? null;
-        item.awaitingQuestion = isAwaitingUser(ticket);
+        // A ticket parked because its session ended on a question reads exactly
+        // like one whose session is paused inside the question: both are waiting
+        // on the person's answer, and the card, chip and next-action say so.
+        item.parkedOnQuestion = isQuestionPark(ticket.needsAttentionReason);
+        item.awaitingQuestion = isAwaitingUser(ticket) || item.parkedOnQuestion;
         item.awaitingApproval = isAwaitingApproval(ticket);
         item.status = statusOf(ticket);
         // Attention without an engine park is a mid-turn human wait (KAN-17):
@@ -263,6 +262,7 @@ export default async function kanban(ctx, config = {}) {
       const review = store.latestArtifact(ticket.id, 'review');
       const verification = store.latestArtifact(ticket.id, 'verification');
       const awaitingQuestion = isAwaitingUser(ticket);
+      const parkedOnQuestion = isQuestionPark(ticket.needsAttentionReason);
       const awaitingApproval = isAwaitingApproval(ticket);
       // KAN-17: the session holding the pending ask, so the detail can open the
       // prompt itself. The verify-phase fallback below stays: a parked approval
@@ -287,13 +287,23 @@ export default async function kanban(ctx, config = {}) {
         // is where the client can read the one the engine is actually enforcing.
         maxAttempts: getConfig().maxAttempts,
         awaitingQuestion,
+        parkedOnQuestion,
         awaitingApproval,
         status: statusOf(ticket),
+        // What the human may do right now. The engine owns every rule; the
+        // client only draws the buttons these name.
+        actions: {
+          markDone: canMarkDone(ticket).ok,
+          rerunReview: canRerunReview(ticket, { hasConditions: store.listConditions(ticket.id).length > 0 }).ok,
+          revisePlan: engine.planRevisionBlock(ticket) === null,
+        },
+        planRevision: planRevisionState(events),
         // Approval runs inside the build session, so the session the panel opens
         // while a ticket waits is that same one. The field name is the client's
         // contract and stays.
         approvalSessionId: pendingWait?.sessionId
-          ?? (ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null),
+          ?? (ticket.phase === 'verify' ? (driver.liveTicketSession(ticket.id, 'build') ?? null) : null)
+          ?? (parkedOnQuestion ? (driver.liveTicketSession(ticket.id, ticket.phase === 'plan' ? 'plan' : 'build') ?? null) : null),
         acceptance: store.listAcceptance(ticket.id),
         conditions: store.listConditions(ticket.id),
         sessions: store.listSessions(ticket.id),
@@ -503,6 +513,8 @@ export default async function kanban(ctx, config = {}) {
             if (action === 'retry') {
               return { ok: true, value: { ticket: retryWithFreshBudget(ticket, { instruction: p.instruction, patch: p.patch }) } };
             }
+            const recovered = await recoveryAction(ticket, action, p);
+            if (recovered !== undefined) return recovered;
             return fail('bad_request', `unknown resolution action ${action}`);
           }
           case 'action': {
@@ -541,6 +553,8 @@ export default async function kanban(ctx, config = {}) {
               if (!ticket.needsAttentionReason) return fail('bad_request', 'ticket is not parked for attention');
               return { ok: true, value: { ticket: retryWithFreshBudget(ticket, { instruction: p.instruction, patch: p.patch }) } };
             }
+            const recovered = await recoveryAction(ticket, action, p);
+            if (recovered !== undefined) return recovered;
             if (action === 'startPlanning') {
               // KAN-16: plan this Backlog ticket in place. The decision, and
               // every guard on it, lives in src/planning.mjs so it is testable

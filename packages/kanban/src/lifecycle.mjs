@@ -67,12 +67,21 @@ export function canTransitionPhase(from, to) {
  * A terminal ticket may never be reopened implicitly; a human must discard or
  * create a new ticket, so `done`/`discarded` are true sinks.
  */
-export function assertTransition(from, to, { actor = 'engine', reason = '' } = {}) {
+export function assertTransition(from, to, { actor = 'engine', reason = '', outsideEngine = false } = {}) {
   const phaseMove = from.phase !== to.phase;
   const columnMove = from.column !== to.column;
   if (!phaseMove && !columnMove) return { ok: true };
   if (TERMINAL_COLUMNS.includes(from.column) && from.column !== to.column) {
     return { ok: false, reason: `${from.column} is terminal; a human must create a new ticket` };
+  }
+  // A human closing work that was finished outside the engine skips the phase
+  // graph on purpose: the ticket may be anywhere in it, and the work it
+  // describes is already done. Only a human, only into Done, only closed.
+  if (outsideEngine) {
+    if (actor !== 'human') return { ok: false, reason: 'only a human may close a ticket completed outside the engine' };
+    if (to.column !== 'done' || to.phase !== 'closed') return { ok: false, reason: 'a ticket completed outside the engine closes as done' };
+    if (!canTransitionColumn(from.column, to.column)) return { ok: false, reason: `column ${from.column} -> ${to.column} is not allowed` };
+    return { ok: true };
   }
   if (!canTransitionColumn(from.column, to.column)) {
     return { ok: false, reason: `column ${from.column} -> ${to.column} is not allowed` };
@@ -120,4 +129,29 @@ export function cardStatus(ticket, { active = false, awaitingUser = false, await
   }
   if (active) return 'active';
   return 'idle';
+}
+
+/**
+ * Whether a human may close this ticket as done without the engine having done
+ * the work: any open ticket, in any column and any phase, parked or not.
+ */
+export function canMarkDone(ticket) {
+  if (ticket === undefined || ticket === null) return { ok: false, reason: 'no such ticket' };
+  if (TERMINAL_COLUMNS.includes(ticket.column)) return { ok: false, reason: `ticket is already ${ticket.column}` };
+  return { ok: true };
+}
+
+/**
+ * Whether a parked ticket can resume at the review phase: its implement phase
+ * has nothing left to do (the work exists), so the only thing missing is a review.
+ */
+export function canRerunReview(ticket, { hasConditions = true } = {}) {
+  if (ticket === undefined || ticket === null) return { ok: false, reason: 'no such ticket' };
+  if (TERMINAL_COLUMNS.includes(ticket.column)) return { ok: false, reason: `ticket is already ${ticket.column}` };
+  if (!ticket.needsAttentionReason) return { ok: false, reason: 'ticket is not parked for attention' };
+  if (ticket.phase !== 'implement' && ticket.phase !== 'review') {
+    return { ok: false, reason: `re-run review applies to a ticket parked in implement or review, not ${ticket.phase}` };
+  }
+  if (!hasConditions) return { ok: false, reason: 'the ticket has no plan conditions to review against' };
+  return { ok: true };
 }
