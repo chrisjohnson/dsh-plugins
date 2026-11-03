@@ -400,6 +400,17 @@ stored statement still has to be covered.
   with `no progress: the working tree is unchanged since the round that last
   failed <ids>` and the attempt is not spent. It only speaks when that round
   named conditions, and a human retry starts it over (see Recovery below).
+- A build turn that ends without submitting because its `sudo` was refused by the
+  sandbox parks on `sudo cannot run in this sandbox: a session in the '<mode>'
+  sandbox runs under no_new_privs … Set this ticket's write mode to Full access
+  ('danger-full-access') and Retry …` instead of the generic non-submission. The
+  harness's Landlock launcher sets `no_new_privs` on every confined child and
+  sudo refuses to run under it before it ever reads sudoers, so the machine's
+  sudoers rules are never the problem and no plan grant can lift it — the grant
+  denylist word-denies `sudo`. Only a build in Full access can run it at all, so
+  the park names the ticket's current mode and the change to make; a ticket
+  already in Full access keeps the generic reason. The planner and the builder are
+  told the same rule in their prompts, keyed on the ticket's `write_mode`.
 - The ticket detail carries the configured `maxAttempts`, so the board shows the
   real cap instead of a hard-coded 3.
 

@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A build that needs sudo now parks on the reason, not on a non-submission.**
+  A session in any sandbox but Full access runs under `no_new_privs` — the
+  harness's Landlock launcher sets it on every confined child — and sudo refuses
+  to run under that flag before it ever reads sudoers. The machine's sudoers
+  rules can be perfect and `sudo -n <cmd>` still exits 1, and since the plan-grant
+  denylist word-denies `sudo` there is no grant that lifts it. So the build
+  simply ended without submitting and the ticket parked on "implementer ended
+  without calling kanban_submit_implementation" — true, and useless. The engine
+  now recognises sudo's own refusal in a build turn's tool results and parks with
+  the one change a human can make: set this ticket's write mode to Full access
+  and Retry, naming the mode the session actually ran under. The planning prompts
+  tell the planner the same thing before it plans a sudo step into a sandboxed
+  build, and the implement and rework prompts tell the builder, keyed on the
+  ticket's `write_mode`.
+
 ## 0.25.0
 
 ### Added

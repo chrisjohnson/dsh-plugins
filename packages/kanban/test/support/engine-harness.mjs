@@ -164,7 +164,10 @@ export function setup(queues = {}, options = {}) {
       }
       const text = next !== null && next.text !== undefined ? next.text : ''
       const action = next !== null && next.text !== undefined ? null : next
-      return { status: 'ok', action, finalText: text, usage: { inputTokens: 1, outputTokens: 1 }, events: [] }
+      // A queue entry may script the turn's session events (the tool results the
+      // engine reads back), so a test can stand in for output the model produced.
+      const events = next !== null && Array.isArray(next.events) ? next.events : []
+      return { status: 'ok', action, finalText: text, usage: { inputTokens: 1, outputTokens: 1 }, events }
     },
     async waitTurn() { return { status: 'failed', error: 'no recovery scripted', finalText: '', usage: null, events: [] } },
     async closeSession(id) {
