@@ -11,7 +11,11 @@
   ticket with a required non-empty reason, and refuses one that is already Done or
   Discarded. It runs the engine's own discard path — sessions closed, run ended,
   post-close archive — and both the transition and the `discarded` event record
-  `actor: 'orchestrator'`, so the board can say who threw the work away. This is a
+  `actor: 'orchestrator'`, so the board can say who threw the work away. A ticket
+  that never left planning is moved by column alone rather than forced into a
+  closed phase — the phase graph only reaches `closed` from `verify`, and the work
+  an orchestrator discards is usually a Backlog duplicate (found by the lab e2e).
+  This is a
   deliberate move of one lever across the boundary, on the board owner's
   instruction: **approve and close stay human-only**. The state machine admits an
   orchestrator into `discarded` and into no other terminal column, so Done remains

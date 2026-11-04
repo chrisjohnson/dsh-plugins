@@ -1448,3 +1448,35 @@ test('discard credits the orchestrator when the orchestrator seam asks for it', 
   assert.equal(events.filter((event) => event.kind === 'column_changed').pop().actor, 'orchestrator')
   assert.equal(events.find((event) => event.kind === 'discarded').actor, 'orchestrator')
 })
+
+test('a ticket still in planning discards by column, because it has no phase to close', async () => {
+  // KAN-65's lab e2e found this: the work an orchestrator discards is a Backlog
+  // duplicate, and the phase graph only reaches `closed` from `verify`. The human
+  // discard of a Backlog card already moves the column alone, so discard has to
+  // do the same or the new tool cannot do the one job it was added for.
+  const { store, engine } = setup()
+  const ticket = pickedUp(store, { column: 'backlog' })
+  assert.equal(ticket.phase, 'plan')
+  const discarded = await engine.discard(ticket.id, 'a duplicate', { actor: 'orchestrator' })
+  assert.equal(discarded.column, 'discarded')
+  assert.equal(discarded.phase, 'plan', 'the phase is left where it was, not forced closed')
+  const ended = store.listEvents(ticket.id).find((event) => event.kind === 'discarded')
+  assert.equal(ended.actor, 'orchestrator')
+  assert.equal(ended.phaseTo, 'plan')
+})
+
+test('a ticket parked mid-build or mid-review discards the same way', async () => {
+  // Neither `implement` nor `review` has an edge to `closed` either, and the
+  // orchestrator is allowed to bin a ticket stuck in either of them.
+  for (const phase of ['implement', 'review']) {
+    const { store, engine } = setup()
+    const ticket = pickedUp(store)
+    for (const step of ['implement', 'review'].slice(0, ['implement', 'review'].indexOf(phase) + 1)) {
+      store.transitionTicket(ticket.id, { phase: step }, { actor: 'engine', reason: 'seed' })
+    }
+    const discarded = await engine.discard(ticket.id, 'no longer wanted', { actor: 'orchestrator' })
+    assert.equal(discarded.column, 'discarded', phase)
+    assert.equal(discarded.phase, phase, `${phase} is left as it was`)
+    assert.equal(store.listEvents(ticket.id).find((event) => event.kind === 'discarded').actor, 'orchestrator')
+  }
+})
