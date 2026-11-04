@@ -549,6 +549,52 @@ function configurePatch(ticket, args) {
   return { ok: true, patch }
 }
 
+/**
+ * How a `kanban_message` reaches the worker session.
+ *
+ * `queue` is the old and still default behavior: the message waits for the turn
+ * in flight to end. `steer` interrupts it — the same seam a human uses when they
+ * steer a running session in the GUI — so a correction can land before the step
+ * it is meant to change. A correction that arrives after the release step it
+ * warned about is useless, which is the whole reason this exists (KAN-67).
+ */
+export const MESSAGE_MODES = ['queue', 'steer']
+
+/**
+ * Decide how one message is actually delivered, from what the host knows.
+ *
+ * Pure on purpose: the host hands over the resolved session id, the agent's
+ * status and whether a steer seam exists on it, and this says which of three
+ * things happens — inject into the turn in flight, queue for the next input, or
+ * report that there is no session to receive anything. The tool result then
+ * states what really happened instead of letting the orchestrator assume it.
+ *
+ * A steer that cannot interrupt anything degrades to a queue rather than
+ * failing: an idle session takes the message as its next input either way, and
+ * the difference is only honest reporting, not a different outcome.
+ *
+ * @param {object} input
+ * @param {string} [input.mode] - 'queue' (default) or 'steer'.
+ * @param {string|null} [input.sessionId] - the ticket's live session, if any.
+ * @param {string|null} [input.agentStatus] - the agent's status, or null when
+ *   the session is not live in this process ('closed' counts as not live).
+ * @param {boolean} [input.steerAvailable] - whether that agent has a steer seam.
+ * @returns {{delivery: 'injected'|'queued'|'session-gone', degradeReason?: string}}
+ */
+export function planMessageDelivery({ mode = 'queue', sessionId = null, agentStatus = null, steerAvailable = false } = {}) {
+  const live = sessionId !== undefined && sessionId !== null && sessionId !== ''
+    && agentStatus !== undefined && agentStatus !== null && agentStatus !== 'closed' && agentStatus !== 'not-in-process'
+  if (!live) return { delivery: 'session-gone' }
+  if (mode !== 'steer') return { delivery: 'queued' }
+  if (agentStatus === 'running' && steerAvailable === true) return { delivery: 'injected' }
+  return {
+    delivery: 'queued',
+    degradeReason: steerAvailable === false
+      ? 'this harness build has no steer seam, so the message was queued as the next input instead'
+      : `the session is ${agentStatus}, not mid-turn, so the steer was queued as its next input`,
+  }
+}
+
 export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_board',
@@ -736,11 +782,15 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_message',
     description:
-      'Send a message into a ticket’s session — a correction, a pointer, a question to put to whoever is working there. It is queued, never interrupting a turn in flight. A session that ended its turn on a question receives it as that session’s next input, so this is also how you answer a worker question that does not need a human. It does not approve anything.',
+      'Send a message into a ticket’s session — a correction, a pointer, a question to put to whoever is working there. Two delivery modes: `queue` (the default) waits for the turn in flight and arrives as that session’s next input; `steer` interrupts the turn in flight, so the worker can change course before it reaches the step you are warning about — use it only for a time-critical correction, because an interruption costs the session its work so far. A steer to a session that is idle, or that ended its turn on a question, degrades to a queue and the result says so. A session that ended its turn on a question receives the message as that session’s next input either way, so this is also how you answer a worker question that does not need a human. The result reports what actually happened: `injected`, `queued` or `session-gone`. It does not approve anything.',
     parameters: {
       ticket: TICKET_ARG,
       text: { type: 'string', required: true, description: 'What to say to that session.' },
       purpose: { type: 'string', description: 'Which session: "plan", "build" or "verify". Defaults to the one the ticket is in now.' },
+      mode: {
+        type: 'string',
+        description: '"queue" (default) delivers as the next input when the session is idle; "steer" injects into the turn in flight and degrades to queue when nothing is running.',
+      },
     },
     guard: (args, api) => {
       const found = requireTicket(api, args.ticket)
@@ -751,9 +801,12 @@ export const ORCHESTRATOR_TOOL_SPECS = [
       if (args.purpose !== undefined && !['plan', 'build', 'verify'].includes(args.purpose)) {
         return { ok: false, message: 'purpose must be "plan", "build" or "verify" when given' }
       }
+      if (args.mode !== undefined && !MESSAGE_MODES.includes(args.mode)) {
+        return { ok: false, message: `mode must be one of ${MESSAGE_MODES.join(' or ')}` }
+      }
       return { ok: true, ticket: found.ticket }
     },
-    run: async (args, api, resolved) => api.message(resolved.ticket, args.text, args.purpose ?? null),
+    run: async (args, api, resolved) => api.message(resolved.ticket, args.text, args.purpose ?? null, args.mode ?? 'queue'),
   },
   {
     name: 'kanban_sessions',

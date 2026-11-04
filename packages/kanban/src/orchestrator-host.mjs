@@ -40,6 +40,7 @@ import {
   clip,
   createDigestWindow,
   isWatchedEvent,
+  planMessageDelivery,
   runOrchestratorTool,
   ticketLineFacts,
 } from './orchestrator.mjs'
@@ -641,19 +642,38 @@ export class KanbanOrchestrator {
         return { kicked: result?.kicked === true, flavor: result?.flavor ?? null, reason: result?.why ?? null }
       },
 
-      message: (ticket, text, purpose) => {
+      message: (ticket, text, purpose, mode = 'queue') => {
         const wanted = purpose ?? (ticket.phase === 'plan' ? 'plan' : 'build')
-        const sessionId = this.driver?.liveTicketSession?.(ticket.id, wanted)
-        if (sessionId === undefined) {
-          return { sent: false, reason: `no live ${wanted} session for ${ticket.key}; start it, or retry the ticket with an instruction` }
+        const sessionId = this.driver?.liveTicketSession?.(ticket.id, wanted) ?? null
+        const agent = sessionId === null ? null : this.ctx.get('agents')?.get?.(sessionId) ?? null
+        const agentStatus = agent === null || agent === undefined ? null : (agent.status ?? 'unknown')
+        const plan = planMessageDelivery({
+          mode,
+          sessionId,
+          agentStatus,
+          steerAvailable: typeof agent?.steer === 'function',
+        })
+        if (plan.delivery === 'session-gone') {
+          return {
+            delivery: 'session-gone',
+            sessionId,
+            purpose: wanted,
+            reason: sessionId === null
+              ? `no live ${wanted} session for ${ticket.key}; start it, or retry the ticket with an instruction`
+              : `session ${sessionId} is not live in this process`,
+          }
         }
-        const agent = this.ctx.get('agents')?.get?.(sessionId)
-        if (agent === undefined || agent === null) return { sent: false, reason: `session ${sessionId} is not live in this process` }
-        agent.followup(createUserMessage({
+        // The same payload either way: only the seam differs, so a steer reads to
+        // the worker exactly like a queued note, one step earlier.
+        const message = createUserMessage({
           content: [{ type: 'text', text: `[orchestrator] ${text}` }],
           source: { kind: 'plugin:dsh-kanban', form: 'notice', summary: `orchestrator: ${clip(text, 90)}` },
-        }))
-        return { sent: true, sessionId, purpose: wanted }
+        })
+        if (plan.delivery === 'injected') agent.steer(message)
+        else agent.followup(message)
+        const result = { delivery: plan.delivery, sessionId, purpose: wanted }
+        if (plan.degradeReason !== undefined) result.reason = plan.degradeReason
+        return result
       },
 
       sessions: () => {

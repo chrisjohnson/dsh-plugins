@@ -632,3 +632,23 @@ restart or a generic park.
   because the ticket's own state (waiting in Backlog, waiting for plan approval)
   is still true and parking it would make a rejected edit look like a failure of
   the ticket.
+
+## 2026-11-04 — a message may interrupt (0.31.0, KAN-67)
+
+- **API found:** `agent.steer(message)` on the same agent object the plugin
+  already calls `agent.followup(message)` on (`@deepseek-ai/dsh-agent-loop`,
+  present in the pinned 0.2.0-rc.2 build). `followup` is
+  `send(input, "next-turn", true)`; `steer` is `send(input, "next-step", true)` —
+  the same inbox, one slot earlier, so a steered message is inside the turn in
+  flight. `inject` is the same position without the wake and is not what a
+  deliberate interruption wants.
+- **API found:** `agent.status` is `"running"` while a turn is in flight and
+  `"idle"` otherwise (the loop maps every non-idle, non-maintenance phase to
+  running), which is the whole question `planMessageDelivery` asks before it
+  chooses the seam. A session the process does not hold has no agent, and
+  `status === 'closed'` is treated the same way: nothing is delivered and the
+  result says `session-gone`.
+- **Degradation, not failure.** A steer aimed at an idle session is delivered as a
+  queue: the outcome the sender wanted (the message reaches that session) still
+  happens, only without an interruption to lose. The result carries `reason` so
+  the orchestrator is not misled about which happened.

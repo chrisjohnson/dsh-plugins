@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 
 import {
   MAX_DIGEST_LINES,
+  MESSAGE_MODES,
   ORCHESTRATOR_TOOL_NAMES,
   ORCHESTRATOR_TOOL_SPECS,
   WATCHED_EVENT_KINDS,
@@ -21,6 +22,7 @@ import {
   createDigestWindow,
   digestEvent,
   isWatchedEvent,
+  planMessageDelivery,
   runOrchestratorTool,
 } from '../src/orchestrator.mjs'
 
@@ -479,4 +481,75 @@ test('a tool that throws inside the host seam surfaces as a tool error', async (
 test('arguments that are not an object are treated as empty, not crashed on', async () => {
   const { api } = fakeApi()
   await assert.rejects(() => runOrchestratorTool('kanban_ticket', null, api), /required/)
+})
+
+// ------------------------------------------------- message delivery modes --
+//
+// KAN-67: a message that only queues is useless when it is sent to correct a
+// turn already in flight, so the tool gained `mode` and the result gained the
+// truth about what happened. The choice is a pure decision; the host seam just
+// carries it out.
+
+test('the delivery vocabulary is queue and steer, and nothing else reaches the seam', async () => {
+  assert.deepEqual(MESSAGE_MODES, ['queue', 'steer'])
+  const { api, calls } = fakeApi()
+  for (const mode of ['interrupt', 'QUEUE', 'immediate', '']) {
+    await assert.rejects(
+      () => runOrchestratorTool('kanban_message', { ticket: 'KAN-1', text: 'hi', mode }, api),
+      /mode must be one of queue or steer/,
+    )
+  }
+  assert.equal(calls.length, 0, 'a refused mode never reaches the host seam')
+})
+
+test('the mode reaches the host seam, and omitting it means queue', async () => {
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_message', { ticket: 'KAN-1', text: 'hold the tag' }, api)
+  assert.deepEqual(calls[0], ['message', api.resolveTicket('KAN-1'), 'hold the tag', null, 'queue'])
+  await runOrchestratorTool('kanban_message', { ticket: 'KAN-1', text: 'hold the tag', purpose: 'build', mode: 'steer' }, api)
+  assert.deepEqual(calls.at(-1), ['message', api.resolveTicket('KAN-1'), 'hold the tag', 'build', 'steer'])
+})
+
+test('a steer into a session that is mid-turn is injected', () => {
+  assert.deepEqual(
+    planMessageDelivery({ mode: 'steer', sessionId: 's-1', agentStatus: 'running', steerAvailable: true }),
+    { delivery: 'injected' },
+  )
+})
+
+test('a steer into an idle session degrades to a queue and says why', () => {
+  for (const agentStatus of ['idle', 'maintenance']) {
+    const plan = planMessageDelivery({ mode: 'steer', sessionId: 's-1', agentStatus, steerAvailable: true })
+    assert.equal(plan.delivery, 'queued', `${agentStatus} must not claim an injection`)
+    assert.match(plan.degradeReason, new RegExp(agentStatus))
+  }
+})
+
+test('a steer on a harness build with no steer seam degrades to a queue', () => {
+  const plan = planMessageDelivery({ mode: 'steer', sessionId: 's-1', agentStatus: 'running', steerAvailable: false })
+  assert.equal(plan.delivery, 'queued')
+  assert.match(plan.degradeReason, /no steer seam/)
+})
+
+test('a queue to a running session queues: the default never interrupts', () => {
+  assert.deepEqual(
+    planMessageDelivery({ mode: 'queue', sessionId: 's-1', agentStatus: 'running', steerAvailable: true }),
+    { delivery: 'queued' },
+  )
+  assert.deepEqual(planMessageDelivery({ sessionId: 's-1', agentStatus: 'running', steerAvailable: true }), { delivery: 'queued' })
+})
+
+test('no live session is session-gone, whichever mode was asked for', () => {
+  const dead = [
+    { sessionId: null, agentStatus: null },
+    { sessionId: undefined, agentStatus: undefined },
+    { sessionId: 's-1', agentStatus: null },
+    { sessionId: 's-1', agentStatus: 'not-in-process' },
+    { sessionId: 's-1', agentStatus: 'closed' },
+  ]
+  for (const state of dead) {
+    for (const mode of MESSAGE_MODES) {
+      assert.equal(planMessageDelivery({ mode, ...state, steerAvailable: true }).delivery, 'session-gone', `${mode} over ${JSON.stringify(state)}`)
+    }
+  }
 })

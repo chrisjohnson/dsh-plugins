@@ -5,6 +5,28 @@
 
 ## Unreleased
 
+### Added
+
+- **`kanban_message` has a steer mode (KAN-67).** Every message the orchestrator
+  sent into a *running* session waited for that turn to end, so a correction fired
+  at a mid-turn build could land after the very step it was warning about — during
+  the KAN-64/65/66 wave the tag-collision guard and the live-checkout workaround
+  were thrown at running sessions with no way to know whether they arrived in time.
+  `mode: 'queue'` is the old behavior and still the default: the message is the
+  session's next input. `mode: 'steer'` injects it into the turn in flight at the
+  next step, through `agent.steer` — the same seam a person uses to steer a
+  running session in the GUI — so the worker can change course before it is too
+  late. The delivery decision is a pure function, `planMessageDelivery`, and the
+  tool result now reports what actually happened —
+  `delivery: 'injected' | 'queued' | 'session-gone'`, with a `reason` when there is
+  no session or a steer degraded — instead of the old `sent: true` that said only
+  that something was handed to the harness. A steer degrades to a queue when the
+  session is idle, has ended its turn on a question, or is running on a harness
+  build without the steer seam, and says so in the result. An unknown `mode` is
+  refused at the guard. The orchestrator prompt now says steer is for
+  time-critical corrections only, and that `kanban_sessions` shows running versus
+  idle so the choice is deliberate.
+
 ## 0.30.0
 
 ### Added

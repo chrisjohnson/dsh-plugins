@@ -772,3 +772,19 @@ test('the question-park chip and the live-wait chip say the same thing', async (
   assert.match(client, /\(d\.awaitingQuestion \|\| d\.parkedOnQuestion\) \? "waiting on your answer"/)
   assert.match(client, /\(d\.awaitingApproval \|\| d\.awaitingQuestion \|\| d\.parkedOnQuestion\) && d\.approvalSessionId/)
 })
+
+test('the orchestrator message seam carries the plan out: steer to inject, followup to queue', async () => {
+  // KAN-67: the decision is pure and tested in orchestrator.test.mjs; what is
+  // pinned here is that the wiring actually uses the two different seams and
+  // reports the delivery instead of a bare `sent: true`.
+  const host = (await sources())['orchestrator-host.mjs']
+  assert.match(host, /message: \(ticket, text, purpose, mode = 'queue'\)/)
+  assert.match(host, /planMessageDelivery\(\{/)
+  assert.match(host, /steerAvailable: typeof agent\?\.steer === 'function'/)
+  assert.match(host, /if \(plan\.delivery === 'injected'\) agent\.steer\(message\)/)
+  assert.match(host, /else agent\.followup\(message\)/)
+  assert.match(host, /delivery: 'session-gone'/)
+  assert.equal(/sent: (?:true|false)/.test(host), false, 'the old boolean result is gone')
+  // Both paths send the same payload, so a steered note reads like a queued one.
+  assert.match(host, /text: `\[orchestrator\] \$\{text\}`/)
+})
