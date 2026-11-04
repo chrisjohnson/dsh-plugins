@@ -144,32 +144,41 @@ test('the ticket payload no longer carries the span tree or a second copy of eve
 })
 
 test('the stream opens with the board, pushes a change, and lets go when the reader does', { skip }, async () => {
-  const { routes, rpc, store, stop } = await boot()
-  const ids = await seed(rpc, store)
-  const controller = new AbortController()
-  const response = await routes.get('/api/kanban/stream')({ signal: controller.signal })
-  assert.match(response.headers.get('content-type'), /ndjson/)
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  const nextFrame = async () => {
-    for (;;) {
-      const cut = buffer.indexOf('\n')
-      if (cut >= 0) { const line = buffer.slice(0, cut); buffer = buffer.slice(cut + 1); return JSON.parse(line) }
-      const chunk = await reader.read()
-      if (chunk.done) return null
-      buffer += decoder.decode(chunk.value, { stream: true })
+  // The feed's one-second token tick is unref'd on purpose — a board feed must
+  // never be what keeps a process alive — so an await here would otherwise let the
+  // event loop drain before the tick that carries the change. Keep the loop ref'd
+  // for the length of this test only.
+  const keepAlive = setInterval(() => {}, 250)
+  try {
+    const { routes, rpc, store, stop } = await boot()
+    const ids = await seed(rpc, store)
+    const controller = new AbortController()
+    const response = await routes.get('/api/kanban/stream')({ signal: controller.signal })
+    assert.match(response.headers.get('content-type'), /ndjson/)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const nextFrame = async () => {
+      for (;;) {
+        const cut = buffer.indexOf('\n')
+        if (cut >= 0) { const line = buffer.slice(0, cut); buffer = buffer.slice(cut + 1); return JSON.parse(line) }
+        const chunk = await reader.read()
+        if (chunk.done) return null
+        buffer += decoder.decode(chunk.value, { stream: true })
+      }
     }
+    const first = await nextFrame()
+    assert.equal(first.compact, true)
+    assert.equal(first.columns.backlog.length, 2)
+    store.setNeedsAttention(ids.b, 'stuck')
+    const second = await nextFrame()
+    assert.equal(second.columns.backlog.find((c) => c.id === ids.b).status, 'attention')
+    assert.notEqual(second.token, first.token)
+    assert.ok(second.seq > first.seq)
+    controller.abort()
+    assert.equal((await nextFrame()), null, 'the response ends')
+    stop()
+  } finally {
+    clearInterval(keepAlive)
   }
-  const first = await nextFrame()
-  assert.equal(first.compact, true)
-  assert.equal(first.columns.backlog.length, 2)
-  store.setNeedsAttention(ids.b, 'stuck')
-  const second = await nextFrame()
-  assert.equal(second.columns.backlog.find((c) => c.id === ids.b).status, 'attention')
-  assert.notEqual(second.token, first.token)
-  assert.ok(second.seq > first.seq)
-  controller.abort()
-  assert.equal((await nextFrame()), null, 'the response ends')
-  stop()
 })
