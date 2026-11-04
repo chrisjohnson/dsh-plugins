@@ -57,6 +57,7 @@ const ENDPOINTS = [
   'readImage',
   'orchestrator',
   'orchestratorSetPaused',
+  'orchestratorDetach',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -462,6 +463,19 @@ export default async function kanban(ctx, config = {}) {
             const answer = orchestrator.setPaused(p.paused);
             boardFeedRef.current?.notify();
             return { ok: true, value: answer };
+          }
+          case 'orchestratorDetach': {
+            // KAN-65: the Work page's refresh for the orchestrator session. A
+            // session's tools and prompt are decorated when it is created, so a
+            // tool shipped by a release does not exist in the live session until
+            // the service restarts — which ends every session on the box. This
+            // archives just the orchestrator and starts a fresh one carrying the
+            // current preset, prompt and tools, greeted with a board snapshot.
+            const orchestrator = orchestratorRef.current;
+            if (orchestrator === null) return fail('unavailable', 'the kanban orchestrator is not running in this host');
+            const result = await orchestrator.detach();
+            if (result?.ok !== true) return fail('bad_request', result?.error ?? 'the orchestrator session could not be restarted');
+            return { ok: true, value: { previousId: result.previousId, sessionId: result.sessionId, state: result.state } };
           }
           case 'create': {
             const column = p.column ?? 'backlog';

@@ -2891,6 +2891,30 @@ var CSS =
 				}, function () { setNotice("Could not reach the Host."); });
 			}
 
+			// KAN-65: refresh the orchestrator session without restarting the
+			// service. A session's tools and system prompt are decorated once, when
+			// it is created, so a tool shipped by a plugin release does not exist in
+			// the live orchestrator until the next restart — and a restart ends
+			// every session on the box. This retires that one session and starts a
+			// fresh one carrying the current preset, prompt and tools, greeted with
+			// a board snapshot. The confirm is because the session being replaced is
+			// archived as it happens, so its transcript leaves the open list.
+			function restartOrchestrator() {
+				var sure = window.confirm("Restart the orchestrator session?\n\nThe current session is archived with its history and a fresh one starts, with the current tools, prompt and a new board snapshot. Nothing else is touched, and no service restart is needed.");
+				if (!sure) return;
+				setNotice("Restarting the orchestrator session…");
+				rpc("orchestratorDetach", {}).then(function (res) {
+					if (res && res.ok) {
+						var value = res.value || {};
+						var state = value.state || {};
+						setNotice("Orchestrator restarted: " + (value.previousId || "the old session") + " archived, " + (value.sessionId || "a new session") + " is " + (state.state || "starting") + ".");
+						loadBoard();
+					} else {
+						setNotice(res && res.error ? res.error.message : "The orchestrator session could not be restarted.");
+					}
+				}, function () { setNotice("Could not reach the Host."); });
+			}
+
 			var columns = board ? board.columns : { backlog: [], working: [], done: [], discarded: [] };
 			var allTickets = Object.keys(columns).reduce(function (list, column) { return list.concat(columns[column] || []); }, []);
 			// Done and Discarded share one column, newest closed first (the host
@@ -2905,8 +2929,9 @@ var CSS =
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
-						board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
+board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
 						h("button", { className: "kb-btn", title: "Open the permanent orchestrator session that keeps tickets moving", onClick: function () { openOrchestrator(); }, children: "Open orchestrator" }),
+						h("button", { className: "kb-btn", title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart", onClick: function () { restartOrchestrator(); }, children: "Restart orchestrator" }),
 						h("button", {
 							className: "kb-btn" + (board && board.orchestratorPaused ? " primary" : ""),
 							title: board && board.orchestratorPaused ? "Let board events and tool calls reach the orchestrator again" : "Stop all traffic between the board engine and the orchestrator",

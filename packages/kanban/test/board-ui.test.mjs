@@ -124,3 +124,31 @@ test('the mobile board collapses to one track and reveals Backlog/Done behind bu
   )
 })
 
+// KAN-65: the Work page can retire the orchestrator session and start a fresh
+// one, so a tool shipped by a release is usable without restarting the service.
+test('the Work header can restart the orchestrator session', async () => {
+  const src = await clientSource()
+  const page = sliceFunction(src, 'KanbanPage')
+
+  // The control sits with the one that opens the session, and says what it does.
+  const actions = page.slice(page.indexOf('className: "kb-actions"'))
+  const openAt = actions.indexOf('children: "Open orchestrator"')
+  const restartAt = actions.indexOf('children: "Restart orchestrator"')
+  assert.ok(openAt >= 0, 'the Open button is still there')
+  assert.ok(restartAt > openAt, 'the restart button sits next to it in the header')
+  assert.match(actions, /title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart"/)
+
+  // It asks first: the session it replaces is archived as it happens.
+  assert.match(page, /function restartOrchestrator\(\) \{/)
+  assert.match(page, /window\.confirm\("Restart the orchestrator session\?/)
+  // One endpoint, and the board is re-read so the notice and the session list
+  // both show the new state.
+  assert.match(page, /rpc\("orchestratorDetach", \{\}\)/)
+  assert.match(page, /setNotice\("Orchestrator restarted: /)
+  assert.match(page, /loadBoard\(\)/)
+
+  // A plain handler, like the file's other actions: no hook is added for it, so
+  // the slot's hook count cannot change between renders.
+  assert.equal(/function restartOrchestrator\(\)[\s\S]{0,600}?React\.use(State|Effect|Ref|Memo)/.test(page), false, 'the restart handler must not call a hook')
+})
+

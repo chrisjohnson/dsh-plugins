@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import { migrate } from '../src/db.mjs'
+import { SCHEMA_VERSION } from '../src/schema.mjs'
 import { KanbanStore } from '../src/store.mjs'
 
 function setup() {
@@ -308,4 +309,33 @@ test('a deferred condition round-trips through the store', () => {
   // A new plan version replaces the set; the marker does not leak across versions.
   store.replaceConditions(ticket.id, 2, [{ id: 'only', statement: 's', howVerified: 'v' }], 'plan')
   assert.equal(store.listConditions(ticket.id)[0].deferred, false)
+})
+
+// ------------------------------------------------------------------- KAN-65
+
+test('the kv table round-trips a value and replaces it in place', () => {
+  const { store } = setup()
+  assert.equal(store.kvGet('orchestrator.sessionId'), null, 'an unset key reads null, not an empty string')
+  store.kvSet('orchestrator.sessionId', 'kanban-orchestrator-2')
+  assert.equal(store.kvGet('orchestrator.sessionId'), 'kanban-orchestrator-2')
+  // One row per key: a rotation overwrites, it does not append a history.
+  store.kvSet('orchestrator.sessionId', 'kanban-orchestrator-3')
+  assert.equal(store.kvGet('orchestrator.sessionId'), 'kanban-orchestrator-3')
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM kv WHERE key = ?').get('orchestrator.sessionId').n, 1)
+  // Values are text whatever was handed in; the orchestrator stores its
+  // generation as a string for exactly this reason.
+  store.kvSet('orchestrator.generation', 4)
+  assert.equal(store.kvGet('orchestrator.generation'), '4')
+})
+
+test('v9 adds kv to a fresh board and leaves every other table alone', () => {
+  const { db, store } = setup()
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kv'").all()
+  assert.equal(tables.length, 1, 'a fresh board has the kv table')
+  const version = db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get()
+  assert.equal(Number(version.v), SCHEMA_VERSION)
+  // The kv table is standalone: no ticket may be required for a key to exist.
+  store.kvSet('anything', 'value')
+  assert.equal(store.kvGet('anything'), 'value')
+  assert.equal(store.counts().backlog, 0)
 })

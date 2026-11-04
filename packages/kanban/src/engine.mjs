@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 
 import { providerPolicy, routeForAttempt } from './config.mjs';
 import { StoreError } from './store.mjs';
-import { TERMINAL_COLUMNS, canMarkDone, canRerunReview } from './lifecycle.mjs';
+import { TERMINAL_COLUMNS, canMarkDone, canRerunReview, canTransitionPhase } from './lifecycle.mjs';
 import { refsFromBody, resolveAttachments } from './images.mjs';
 import { hashText, render, shortHash } from './prompts.mjs';
 import { cloneNames, resolveLiveCheckouts } from './guard.mjs';
@@ -1173,13 +1173,31 @@ export class Engine {
     return done;
   }
 
-  async discard(ticketId, reason = '') {
+  /**
+   * Close a ticket without approval. `options.actor` is who the record credits:
+   * the human endpoints leave it at `'human'`, and the orchestrator's
+   * `kanban_discard` passes `'orchestrator'` so the board can tell who threw the
+   * work away (KAN-65). Everything else about the move is the same path.
+   */
+  async discard(ticketId, reason = '', { actor = 'human' } = {}) {
     const ticket = this.store.getTicket(ticketId);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
     await this.closeTicketSessions(ticket.id);
-    const discarded = this.store.transitionTicket(ticket.id, { column: 'discarded', phase: 'closed' }, { actor: 'human', reason: reason || 'discarded' });
+    // Only a phase the graph can actually reach `closed` from gets closed; a
+    // ticket still planning, building or reviewing has no finished phase to
+    // close, so the move is column-only — the same shape the human discard of a
+    // Backlog card takes in src/host.mjs. That is not an edge case here: the
+    // work an orchestrator discards is usually a Backlog duplicate, and it may
+    // also discard one parked mid-build (KAN-65, found by the lab e2e).
+    const closesPhase = canTransitionPhase(ticket.phase, 'closed');
+    const phaseTo = closesPhase ? 'closed' : ticket.phase;
+    const discarded = this.store.transitionTicket(
+      ticket.id,
+      { column: 'discarded', phase: closesPhase ? 'closed' : undefined },
+      { actor, reason: reason || 'discarded' },
+    );
     this.endRun(ticket.id);
-    this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo: 'closed', actor: 'human', payload: { reason } });
+    this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo, actor, payload: { reason } });
     this.postClose(discarded);
     return discarded;
   }

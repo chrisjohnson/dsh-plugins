@@ -9,20 +9,25 @@
 //
 // Three properties this wiring exists to keep:
 //
-//   - It is permanent. The id never changes, so a restart resumes the same
-//     conversation instead of starting a new one, and the Work page's button has
-//     a fixed thing to open. If the session cannot be reached, the board still
-//     works: every failure here is a log line and a state, never a thrown boot.
+//   - It is permanent. The id is stable across restarts, so the same
+//     conversation resumes and the Work page's button has a fixed thing to open.
+//     The one deliberate exception is a detach (KAN-65): the board owner can
+//     archive this session and start a fresh one — new tools, new prompt, no
+//     service restart — and the rotated id is remembered in the board db, so
+//     every later boot resumes the new session, not the archived one. If the
+//     session cannot be reached, the board still works: every failure here is a
+//     log line and a state, never a thrown boot.
 //   - It stays answerable. The preset gives it a 5-second shell and 5-second job
 //     waits, and everything the engine sends goes in through `followup`, which
 //     queues: a digest never interrupts a turn, so it never interrupts the human.
 //   - It is a reader with levers, not a worker. Read-only sandbox mode, the
-//     write and edit tools restricted away, and a tool set with no approve, no
-//     discard and no close in it. It can file a new ticket into Backlog, fix
-//     the title or body of one nothing has started, and change the settings of
-//     an open one — preset, write mode, worktree, priority, plan timing, budget
-//     — through the store's own validation; everything past that belongs to a
-//     person.
+//     write and edit tools restricted away, and a tool set with no approve and no
+//     close in it. It can file a new ticket into Backlog — with the preset, write
+//     mode and worktree settings its build will need — fix the title or body of
+//     one nothing has started, on the same pristine lock the human edit boundary
+//     uses, change the settings of an open one (preset, write mode, worktree,
+//     priority, plan timing, budget) through the store's own validation, and
+//     discard an open one with a reason. Approving and closing stay with a person.
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -40,6 +45,7 @@ import {
   clip,
   createDigestWindow,
   isWatchedEvent,
+  nextOrchestratorSessionId,
   runOrchestratorTool,
   ticketLineFacts,
 } from './orchestrator.mjs'
@@ -50,6 +56,12 @@ const START_DELAY_MS = 1500
 const RETRY_DELAY_MS = 30000
 /** Characters of a ticket body a `kanban_ticket` read returns. */
 const BODY_CHARS = 4000
+/** The board-kv keys a detach writes (see src/schema.mjs v9). */
+const KV_SESSION_ID = 'orchestrator.sessionId'
+const KV_GENERATION = 'orchestrator.generation'
+/** How many times a detach tries to archive the session it is retiring. */
+const ARCHIVE_ATTEMPTS = 3
+
 
 const TOOL_OUTPUT = {
   schema: { type: 'object', additionalProperties: true },
@@ -101,13 +113,32 @@ export class KanbanOrchestrator {
     })
   }
 
+  /**
+   * The id a detach rotated to, if this board has had one. Read on every call
+   * rather than cached in a field: the whole point of a detach is that the id
+   * changes under a running process, and the next boot has to resume the rotated
+   * session instead of the one named in the config row.
+   */
+  #kv(key) {
+    try {
+      const value = typeof this.store?.kvGet === 'function' ? this.store.kvGet(key) : null
+      return typeof value === 'string' && value !== '' ? value : null
+    } catch {
+      // A board db that cannot answer is a board that still has its configured
+      // orchestrator; the rotation is a refinement, not a prerequisite.
+      return null
+    }
+  }
+
   #config() {
     const config = this.getConfig() ?? {}
+    const configured = typeof config.orchestratorSessionId === 'string' && config.orchestratorSessionId !== ''
+      ? config.orchestratorSessionId
+      : ORCHESTRATOR_SESSION_ID
     return {
       enabled: config.orchestratorEnabled !== false,
-      sessionId: typeof config.orchestratorSessionId === 'string' && config.orchestratorSessionId !== ''
-        ? config.orchestratorSessionId
-        : ORCHESTRATOR_SESSION_ID,
+      sessionId: this.#kv(KV_SESSION_ID) ?? configured,
+      generation: Number(this.#kv(KV_GENERATION)),
       windowMs: Number.isFinite(config.orchestratorDigestWindowMs) && config.orchestratorDigestWindowMs > 0
         ? config.orchestratorDigestWindowMs
         : 30000,
@@ -272,6 +303,75 @@ export class KanbanOrchestrator {
         this.ensuring = null
       })
     return this.ensuring
+  }
+
+  /**
+   * Retire the current orchestrator session and start a fresh one (KAN-65), with
+   * no service restart.
+   *
+   * Why this exists: a session's tools and system prompt are decorated once, when
+   * it is created, so tools shipped by a plugin release do not appear in the live
+   * orchestrator until the next restart — and a restart ends every session on the
+   * box. Rotating the session is that refresh on its own.
+   *
+   * It rotates the id rather than reusing it: an archived session stays archived,
+   * and both the archived guard above and the resume path refuse a reused id, so
+   * a same-id restart would come back dead. The retired session keeps its place in
+   * the archive list with its whole history; the new one takes the next id and is
+   * greeted with a board snapshot like any first start.
+   *
+   * @returns {Promise<object>} `{ ok: true, previousId, sessionId, state }`, or
+   *   `{ ok: false, error }` with the reason nothing moved.
+   */
+  async detach() {
+    const config = this.#config()
+    if (!config.enabled) return { ok: false, error: 'the orchestrator is turned off, so there is no session to restart' }
+    if (this.ensuring !== null) return { ok: false, error: 'an orchestrator start is already in flight; try again in a moment' }
+    const registry = this.ctx.get('workspaceRegistry')
+    if (typeof registry?.archiveSession !== 'function') {
+      return { ok: false, error: 'the workspace registry is not mounted, so the current session cannot be archived' }
+    }
+    const previousId = config.sessionId
+    // The session may be mid-turn, and an archive of a session with running work
+    // is refused unless it is told to stop it. Three attempts, the same shape the
+    // engine uses when it archives a closed ticket's sessions: a transient
+    // refusal should not cost the refresh, and "no such session" already is the
+    // state we want.
+    let archived = false
+    let lastError = null
+    for (let attempt = 0; attempt < ARCHIVE_ATTEMPTS && archived === false; attempt++) {
+      try {
+        await registry.archiveSession(previousId, { stopActivity: true })
+        archived = true
+      } catch (error) {
+        lastError = error
+        if (error?.name === 'WorkspaceUnknownSessionError') archived = true
+        else await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+      }
+    }
+    if (archived === false) {
+      return { ok: false, error: `the current session ${previousId} could not be archived (${message(lastError)})` }
+    }
+    const nextId = nextOrchestratorSessionId(previousId, config.generation)
+    const nextGeneration = Number.isFinite(config.generation) && config.generation >= 1 ? config.generation + 1 : 2
+    try {
+      this.store.kvSet(KV_SESSION_ID, nextId)
+      this.store.kvSet(KV_GENERATION, String(nextGeneration))
+    } catch (error) {
+      // The old session is archived either way; say so rather than pretend the
+      // board is unchanged, because the next boot would resume the configured id.
+      return { ok: false, error: `${previousId} was archived but ${nextId} could not be recorded as the orchestrator session (${message(error)}); set orchestratorSessionId or restart the service` }
+    }
+    // Digests still queued for the retired session are stale now: the fresh one is
+    // greeted with a board snapshot, which says the same thing more recently.
+    this.window.dispose()
+    this.window = createDigestWindow({ windowMs: this.windowMs, deliver: (text) => this.#deliver(text, 'events') })
+    this.decorated.delete(previousId)
+    this.phase = 'starting'
+    this.detail = null
+    this.log.info('orchestrator: detached %s, starting %s', previousId, nextId)
+    const state = await this.ensure()
+    return { ok: true, previousId, sessionId: state.sessionId ?? nextId, state }
   }
 
   async #ensureOnce(config) {
@@ -566,19 +666,38 @@ export class KanbanOrchestrator {
       /**
        * `kanban_create`: the same store path a human filing a ticket takes
        * (src/host.mjs), so the card shows up on the board and in digests like
-       * any other — only the recorded actor differs. The worktree default is
-       * mirrored from that path: intent is ON whenever the worktree service is
-       * mounted, because a ticket without its own worktree would plan inside a
-       * live checkout.
+       * any other — only the recorded actor differs. The settings the guard
+       * handed over are treated exactly as the human form's are: a preset id
+       * means nothing until the live registry says it does, and the worktree
+       * default is mirrored from that path — intent is ON whenever the worktree
+       * service is mounted, because a ticket without its own worktree would plan
+       * inside a live checkout. An omitted setting stays the store default.
        */
-      create: ({ title, body, priority }) => {
+      create: async ({ title, body, priority, preset, writeMode, worktree, planTiming, planQuestions }) => {
+        if (preset !== undefined && preset !== null) {
+          const presets = this.ctx.get('agentPresets')
+          if (typeof presets?.resolve !== 'function') {
+            return { created: false, reason: 'the agent preset registry is not mounted, so that preset cannot be checked' }
+          }
+          try {
+            await presets.resolve(String(preset))
+          } catch {
+            return { created: false, reason: `unknown agent preset: ${preset}` }
+          }
+        }
         const ticket = store.createTicket(
           {
             title,
             body,
             ...(priority === undefined ? {} : { priority }),
+            ...(preset === undefined ? {} : { preset }),
+            ...(writeMode === undefined ? {} : { writeMode }),
+            ...(planTiming === undefined ? {} : { planTiming }),
+            ...(planQuestions === undefined ? {} : { planQuestions }),
             column: 'backlog',
-            worktree: typeof this.ctx.get('betterGitWorktree')?.createForPath === 'function',
+            worktree: worktree === undefined
+              ? typeof this.ctx.get('betterGitWorktree')?.createForPath === 'function'
+              : worktree === true,
           },
           { actor: 'orchestrator' },
         )
@@ -688,6 +807,18 @@ export class KanbanOrchestrator {
           source: { kind: 'plugin:dsh-kanban', form: 'notice', summary: `orchestrator: ${clip(text, 90)}` },
         }))
         return { sent: true, sessionId, purpose: wanted }
+      },
+
+      /**
+       * `kanban_discard`: the engine's own discard path, credited to the
+       * orchestrator. The guard already refused a blank reason and a ticket that
+       * is Done or Discarded; everything past that — closing its sessions,
+       * ending its run, the post-close archive — is the sequence a human
+       * discard runs, with the actor being the only difference.
+       */
+      discard: async (ticket, reason) => {
+        const updated = await engine.discard(ticket.id, reason, { actor: 'orchestrator' })
+        return { discarded: true, ticket: this.#ticketLine(updated) }
       },
 
       sessions: () => {

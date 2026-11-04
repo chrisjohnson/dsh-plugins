@@ -575,17 +575,55 @@ of a ticket nothing has started) to author; `kanban_configure` (change the
 settings of an open ticket — see below); `kanban_move` (Backlog ⇄ Working),
 `kanban_start` (planning or build), `kanban_retry` (a parked ticket, with an
 instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
-that halted mid-turn) and `kanban_message` (a note into a ticket's live session)
-to act. That is the whole menu, and it is enforced in code, not in prose: there is
-no tool that approves, discards or closes a ticket, and none for a question that
-genuinely needs a human — a worker question that does not need one is answered with
-`kanban_message` — while the session runs under a read-only sandbox with `write`
-and `edit` restricted away. A filed ticket goes through the same store path a human
+that halted mid-turn), `kanban_message` (a note into a ticket's live session) and
+`kanban_discard` (end an open ticket, with a reason) to act. That is the whole
+menu, and it is enforced in code, not in prose: there is no tool that approves or
+closes a ticket as done, and none for a question that genuinely needs a human — a
+worker question that does not need one is answered with `kanban_message` — while
+the session runs under a read-only sandbox with `write` and `edit` restricted
+away. A filed ticket goes through the same store path a human
 creation uses and its `created` event carries `actor: 'orchestrator'`; an edit
 takes title and body only, and is locked by the same pristine rule as the human
 edit boundary — once anything has touched a ticket, it can no longer be edited. A
 call that crosses a boundary is refused at the tool with a sentence explaining
 whose call it was instead.
+
+**Discarding (0.32.0).** `kanban_discard` needs a non-empty reason and refuses a
+ticket that is already Done or Discarded, so it cannot reopen or double-close. It
+runs the engine's own discard path — the ticket's sessions are closed, its run
+ends, the post-close worktree archive runs — and both the transition and the
+`discarded` event carry `actor: 'orchestrator'`. The state machine allows an
+orchestrator into `discarded` and nowhere else terminal: Done remains reachable
+only by the engine and by a human approving.
+
+**Filing a ticket with the settings its build needs (0.32.0).** `kanban_create`
+takes the same `preset`, `writeMode`, `worktree`, `planTiming` and
+`planQuestions` the human form does, and they mean the same thing: what the
+ticket's build session runs under. Shape is checked in the tool (an unknown
+`writeMode` or a bad plan-mode pair is refused before anything is filed); a preset
+id is checked against the live registry, exactly as the human path checks it, and
+an unknown one is a refusal naming it. An omitted setting stays at the store
+default, except `worktree`, which mirrors the human form and is on whenever the
+worktree service is mounted. This matters because a build of `dsh-deploy` or
+`dsh-plugins` is denied dependency installs, lab runs and git pushes under the
+defaults: those tickets are filed with the Creator preset (`cordis`), Full Access
+(`danger-full-access`) and `worktree: true`, and the orchestrator's prompt says
+so. A ticket on any other project gets what that project needs — see the prompt's
+"Dsh-specific vs generic kanban work".
+
+**Restarting the session without restarting the service (0.32.0).** A session's
+tools and system prompt are decorated when it is created, so a tool shipped by a
+plugin release does not exist in the live orchestrator until the service
+restarts — and a restart ends every session on the box. The Work page header has
+a **Restart orchestrator** button next to **Orchestrator** for exactly that: it
+confirms, calls `POST /api/kanban/orchestratorDetach`, and the Host archives the
+current session (stopping the turn in it) and starts a fresh one with the current
+preset, prompt and tools, greeted with a board snapshot. The id rotates —
+`kanban-orchestrator`, then `-2`, then `-3` — because an archived id stays
+archived and both the resume path and the archived guard refuse to reuse one; the
+new id is recorded in the board db (`kv` table, migration v8), so every later boot
+resumes the rotated session instead of the configured one. The archived session
+keeps its whole transcript and appears in the session list.
 
 **A read says what is being asked (0.30.0).** The standing directive is that a
 ticket parked on a worker question gets *read* first, and answered by the
@@ -659,7 +697,7 @@ Everything below lives on the `kanban` row.
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
 | `roles{}` | `planner`, `implementer`, `reviewer`, `approver` and `orchestrator`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
 | `orchestratorEnabled` | whether the permanent orchestrator session runs at all (default `true`). Off means the session is never created and the Work page's Orchestrator button says so; everything else about the board is unchanged. See [The orchestrator session](#the-orchestrator-session-0260). |
-| `orchestratorSessionId` | the stable DSH session id of that session (default `kanban-orchestrator`). Stable across restarts on purpose: it is the same conversation tomorrow, and the fixed thing the Work page opens. |
+| `orchestratorSessionId` | the stable DSH session id of that session (default `kanban-orchestrator`). Stable across restarts on purpose: it is the same conversation tomorrow, and the fixed thing the Work page opens. **Restart orchestrator** rotates it to `<id>-2`, `-3`, … and the rotated id is persisted in the board db, which then wins over this row on every later boot; the archived predecessor stays in the session list with its history. |
 | `orchestratorDigestWindowMs` | how long a batch of board events waits for company before it is delivered to the orchestrator (default 30000). A burst of movement costs one message and one turn; a longer window makes it slower to notice. |
 | `confidenceThreshold` | default `0.70`. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
