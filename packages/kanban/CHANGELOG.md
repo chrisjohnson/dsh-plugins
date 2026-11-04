@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.30.0
+
 ### Added
 
 - **The orchestrator can change an open ticket's settings, and can now read a
