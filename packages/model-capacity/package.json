@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-capacity",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Process-wide, per-provider model-call capacity for DeepSeek Harness: every model call, an interactive turn or a subagent child's, queues FIFO for its provider, and the host exposes an activity and queue inspection panel.",
   "type": "module",
   "license": "MIT",

@@ -3,6 +3,27 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## 0.6.0
+
+### Changed
+
+- **Throughput is now a graph per provider, not a row of cards at the top.** The four
+  all-providers rate cards (concurrent output now, 1 minute, 5 minute and 1 hour
+  averages) are gone. Each provider card draws its own output-token graph across the
+  trailing 60 seconds — one point per second, full card width, the same SVG-polyline
+  technique the old sparkline used — between the provider's status line and its
+  capacity bar, with a simple relative time axis (`-60s`, `-45s`, `-30s`, `-15s`,
+  `now`) and no y scale or value labels. The status line keeps the figures the graph
+  shapes: `N concurrent model calls · X tok/s now · Y avg 1m`. The Active leases and
+  Queued calls cards, the per-call live rate and the capacity bars are unchanged.
+- The snapshot ships that series as `providers[].rates.history60`: 60 one-second
+  buckets, oldest first, read out of the ring the meters already keep, so nothing is
+  buffered a second time. A second with no output is 0, the series never reaches
+  before the meter started (a provider that began five seconds ago draws five seconds
+  of line growing in from the right edge rather than an invented flat minute), and a
+  provider that has never streamed keeps `rates: null` and draws a flat baseline. The
+  all-providers `rates` summary is untouched.
+
 ## 0.5.0
 
 ### Added
