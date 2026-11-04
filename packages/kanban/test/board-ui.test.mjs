@@ -132,7 +132,7 @@ test('the Work header can restart the orchestrator session', async () => {
 
   // The control sits with the one that opens the session, and says what it does.
   const actions = page.slice(page.indexOf('className: "kb-actions"'))
-  const openAt = actions.indexOf('children: "Orchestrator"')
+  const openAt = actions.indexOf('children: "Open orchestrator"')
   const restartAt = actions.indexOf('children: "Restart orchestrator"')
   assert.ok(openAt >= 0, 'the Open button is still there')
   assert.ok(restartAt > openAt, 'the restart button sits next to it in the header')

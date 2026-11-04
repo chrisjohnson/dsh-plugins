@@ -476,7 +476,7 @@ export default async function kanban(ctx, config = {}) {
             const result = await orchestrator.detach();
             if (result?.ok !== true) return fail('bad_request', result?.error ?? 'the orchestrator session could not be restarted');
             return { ok: true, value: { previousId: result.previousId, sessionId: result.sessionId, state: result.state } };
-
+          }
           case 'create': {
             const column = p.column ?? 'backlog';
             if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');
