@@ -385,6 +385,15 @@ test('retryPhase uses plan before conditions and the current phase afterward', (
   store.replaceConditions(ticket.id, 1, [{ id: 'n', statement: 's', howVerified: 'v', ordinal: 0 }], 'plan')
   store.transitionTicket(ticket.id, { phase: 'implement' })
   assert.equal(engine.retryPhase(store.getTicket(ticket.id)), 'implement')
+  // KAN-64: a retry is a nudge at the round that is stuck, so every phase
+  // resumes in itself — an approval park goes back to the approval gate, it
+  // does not burn a fresh plan and build round on work that already passed.
+  for (const phase of ['plan', 'implement', 'review', 'verify']) {
+    store.transitionTicket(ticket.id, { phase })
+    assert.equal(engine.retryPhase(store.getTicket(ticket.id)), phase, `a parked ${phase} ticket retries in ${phase}`)
+  }
+  const unplanned = pickedUp(store)
+  assert.equal(engine.retryPhase(unplanned), 'plan', 'with no plan conditions there is nothing to resume against')
 })
 
 // --------------------------------------------------- realtime session activity

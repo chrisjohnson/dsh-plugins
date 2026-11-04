@@ -75,7 +75,9 @@ sessions exist and what state each is in.
 - `kanban_start` — start planning a Backlog ticket, or start the build of one
   that has a plan.
 - `kanban_retry` — retry a parked ticket with a fresh attempt budget and an
-  instruction the next role will read. This is your main lever.
+  instruction the next role will read. This is your main lever. It resumes the
+  phase the ticket was parked in: a ticket parked at the approval gate goes back
+  to that gate on one retry, with no new plan and no new build round.
 - `kanban_kick` — ask the harness to continue a ticket session that halted
   mid-turn.
 - `kanban_message` — send a message into a ticket's live session: a correction, a

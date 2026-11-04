@@ -427,7 +427,18 @@ cold:
 
 Either way the human's instruction reaches the model. It is recorded when the
 retry is made and appended to the next prompt of the role that resumes (planner,
-implementer or reviewer), once.
+implementer, reviewer or approver), once.
+
+A ticket parked at the **approval gate** retries at the approval gate (KAN-64).
+Its work already passed review, so a retry re-runs the hand-over rather than
+re-running the plan and the build behind it: the build session is reopened and
+asked for the hand-over again, and when it cannot be reopened a fresh session
+starts from the same summary as above — which already says the work passed
+review — followed by the hand-over and the instruction. Either way the turn ends
+with the ticket parked at `Awaiting human approval`, so one retry moves a ticket
+that was one step from the gate back onto it, spending no plan round, no build
+round and no attempt. A park lifted because a human started talking in the
+session is theirs: the engine sends no hand-over over that turn.
 
 The unchanged-tree guard (below) is also reset by a human retry, and it only
 fires when the round before named conditions: a failure that named none (a

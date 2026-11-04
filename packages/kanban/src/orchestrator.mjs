@@ -504,7 +504,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_retry',
     description:
-      'Retry a parked ticket with a fresh attempt budget and an instruction the role will read on its next turn. This is how a stuck ticket gets unstuck with a nudge instead of a human. The ticket must actually be parked; a ticket that is not parked is already moving.',
+      'Retry a parked ticket with a fresh attempt budget and an instruction the role will read on its next turn. This is how a stuck ticket gets unstuck with a nudge instead of a human. The ticket resumes in the phase it was parked in, so one held at the approval gate goes back to that gate — its hand-over is re-run, in the session that holds the work or in a fresh one started from the summary of it — with no new plan or build round. The ticket must actually be parked; a ticket that is not parked is already moving.',
     parameters: {
       ticket: TICKET_ARG,
       instruction: { type: 'string', description: 'What the role should do differently. One or two sentences, concrete.' },
