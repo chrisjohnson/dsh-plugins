@@ -5,6 +5,33 @@
 
 ## Unreleased
 
+## 0.27.0
+
+### Added
+
+- **The orchestrator can author tickets (KAN-63).** It could already move, start,
+  retry, kick and message what was on the board; anything it discovered that
+  *should* be on the board — including a rule about how the board itself should be
+  run — still needed a human to file it. Two tools close that gap, and completion
+  stays a human call.
+  `kanban_create` files a new ticket into Backlog from a title, a markdown body
+  and an optional integer priority. It goes through the same store path a human
+  creation uses — same row, same `created` event, same appearance on the board and
+  in digests — with the worktree intent defaulted exactly as the human path
+  defaults it, and the event recorded with `actor: 'orchestrator'`. A body it
+  cannot attach images to is refused rather than filed with a dangling
+  `kanban-image:` ref.
+  `kanban_edit` fixes the title and/or the body of a ticket that has not started:
+  Backlog or Working only, and locked by the same pristine rule as the human edit
+  boundary (`store.isEditable`), so a card a role is already working from cannot
+  change under it. It writes a `ticket_updated` event with `actor: 'orchestrator'`
+  and the fields that changed, and it cannot touch a plan, conditions, review or
+  verdicts — those belong to the phases that produce them.
+  `store.createTicket` takes an `actor` option for this and still defaults to
+  `'human'`, so nothing about the human path changed. The boundary is still the
+  tool set, not the prose: no tool approves, discards or closes a ticket, none
+  answers a question a session put to a human, and the session runs read-only.
+
 ## 0.26.0
 
 ### Added
