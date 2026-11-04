@@ -5,6 +5,31 @@
 
 ## Unreleased
 
+## 0.29.0
+
+### Changed
+
+- **A retry of an approval park goes back to the approval gate (KAN-64).**
+  `kanban_retry` — and the board's "Retry with instruction" button, which is the
+  same `engine.retry` path — resumes a ticket in the phase it was parked in.
+  `verify` used to be mapped to `plan`, so a ticket that had finished build,
+  review and release and only lost its approval hand-over to a service restart
+  burned a fresh plan round and a fresh build round to land back on the very same
+  gate (found closing KAN-62). `verify` now maps to `verify`, matching the
+  existing `review` → `review` case.
+  The engine drives that phase the way a restart resume does: the approval
+  hand-over is re-run in the session that holds the work — reopened through the
+  existing continuity path when it is only on disk — and that turn parks the
+  ticket at `Awaiting human approval`, with the retry instruction appended to the
+  approver's prompt and no attempt spent. When no session can be reopened the
+  hand-over runs in a fresh session seeded with the recovery summary, which
+  already states that the work passed review, so the park's promise that "a human
+  Retry starts a fresh session from a summary of the work so far" now holds for
+  the approval phase too. A park lifted because a human started a turn in the
+  session is left to that conversation. The `kanban_retry` tool description and
+  the orchestrator prompt say the same, so the orchestrator stops re-planning a
+  ticket that was one step from the gate.
+
 ## 0.28.0
 
 ### Changed
