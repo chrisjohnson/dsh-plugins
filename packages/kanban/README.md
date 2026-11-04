@@ -578,7 +578,7 @@ edit boundary — once anything has touched a ticket, it can no longer be edited
 call that crosses a boundary is refused at the tool with a sentence explaining
 whose call it was instead.
 
-**A read says what is being asked (0.29.0).** The standing directive is that a
+**A read says what is being asked (0.30.0).** The standing directive is that a
 ticket parked on a worker question gets *read* first, and answered by the
 orchestrator when the answer does not need a human. That needs the question, not
 just the fact that something waits, so every read carries it: `kanban_board` rows
@@ -592,7 +592,7 @@ implement session: …`) with the question read back out of it — text only, no
 options, because that is all a park preserves. `null` means nothing is waiting.
 Approval prompts are a separate wait and are not questions.
 
-**`kanban_configure` (0.29.0).** The settings a ticket is filed with used to be
+**`kanban_configure` (0.30.0).** The settings a ticket is filed with used to be
 frozen for the orchestrator, so a card created with the wrong combination — a
 harness change with no Creator preset, the wrong write mode, no worktree of its
 own — could only be fixed by a person in the UI. `kanban_configure` changes them
