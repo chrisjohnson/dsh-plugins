@@ -268,6 +268,62 @@ export function askUserToolDefinition({ ask, log }) {
   };
 }
 
+/** Parse one option entry into its label; an option may be a bare string. */
+function optionLabel(option) {
+  if (typeof option === 'string') return option.trim();
+  if (option !== null && typeof option === 'object' && typeof option.label === 'string') return option.label.trim();
+  return '';
+}
+
+/**
+ * The question batch inside an `ask_user_question` tool call, read back out of
+ * the durable event log (KAN-66).
+ *
+ * The driver sees a `tool/call` event when a session asks, and the only copy of
+ * the text is the call's `arguments`: a JSON string on the wire (that is what
+ * `ToolCallBlock` carries), an object when a replay or a test hands one over.
+ * Until now that payload was dropped, so the orchestrator could be told a ticket
+ * was "waiting on your answer" and never shown the answer it was waiting for.
+ *
+ * This is a *display* path, not an execution path, so it is deliberately
+ * tolerant: anything unreadable returns null and the caller falls back to the
+ * park reason. It never throws into an event stream, and it never invents a
+ * question the model did not ask — an entry with no question text is skipped.
+ *
+ * @param {unknown} argumentsText - the `arguments` of the ask's `tool/call` event
+ * @returns {Array<{question: string, options: string[], header?: string}>|null}
+ *   the batch, option labels only, or null when nothing usable was found
+ */
+export function questionsFromCallArgs(argumentsText) {
+  let parsed = argumentsText;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const batch = Array.isArray(parsed) ? parsed : Array.isArray(parsed.questions) ? parsed.questions : null;
+  if (batch === null || batch.length === 0) return null;
+  const questions = [];
+  for (const entry of batch) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const text = typeof entry.question === 'string' ? entry.question.replace(/\s+/g, ' ').trim() : '';
+    if (text === '') continue;
+    const options = Array.isArray(entry.options)
+      ? entry.options.map(optionLabel).filter((label) => label !== '')
+      : [];
+    const header = typeof entry.header === 'string' ? entry.header.replace(/\s+/g, ' ').trim() : '';
+    questions.push({
+      question: text,
+      options,
+      ...(header === '' ? {} : { header }),
+    });
+  }
+  return questions.length > 0 ? questions : null;
+}
+
 /**
  * Make a question batch safe to hand to the question service.
  *

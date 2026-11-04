@@ -40,6 +40,32 @@ export function questionParkReason(phaseName, question) {
   return `${QUESTION_PARK_PREFIX} in the ${phaseName} session: ${question}`;
 }
 
+/** The ` in the <phase> session:` wording `questionParkReason` puts between the prefix and the question. */
+const PARK_PHRASE = /^in the\s+.+?\s+session:\s*/i;
+
+/**
+ * The question a question-park is waiting on, or null (KAN-66).
+ *
+ * `isQuestionPark` says *that* a ticket waits on an answer; this says *what* the
+ * answer is for, by taking back apart what `questionParkReason` wrote. The
+ * question is the last thing the model said, so it may contain colons and
+ * markdown: only the fixed lead is stripped, the rest is returned verbatim.
+ *
+ * A park reason that is not a question park — a stall, a rejected review, the
+ * bare `Waiting on your answer` the board synthesises for a mid-turn wait with
+ * no question text — returns null rather than guessing.
+ *
+ * @param {unknown} reason a ticket's `needsAttentionReason`
+ * @returns {string|null}
+ */
+export function questionFromParkReason(reason) {
+  if (!isQuestionPark(reason)) return null;
+  const tail = reason.slice(QUESTION_PARK_PREFIX.length).replace(/^\s+/, '');
+  if (tail === '') return null;
+  const question = tail.replace(PARK_PHRASE, '').trim();
+  return question === '' ? null : question;
+}
+
 /** Event kinds that prove a ticket moved after a restart resumed it. */
 const PROGRESS_KINDS = new Set([
   'planned',

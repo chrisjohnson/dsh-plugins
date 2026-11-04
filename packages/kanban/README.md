@@ -545,7 +545,8 @@ in the ordinary conversation view — same history, same composer, same everythi
 
 **What it is fed.** On (re)start it receives a `[board snapshot]`: counts, then
 one line per open ticket — key, title, column, phase, and `PARKED:` with the
-reason, `running`, `waiting on a person`. After that, committed store events in
+reason, `ASKING:` with the question a worker is waiting on (and its options),
+`running`, `waiting on a person`. After that, committed store events in
 the high-signal set (`needs_attention_reason`, `attention_cleared`, `stalled`,
 `phase_changed`, `column_changed`, `done`, `discarded`, `aborted`,
 `grant_applied`, `plan_approved`, `retry_scheduled`, `restart_recovered`,
@@ -561,7 +562,8 @@ you.
 **What it can do.** `kanban_board`, `kanban_ticket` and `kanban_sessions` to read;
 `kanban_create` (file a new ticket into Backlog — work it discovers, including a
 rule about how the board should be run) and `kanban_edit` (fix the title or body
-of a ticket nothing has started) to author; `kanban_move` (Backlog ⇄ Working),
+of a ticket nothing has started) to author; `kanban_configure` (change the
+settings of an open ticket — see below); `kanban_move` (Backlog ⇄ Working),
 `kanban_start` (planning or build), `kanban_retry` (a parked ticket, with an
 instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
 that halted mid-turn) and `kanban_message` (a note into a ticket's live session)
@@ -575,6 +577,40 @@ takes title and body only, and is locked by the same pristine rule as the human
 edit boundary — once anything has touched a ticket, it can no longer be edited. A
 call that crosses a boundary is refused at the tool with a sentence explaining
 whose call it was instead.
+
+**A read says what is being asked (0.29.0).** The standing directive is that a
+ticket parked on a worker question gets *read* first, and answered by the
+orchestrator when the answer does not need a human. That needs the question, not
+just the fact that something waits, so every read carries it: `kanban_board` rows
+and the `kanban_ticket` read return `pendingQuestion` —
+`{questions: [{question, options, header?}], source: 'live'|'park'}` — and the
+snapshot line shows it as `ASKING: <question> [opt | opt]`. `live` is a session
+paused inside its turn on an unanswered `ask_user_question`: the driver keeps the
+batch from the call's own `arguments`, options included, and it wins when both
+exist. `park` is the engine's park reason (`Waiting on your answer in the
+implement session: …`) with the question read back out of it — text only, no
+options, because that is all a park preserves. `null` means nothing is waiting.
+Approval prompts are a separate wait and are not questions.
+
+**`kanban_configure` (0.29.0).** The settings a ticket is filed with used to be
+frozen for the orchestrator, so a card created with the wrong combination — a
+harness change with no Creator preset, the wrong write mode, no worktree of its
+own — could only be fixed by a person in the UI. `kanban_configure` changes them
+on an **open** ticket: `preset`, `writeMode`, `worktree`, `priority`,
+`planTiming`, `planQuestions`, `allowPaid`, `budgetUsd`, plus a `reason` that
+goes into the ticket's event log. At least one setting must be named. The values
+are validated exactly where the create form validates them — the `WRITE_MODES`
+vocabulary, the `now`/`at_pickup` and `interactive`/`autonomous` enums, an
+integer `priority`, a finite non-negative `budgetUsd`, paid-needs-a-positive-
+budget checked against the *resulting* ticket — and then written through
+`store.updateTicket` with `actor: 'orchestrator'`, so the `ticket_updated` event
+naming the changed fields is the audit trail. A `preset` is resolved against the
+live preset registry before anything is written (the store cannot know it; an
+unknown id would mount nothing at session start), and `null` clears `preset` or
+`writeMode` back to the default. A Done or Discarded ticket refuses: closing
+belongs to a person, and a closed card is frozen. Every read shows the current
+`settings` block, so the orchestrator can see what it is looking at before it
+changes it.
 
 **Why it has its own preset.** The orchestrator must stay answerable, and a
 session that can hold a turn for a minute is not. The bundle declares

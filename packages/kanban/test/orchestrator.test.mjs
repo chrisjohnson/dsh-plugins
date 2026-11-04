@@ -313,13 +313,16 @@ test('every declared tool is reachable and has a model-facing contract', () => {
 
 test('the orchestrator can author tickets but cannot approve, discard or close them', () => {
   // The boundary KAN-63 moved: filing a ticket and fixing the title/body of an
-  // unstarted one are now the orchestrator's. Ending a ticket is not.
+  // unstarted one are now the orchestrator's. Ending a ticket is not. KAN-66
+  // added `kanban_configure`: the settings of an open ticket are its own lever
+  // now, which is still not a way to close one.
   const forbidden = /approve|discard|close|delete|submit|answer/
   for (const name of ORCHESTRATOR_TOOL_NAMES) {
     assert.equal(forbidden.test(name), false, `${name} crosses the boundary`)
   }
   assert.deepEqual([...ORCHESTRATOR_TOOL_NAMES].sort(), [
     'kanban_board',
+    'kanban_configure',
     'kanban_create',
     'kanban_edit',
     'kanban_kick',

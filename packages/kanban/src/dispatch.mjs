@@ -33,7 +33,7 @@ import { TurnActivity } from './activity.mjs';
 import { sessionTitle } from './board-view.mjs';
 import { makeGrantApprover } from './grants.mjs';
 import { makeGuardApprover, resolveLiveCheckouts, resolveReadOnlyCommands } from './guard.mjs';
-import { askUserToolDefinition, makeQuestionAnswerer } from './questions.mjs';
+import { askUserToolDefinition, makeQuestionAnswerer, questionsFromCallArgs } from './questions.mjs';
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -133,7 +133,7 @@ export class SessionDriver {
     this.waiters = new Map();
     /**
      * Sessions paused mid-turn on a human, KAN-17: sessionId ->
-     * `{kind: 'approval' | 'question', id, toolName?, reason?}`.
+     * `{kind: 'approval' | 'question', id, toolName?, reason?, questions?}`.
      *
      * A harness approval prompt (`approval/asked` ... `approval/decided`) and
      * an unanswered `ask_user_question` call are both pauses *inside* a turn:
@@ -141,6 +141,10 @@ export class SessionDriver {
      * otherwise show a blue "running" card for a session doing nothing but
      * waiting. The engine's own waiters only cover turns it started itself;
      * this map covers every turn on a ticket session, engine- or human-driven.
+     *
+     * For a question, `questions` carries the batch as the model wrote it
+     * (KAN-66), so a surface can show what is being asked and not merely that
+     * something is.
      */
     this.humanWaits = new WaitLedger((sessionId, wait, started) => this.#recordWait(sessionId, wait, started));
     /** sessionId -> {handle, role, purpose, ticketId} */
@@ -289,7 +293,15 @@ export class SessionDriver {
         const name = event.data?.name ?? event.data?.call?.name;
         if (name !== 'ask_user_question') return;
         if (this.activity.ticketOf(sessionId) === undefined) return;
-        this.humanWaits.set(sessionId, { kind: 'question', id: event.data?.callId ?? null });
+        // KAN-66: keep the question itself, not just the fact that one is open.
+        // The text only exists in this event's `arguments`; the orchestrator's
+        // standing directive is to read a parked question and answer it when it
+        // can, and it cannot do that from `waitingOnHuman: true`.
+        this.humanWaits.set(sessionId, {
+          kind: 'question',
+          id: event.data?.callId ?? null,
+          questions: questionsFromCallArgs(event.data?.arguments) ?? [],
+        });
         return;
       }
       case 'tool/result': {
@@ -345,6 +357,17 @@ export class SessionDriver {
   }
 
   /**
+   * The live question wait of this ticket, question text included, or null
+   * (KAN-66). `{sessionId, kind, id, questions}` — `questions` is the batch the
+   * model wrote, as parsed from the ask's `tool/call` arguments. The orchestrator
+   * reads it to answer a worker question it can decide itself.
+   */
+  pendingQuestionFor(ticketId) {
+    const wait = this.#findHumanWait(ticketId, 'question');
+    return wait === null ? null : wait;
+  }
+
+  /**
    * Restart recovery (KAN-17): a session reopened mid-turn may be sitting on an
    * unanswered ask. Walk back to the open turn — the last `turn/start` with no
    * matching `turn/end`, the same boundary `@deepseek-ai/dsh-user-approval`
@@ -384,7 +407,15 @@ export class SessionDriver {
         return;
       }
       const question = [...questions.values()].pop();
-      if (question !== undefined) this.humanWaits.set(sessionId, { kind: 'question', id: question.callId ?? null });
+      // The same text the live path keeps: after a restart the durable log is
+      // the only place the question still exists.
+      if (question !== undefined) {
+        this.humanWaits.set(sessionId, {
+          kind: 'question',
+          id: question.callId ?? null,
+          questions: questionsFromCallArgs(question.arguments) ?? [],
+        });
+      }
     } catch (error) {
       this.log.warn('kanban driver: human-wait reattach scan failed for %s: %s', sessionId, String(error?.message ?? error));
     }
