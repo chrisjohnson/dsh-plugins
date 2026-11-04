@@ -18,7 +18,8 @@
 //
 // Safe autonomy is a property of the tool set, not of the prompt: the
 // orchestrator has no tool that approves, discards or closes a ticket, and no
-// tool that answers a question a session asked a human. What it can do is
+// tool for a question that genuinely needs a human — a worker question that does
+// not need one is answered with `kanban_message`. What it can do is
 // create, read, move, start, retry, kick, message, and edit — where create only
 // files a new ticket into Backlog and edit only touches the title or body of a
 // ticket nothing has started yet, under the same pristine lock as the human edit
@@ -539,7 +540,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_message',
     description:
-      'Send a message into a ticket’s session — a correction, a pointer, a question to put to whoever is working there. It is queued, never interrupting a turn in flight. It does not answer a question the session asked a human, and it does not approve anything.',
+      'Send a message into a ticket’s session — a correction, a pointer, a question to put to whoever is working there. It is queued, never interrupting a turn in flight. A session that ended its turn on a question receives it as that session’s next input, so this is also how you answer a worker question that does not need a human. It does not approve anything.',
     parameters: {
       ticket: TICKET_ARG,
       text: { type: 'string', required: true, description: 'What to say to that session.' },
