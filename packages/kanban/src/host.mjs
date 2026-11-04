@@ -16,6 +16,7 @@ import { appendAcceptance, editTicket, replaceAcceptance, startedFailure } from 
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
+import { KanbanOrchestrator } from './orchestrator-host.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { canMarkDone, canRerunReview } from './lifecycle.mjs';
@@ -54,6 +55,7 @@ const ENDPOINTS = [
   'events',
   'sessionInfo',
   'readImage',
+  'orchestrator',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -89,10 +91,14 @@ export default async function kanban(ctx, config = {}) {
   const db = openDatabase(dbPath);
   // Set once the push channel exists; a committed event asks it to check soon.
   const boardFeedRef = { current: null };
+  // Set just below, as soon as the engine exists: every committed board event
+  // is offered to the orchestrator's digest feed, which decides what to keep.
+  const orchestratorRef = { current: null };
   const store = new KanbanStore(db, {
     onEvent: (event) => {
       if (process.env.DSH_KANBAN_DEBUG === '1') log.info('event %s %s', event.kind, event.ticketId ?? '-');
       boardFeedRef.current?.notify();
+      orchestratorRef.current?.ingest(event);
     },
   });
 
@@ -115,9 +121,26 @@ export default async function kanban(ctx, config = {}) {
   const engineRef = { current: engine };
   const reloadState = { lastJson: null, timer: null };
 
+  // KAN-60: the permanent orchestrator session. It rides the engine's lifetime
+  // because it is the engine's counterpart — it watches what the engine does and
+  // pushes the tickets the engine left stuck.
+  orchestratorRef.current = new KanbanOrchestrator({
+    ctx,
+    store,
+    engine,
+    driver,
+    getConfig,
+    getPrompts,
+    log,
+  });
+
   ctx.effect(() => {
     engineRef.current.start();
-    return () => engineRef.current.stop();
+    orchestratorRef.current?.start();
+    return () => {
+      orchestratorRef.current?.stop();
+      engineRef.current.stop();
+    };
   }, `${PLUGIN_NAME}: engine`);
 
   // ---- config reload (atomic, validated, never half-applied) ---------------
@@ -143,8 +166,9 @@ export default async function kanban(ctx, config = {}) {
         engineRef.current.configHash = shortHash(hashText(JSON.stringify(next.config)));
         reloadState.lastJson = json;
         try {
-                } catch (error) {
-          log.warn('config reload: preset registration failed: %s', message(error));
+          orchestratorRef.current?.reconcile();
+        } catch (error) {
+          log.warn('config reload: orchestrator reconcile failed: %s', message(error));
         }
         log.info('config reloaded atomically (%d key(s))', Object.keys(next.config).length);
       } catch (error) {
@@ -414,6 +438,18 @@ export default async function kanban(ctx, config = {}) {
                 acceptance: store.listAcceptance(ticket.id),
               },
             };
+          }
+          case 'orchestrator': {
+            // The Work page asks this before it tries to open anything: which
+            // session is the orchestrator, and is it there. A click while it is
+            // still starting also nudges an attempt, so a boot that failed (no
+            // route yet, agents service not up) is recoverable from the board
+            // rather than waiting on a service restart.
+            const orchestrator = orchestratorRef.current;
+            if (orchestrator === null) return fail('unavailable', 'the kanban orchestrator is not running in this host');
+            const answer = orchestrator.state();
+            if (answer.state === 'starting') void Promise.resolve(orchestrator.ensure()).catch(() => {});
+            return { ok: true, value: answer };
           }
           case 'create': {
             const column = p.column ?? 'backlog';

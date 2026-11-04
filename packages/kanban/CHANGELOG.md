@@ -5,6 +5,59 @@
 
 ## Unreleased
 
+### Added
+
+- **A permanent Kanban orchestrator session (KAN-60).** One always-on session per
+  deployment, driven by the engine and openable from the board, whose job is to
+  keep tickets moving instead of letting them sit parked until a human looks.
+  The Work page header gained an **Orchestrator** button: it asks the Host which
+  session the orchestrator is (`POST /api/kanban/orchestrator` → `{sessionId,
+  state: live|starting|archived|off}`) and opens it in the ordinary conversation
+  view, so you can talk to it directly.
+  The engine ensures the session at startup under the stable id
+  `orchestratorSessionId` (`kanban-orchestrator`) — resolve-or-create through the
+  session controller, so a restart resumes the same conversation rather than
+  starting a fresh one — decorates it with its system prompt and a scoped tool set,
+  and feeds it a `[board snapshot]` of where the board stands on every (re)start.
+  After that, high-signal store events (a park, a park lifted, a stall, a phase or
+  column change, a done or discard, a plan or grant approval, a scheduled retry, a
+  restart recovery, a denied write) arrive as one-line `[board events]` digests
+  coalesced in `orchestratorDigestWindowMs`, delivered with `followup` so they
+  queue behind a turn instead of interrupting one. Events the orchestrator caused
+  itself are not fed back to it, and a third digest will not be queued while two
+  are still unread.
+  Its tools are `kanban_board`, `kanban_ticket` and `kanban_sessions` for reading,
+  and `kanban_move` (Backlog ⇄ Working), `kanban_start` (planning or build),
+  `kanban_retry` (a parked ticket, with an instruction and a fresh attempt budget),
+  `kanban_kick` (continue a ticket session that halted mid-turn) and
+  `kanban_message` (a note into a ticket's live session) for acting. The boundary
+  is the tool set, not the prompt: it has no tool that approves, discards, closes
+  or edits a ticket, none that answers a question a session put to a human, and it
+  runs read-only.
+- **The `dsh-kanban-orchestrator` agent preset.** The bundle now declares its own
+  preset row (`dsh-kanban-orchestrator-preset`) for that session: a sandboxed
+  shell with `timeoutMs: 5000` and `maxTimeoutMs: 5000`, so a command is promoted
+  to a background job after 5 seconds rather than holding the turn; `tool-jobs`
+  with `waitTimeoutMs: 5000` and `maxWaitTimeoutMs: 5000`, so a job wait returns in
+  5 seconds; `tool-fs`, `tool-fs-search`, `agent-instructions`, `time-context` and
+  the compaction group. No persona: `prompts/orchestrator.md` is registered as a
+  complete prompt section on the session's own scope.
+- **`orchestrator` is a routable role.** It joins planner/implementer/reviewer/
+  approver in `roles{}` and in the Model routing dialog, so the orchestrator's
+  model is a deployment decision like any other; unset falls back to the host
+  default model. New keys: `orchestratorEnabled` (default true) and
+  `orchestratorSessionId` (default `kanban-orchestrator`).
+
+### Changed
+
+- `engine.retry()` and `moveToColumn()` take an `actor` (default `human`, as
+  before) so a move or retry the orchestrator made is recorded as such — which is
+  what lets the digest feed tell its own actions from the board's.
+- `scripts/compose-smoke.mjs` now reads only `- id:` list items as row ids. A bare
+  `id:` line is a config field of a row — an agent preset's `config.id` — and the
+  composition never carries it at the top level, so the old pattern demanded a row
+  that does not exist.
+
 ## 0.25.1
 
 ### Fixed

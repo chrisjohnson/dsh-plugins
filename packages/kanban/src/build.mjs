@@ -14,9 +14,13 @@
  * Move a ticket to a column the way a human drag does: an unconditional
  * statement of intent (into Working starts the engine and lifts any park, back
  * into Backlog stops it), then a nudge to the engine.
+ *
+ * `actor` says who asked, and it is only ever 'human' or 'orchestrator': the
+ * event log has to distinguish them, because the orchestrator's own moves are
+ * not fed back to it as news (src/orchestrator.mjs skips its own events).
  */
-export function moveToColumn({ store, engine, id, column, reason }) {
-  const updated = store.transitionTicket(id, { column }, { actor: 'human', reason: reason ?? 'human move' });
+export function moveToColumn({ store, engine, id, column, reason, actor = 'human' }) {
+  const updated = store.transitionTicket(id, { column }, { actor, reason: reason ?? `${actor} move` });
   if (typeof engine?.tick === 'function') void engine.tick();
   return updated;
 }

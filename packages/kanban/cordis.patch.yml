@@ -2,12 +2,110 @@
 #
 # `dsh plugin --profile web add <spec>` appends this package to
 # `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
-# (host half via `main`, browser half via the package's `dsh.client` declaration).
+# (host half via `main`, browser half via the package's `dsh.client` declaration)
+# and declares the agent preset the board's orchestrator session runs in.
 #
-# The row carries NO config on purpose: a patch layer replaces a row's whole
-# `config` object instead of deep-merging, so the deployment owns its complete
+# The `kanban` row carries NO config on purpose: a patch layer replaces a row's
+# whole `config` object instead of deep-merging, so the deployment owns its complete
 # config section in its own profile patch. Defaults and the meaning of every key
 # live in src/config.mjs and are documented in README.md.
+#
+# The `dsh-kanban-orchestrator-preset` row is the one exception, and it is not
+# configuration in that sense: its `config` IS the composition — the plugin list
+# that makes the orchestrator's session — and this package owns it, not the
+# deployment. A deployment that wants a different composition adds a profile-level
+# row keyed by this row's id and restates the whole `plugins` list; what it cannot
+# do is tune one child without restating the others, which is the same trade every
+# preset in the harness makes (see the shipped `standard` and `minimal` presets).
+#
+# Why the orchestrator needs a preset of its own: it is a permanent session that
+# must answer a human the moment they type, so a shell command may never hold the
+# turn for a minute — 5000ms foreground, capped at 5000ms, and a command still
+# running at the cap is promoted to a background job the session can read later
+# (`promoteOnTimeout`, the tool-bash default). Same reasoning for job waits:
+# `job_output(wait: true)` returns after 5000ms rather than parking the session on
+# a long build. And it is a reader, not a worker: no write or edit tool is offered
+# (the host also restricts them away and runs the session read-only), so the
+# orchestrator can never touch a checkout it was only asked to watch.
+#
+# The `shell` group's `isolate: {shell: true}` is load-bearing, not cosmetic:
+# `dsh-bash-sandbox` PROVIDES the `shell` service, and a preset row that publishes
+# a service into the root realm is rejected at mount ("Preset services require
+# isolate realms"). Inside the isolated group the preset gets its own 5s executor
+# while every other session keeps the host's. The `compaction` group is copied
+# from the shipped `standard` preset for the same reason.
+#
+# Child rows carry no `id:` on purpose: Loader assigns them, and a bare `- id:`
+# line here would read to `scripts/compose-smoke.mjs` as a top-level row the
+# composition must also contain.
 - insert:
     - id: kanban
       name: dsh-kanban
+
+    - id: dsh-kanban-orchestrator-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: dsh-kanban-orchestrator
+        name: Kanban orchestrator
+        description: 'Read-only board-management composition for the permanent Kanban orchestrator session: a 5-second shell, file reads and searches, background-job controls, and compaction. Not for general work.'
+        order: 90
+        plugins:
+          # Workspace and time facts the model needs to read a board sensibly.
+          - name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - name: '@deepseek-ai/dsh-time-context'
+
+          # The 5-second foreground shell. `maxTimeoutMs` is the cap on a
+          # model-supplied `timeoutMs`, so no call can hold the turn longer than
+          # the session's responsiveness budget, whatever the model asks for.
+          # Windows has no confinement runner here, so the shell rows are the
+          # bash ones and they are disabled on win32, exactly as the shipped
+          # `standard` preset disables tool-bash there.
+          - name: cordis:group
+            group: true
+            isolate:
+              shell: true
+            config:
+              - name: '@deepseek-ai/dsh-bash-sandbox'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  timeoutMs: 5000
+                  maxTimeoutMs: 5000
+              - name: '@deepseek-ai/dsh-tool-bash'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  enableRunInBackground: true
+                  promoteOnTimeout: true
+
+          # Reads only. `write` and `edit` are registered by this plugin and are
+          # taken away again per-agent by the host (src/orchestrator-host.mjs),
+          # because tool-fs has no config switch for them and the session also
+          # runs under a read-only sandbox mode.
+          - name: '@deepseek-ai/dsh-tool-fs'
+          - name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+
+          # The controls for the jobs a promoted 5-second command becomes.
+          - name: '@deepseek-ai/dsh-tool-jobs'
+            config:
+              waitTimeoutMs: 5000
+              maxWaitTimeoutMs: 5000
+
+          # A permanent session runs for days; without compaction its first
+          # context would outgrow the window and the session would stop being
+          # usable. Copied from the shipped `standard` preset.
+          - name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - name: '@deepseek-ai/dsh-compaction-basic'
+              - name: '@deepseek-ai/dsh-command-compact'
+              - name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024

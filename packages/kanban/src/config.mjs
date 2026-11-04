@@ -8,7 +8,14 @@
 // on a bare clone. The host half resolves `null` routes against the host's
 // model catalog; this half only decides whether a value is *shaped* correctly.
 
-export const ROLES = ['planner', 'implementer', 'reviewer', 'approver'];
+/**
+ * The routes the board configures. The first four are a ticket's phases; the
+ * fifth is the permanent orchestrator session that keeps them moving (KAN-60).
+ * A role is a route, never a system prompt and never a tool list — the
+ * orchestrator's prompt and tools come from its preset and from
+ * src/orchestrator.mjs, so this entry only says which model answers.
+ */
+export const ROLES = ['planner', 'implementer', 'reviewer', 'approver', 'orchestrator'];
 
 /**
  * Deprecated: `roles.<role>.allowTools` was the tool allow-list the phase guard
@@ -25,6 +32,9 @@ export const DEFAULT_PROMPTS = {
   rework: 'rework.md',
   review: 'review.md',
   approval: 'approval.md',
+  // Not a phase prompt: the orchestrator's complete system prompt, registered as
+  // a prompt section on its own session (src/orchestrator-host.mjs).
+  orchestrator: 'orchestrator.md',
 };
 
 export const DEFAULT_CONFIG = {
@@ -73,7 +83,33 @@ export const DEFAULT_CONFIG = {
       model: null,
       reasoningEffort: null,
     },
+    orchestrator: {
+      provider: null,
+      model: null,
+      reasoningEffort: null,
+    },
   },
+
+  /**
+   * KAN-60: whether the engine keeps a permanent orchestrator session alive.
+   * Off is a real answer for a deployment that drives its board by hand: the
+   * session is never created, the Work page's button says so, and nothing else
+   * about the board changes.
+   */
+  orchestratorEnabled: true,
+  /**
+   * The orchestrator's session id. Stable on purpose — the same id across
+   * restarts is what makes it one continuing conversation instead of a new
+   * session per boot, and it is what the Work page's button opens.
+   */
+  orchestratorSessionId: 'kanban-orchestrator',
+  /**
+   * How long the orchestrator's event digest waits for company before it is
+   * delivered. A burst of board movement is one message, not one turn per
+   * event; a longer window makes the orchestrator slower to notice, which is
+   * the trade.
+   */
+  orchestratorDigestWindowMs: 30000,
 
   /** Every met condition must carry at least this confidence for a mechanical pass. */
   confidenceThreshold: 0.7,
@@ -293,6 +329,16 @@ export function resolveConfig(input = {}) {
   validateProviders(config.providers, errors, warnings);
   validateRoles(config.roles, errors, warnings);
   validateLadder(config.escalationLadder, errors);
+
+  // KAN-60: the orchestrator's own knobs. A bad session id would mean two
+  // permanent sessions or none, so it is checked here rather than at boot.
+  if (typeof config.orchestratorEnabled !== 'boolean') {
+    errors.push(new ConfigError('must be a boolean', 'orchestratorEnabled'));
+  }
+  if (!isNonEmptyString(config.orchestratorSessionId)) {
+    errors.push(new ConfigError('must be a non-empty string', 'orchestratorSessionId'));
+  }
+  positiveNumber(config.orchestratorDigestWindowMs, 'orchestratorDigestWindowMs', errors);
 
   if (!isFiniteNumber(config.confidenceThreshold) || config.confidenceThreshold < 0 || config.confidenceThreshold > 1) {
     errors.push(new ConfigError('must be a number in [0,1]', 'confidenceThreshold'));

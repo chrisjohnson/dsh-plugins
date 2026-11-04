@@ -25,6 +25,10 @@ window.__ModuleLoader__.load({
 		// reaches the live state through this module-scope callback, not a prop.
 		var goBoardRequest = null;
 		var rpcSeq = 0;
+		// The roles the Model routing dialog offers, in display order. KAN-60
+		// added the orchestrator: a route like any other, but it drives the
+		// permanent board session instead of a ticket phase.
+		var ROUTING_ROLES = ["planner", "implementer", "reviewer", "approver", "orchestrator"];
 
 		function rpc(method, payload) {
 			if (!connection) return Promise.reject(new Error("dsh-kanban: connection service unavailable"));
@@ -36,6 +40,28 @@ window.__ModuleLoader__.load({
 		function openOrComplain(sessionId) {
 			var opening = openSessionById ? openSessionById(sessionId) : Promise.resolve({ ok: false, error: "The session view is not available in this window." });
 			opening.then(function (result) { if (!result || !result.ok) window.alert((result && result.error) || "The session could not be opened."); });
+		}
+
+		// KAN-60: the Work page's way into the permanent orchestrator session.
+		// The Host owns which session that is and whether it exists, so the button
+		// asks first instead of navigating to an id it guessed. "starting" is worth
+		// a short wait — the first click after a boot is often the one that nudges
+		// the session into being — but anything else is said out loud, because a
+		// button that silently does nothing is worse than one that complains.
+		function openOrchestrator(tries) {
+			var left = tries === undefined ? 3 : tries;
+			rpc("orchestrator", {}).then(function (res) {
+				if (!res || !res.ok) { window.alert((res && res.error && res.error.message) || "The orchestrator status could not be read."); return; }
+				var value = res.value || {};
+				if (value.state === "live") { openOrComplain(value.sessionId); return; }
+				if (value.state === "starting") {
+					if (left > 0) { setTimeout(function () { openOrchestrator(left - 1); }, 700); return; }
+					openOrComplain(value.sessionId);
+					return;
+				}
+				if (value.state === "archived") { window.alert("The orchestrator session is archived. Unarchive it in the session list to use the board orchestrator."); return; }
+				window.alert("The kanban orchestrator is turned off. Set orchestratorEnabled to true in the kanban config row to run it.");
+			}, function () { window.alert("Could not reach the Host."); });
 		}
 
 		function fmtUsd(value) {
@@ -2623,8 +2649,8 @@ var CSS =
 		function RoleRouting(props) {
 			var routes = props.routes || {};
 			var roles = props.roles || {};
-			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", approver: "Approval" };
-			var order = ["planner", "implementer", "reviewer", "approver"];
+			var labels = { planner: "Plan", implementer: "Build", reviewer: "Review", approver: "Approval", orchestrator: "Orchestrator" };
+			var order = ROUTING_ROLES;
 			return h("div", { className: "kb-routing" },
 				h("div", { className: "kb-routing-sub", children: props.editing ? "Choose a model and reasoning effort for each role. Models are grouped by provider; \"Default\" leaves the effort to the model. Saving writes the kanban row in the profile config." : "Base route per role. The escalation ladder can override this for later attempts." }),
 				h("div", { className: "kb-route-rows" }, order.map(function (role) {
@@ -2879,6 +2905,7 @@ var CSS =
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
+						h("button", { className: "kb-btn", title: "Open the permanent orchestrator session that keeps tickets moving", onClick: function () { openOrchestrator(); }, children: "Orchestrator" }),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
@@ -2928,7 +2955,7 @@ var CSS =
 			function startRoutingEdit() {
 				if (!routing || routing.writable === false) return;
 				var draft = {};
-				["planner", "implementer", "reviewer", "approver"].forEach(function (role) {
+				ROUTING_ROLES.forEach(function (role) {
 					var route = (routing.routes || {})[role] || {};
 					// A level the row's model does not offer is dropped here, not
 					// just hidden, so the draft can never carry an unsendable value.
@@ -2949,7 +2976,7 @@ var CSS =
 			}
 			function saveRouting() {
 				if (!routing) return;
-				var roles = ["planner", "implementer", "reviewer", "approver"];
+				var roles = ROUTING_ROLES;
 				var routes = roles.map(function (role) {
 					var entry = routingDraft[role] || {};
 					// Same rule as the seed, applied at the boundary: "" is the
