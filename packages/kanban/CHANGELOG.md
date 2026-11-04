@@ -5,6 +5,47 @@
 
 ## Unreleased
 
+### Added
+
+- **The orchestrator can change an open ticket's settings, and can now read a
+  parked question (KAN-66).** Two gaps on the orchestrator surface, both hit for
+  real on 2026-11-04.
+  **The question text is part of the read.** The standing directive says a ticket
+  parked on a worker question gets read first and answered by the orchestrator
+  when it does not need a human — but `kanban_ticket` and `kanban_board` exposed
+  only `waitingOnHuman: true` and the park reason, so the question had to be
+  guessed from context. Board rows and the ticket read now carry `pendingQuestion`
+  (`{questions: [{question, options, header?}], source: 'live'|'park'}`), and the
+  board snapshot gets an `ASKING: <question> [opt | opt]` part on the ticket's
+  line. A live batch — a session paused inside its turn on an unanswered
+  `ask_user_question` — wins and carries the options, because that is what makes a
+  question answerable; it comes from the call's own `arguments`, which the driver
+  used to drop, both on the live event and when a restart re-seeds the wait from
+  the durable log. A park is the fallback: the question is read back out of the
+  engine's own `Waiting on your answer in the <phase> session: …` reason
+  (`questionFromParkReason`), which also ends the snapshot cutting a question off
+  at the park line's 90 characters. `null` means nothing waits.
+  **`kanban_configure`** is the lever for a card filed with the wrong combination —
+  a harness change with no Creator preset, the wrong write mode, no worktree of its
+  own — which until now only a human could flip in the UI. It sets `preset`,
+  `writeMode`, `worktree`, `priority`, `planTiming`, `planQuestions`, `allowPaid`
+  and `budgetUsd` on an open ticket, with a `reason` recorded on the card, and the
+  boundary is the create form's: the write-mode vocabulary, the plan-timing and
+  plan-questions enums, an integer priority, a finite non-negative budget,
+  paid-needs-a-positive-budget evaluated on the *resulting* ticket, at least one
+  setting named, and a Done or Discarded ticket refused outright. A preset id is
+  resolved against the live preset registry before anything is written, and `null`
+  clears `preset` or `writeMode` to the default. The write goes through
+  `store.updateTicket` with `actor: 'orchestrator'`, so the `ticket_updated` event
+  naming the changed fields is the audit trail. Every read also carries the current
+  `settings` block, so the orchestrator can see what it is changing.
+
+### Changed
+
+- `prompts/orchestrator.md` says where the question text now appears and lists
+  `kanban_configure` among the levers and among the boundaries: it changes how a
+  ticket will be worked, never what it asks for.
+
 ## 0.29.0
 
 ### Changed

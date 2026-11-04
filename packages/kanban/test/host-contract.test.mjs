@@ -667,7 +667,7 @@ test('a fail is read as a pass-equivalent only when it proves every non-deferred
 
 test('the question answerer is an agent-scoped waterfall listener on both session paths', async () => {
   const dispatch = (await sources())['dispatch.mjs']
-  assert.match(dispatch, /import \{ askUserToolDefinition, makeQuestionAnswerer \} from '\.\/questions\.mjs'/)
+  assert.match(dispatch, /import \{ askUserToolDefinition, makeQuestionAnswerer, questionsFromCallArgs \} from '\.\/questions\.mjs'/)
   assert.match(
     dispatch,
     /agentCtx\.on\('user-questions\/request', makeQuestionAnswerer\(\{ store: this\.store, log: this\.log \}\), \{ prepend: true \}\)/,

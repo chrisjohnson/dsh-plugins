@@ -10,7 +10,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { askUserToolDefinition, makeQuestionAnswerer, recommendedAnswer, sanitizeQuestions } from '../src/questions.mjs'
+import {
+  askUserToolDefinition,
+  makeQuestionAnswerer,
+  questionsFromCallArgs,
+  recommendedAnswer,
+  sanitizeQuestions,
+} from '../src/questions.mjs'
 
 // ------------------------------------------------------- recommendedAnswer --
 
@@ -385,4 +391,51 @@ test('a malformed batch is a readable tool error, not a lost question', async ()
 test('a service that answers with nothing hands back an empty batch', async () => {
   const definition = toolHarness(async () => ({}))
   assert.deepEqual(await definition.execute({ questions: [{ id: 'a', question: 'q?' }] }, {}), { answers: [] })
+})
+
+// -------------------------------------------------- questionsFromCallArgs --
+//
+// KAN-66: the same batch, read back out of a `tool/call` event instead of being
+// answered. This is a display path — the orchestrator is being shown what a
+// worker asked — so the bar is "never throws, never invents", not "rejects".
+
+test('the question batch is recovered from a tool-call arguments string', () => {
+  const args = JSON.stringify({
+    questions: [
+      { id: 'restart', question: 'Is the restart owed now?', header: 'Restart', options: [{ label: 'Yes (Recommended)' }, { label: 'No' }] },
+      { id: 'scope', question: 'Which packages?', options: ['dsh-kanban', { label: 'everything' }] },
+    ],
+  })
+  assert.deepEqual(questionsFromCallArgs(args), [
+    { question: 'Is the restart owed now?', options: ['Yes (Recommended)', 'No'], header: 'Restart' },
+    { question: 'Which packages?', options: ['dsh-kanban', 'everything'] },
+  ])
+})
+
+test('an already-parsed arguments object reads the same way', () => {
+  assert.deepEqual(questionsFromCallArgs({ questions: [{ question: 'Which tag?' }] }), [
+    { question: 'Which tag?', options: [] },
+  ])
+})
+
+test('whitespace in the question text is folded onto one line', () => {
+  const [only] = questionsFromCallArgs({ questions: [{ question: '  ship\n  it   now?  ' }] })
+  assert.equal(only.question, 'ship it now?')
+})
+
+test('anything unreadable is null, never a throw and never a made-up question', () => {
+  assert.equal(questionsFromCallArgs(undefined), null)
+  assert.equal(questionsFromCallArgs(null), null)
+  assert.equal(questionsFromCallArgs('not json at all'), null)
+  assert.equal(questionsFromCallArgs('{}'), null, 'no questions key')
+  assert.equal(questionsFromCallArgs('{"questions":[]}'), null, 'an empty batch')
+  assert.equal(questionsFromCallArgs({ questions: [{ options: ['a'] }] }), null, 'an entry with no text')
+  assert.equal(questionsFromCallArgs({ questions: [null, 'nope'] }), null, 'junk entries only')
+  assert.equal(questionsFromCallArgs(42), null)
+})
+
+test('a batch with one usable entry among junk still shows that one', () => {
+  assert.deepEqual(questionsFromCallArgs({ questions: [null, { question: 'Real?' }, { id: 'x' }] }), [
+    { question: 'Real?', options: [] },
+  ])
 })

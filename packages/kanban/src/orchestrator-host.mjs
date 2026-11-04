@@ -18,9 +18,11 @@
 //     queues: a digest never interrupts a turn, so it never interrupts the human.
 //   - It is a reader with levers, not a worker. Read-only sandbox mode, the
 //     write and edit tools restricted away, and a tool set with no approve, no
-//     discard and no close in it. It can file a new ticket into Backlog and fix
-//     the title or body of one nothing has started, on the same pristine lock the
-//     human edit boundary uses; everything past that belongs to a person.
+//     discard and no close in it. It can file a new ticket into Backlog, fix
+//     the title or body of one nothing has started, and change the settings of
+//     an open one — preset, write mode, worktree, priority, plan timing, budget
+//     — through the store's own validation; everything past that belongs to a
+//     person.
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -39,6 +41,7 @@ import {
   createDigestWindow,
   isWatchedEvent,
   runOrchestratorTool,
+  ticketLineFacts,
 } from './orchestrator.mjs'
 
 /** How long after the engine starts before the session is ensured. */
@@ -449,21 +452,18 @@ export class KanbanOrchestrator {
 
   // -------------------------------------------------------------------- api --
 
+  /**
+   * One ticket as the orchestrator reads it. The facts themselves are decided in
+   * src/orchestrator.mjs so the same line is testable on a bare clone; this only
+   * supplies what the live driver knows: whether a session is on the ticket, and
+   * the question batch it is paused on, if any (KAN-66).
+   */
   #ticketLine(ticket) {
-    const parked = ticket.needsAttentionReason ?? null
-    return {
-      key: ticket.key,
-      title: ticket.title,
-      column: ticket.column,
-      phase: ticket.phase,
-      parked,
+    return ticketLineFacts(ticket, {
       running: this.driver?.isTicketBusy?.(ticket.id) === true,
       waitingOnHuman: this.driver?.isAwaitingQuestion?.(ticket.id) === true || this.driver?.isAwaitingApproval?.(ticket.id) === true,
-      attemptCount: ticket.attemptCount,
-      spentUsd: ticket.spentUsd,
-      budgetUsd: ticket.budgetUsd,
-      updatedAt: ticket.updatedAt,
-    }
+      liveWait: this.driver?.pendingQuestionFor?.(ticket.id) ?? null,
+    })
   }
 
   #boardView() {
@@ -566,6 +566,42 @@ export class KanbanOrchestrator {
 
       /** The human edit boundary's lock (src/edit.mjs), asked of the store. */
       ticketEditable: (ticket) => this.store.isEditable(ticket.id),
+
+      /**
+       * `kanban_configure`: the settings patch the guard built, written through
+       * the same store path a human settings change takes, so the same rules
+       * apply (the write-mode vocabulary, the mode pair, paid-needs-budget) and
+       * the `ticket_updated` event — fields, values, reason and this actor — is
+       * the audit trail.
+       *
+       * A preset is the one value the store cannot check: it is an id in another
+       * service's registry. It is resolved here first, exactly as the create
+       * endpoint does, because an unknown id would mount nothing at session
+       * start and fail later and quietly. A bad preset writes nothing at all.
+       */
+      configure: async (ticket, patch, reason) => {
+        if (patch.preset !== undefined && patch.preset !== null) {
+          const presets = this.ctx.get('agentPresets')
+          if (typeof presets?.resolve !== 'function') {
+            return { configured: false, reason: 'the agent preset registry is not mounted, so no preset can be checked' }
+          }
+          try {
+            await presets.resolve(String(patch.preset))
+          } catch {
+            return { configured: false, reason: `unknown agent preset: ${patch.preset}` }
+          }
+        }
+        const updated = store.updateTicket(ticket.id, patch, {
+          actor: 'orchestrator',
+          reason: reason ?? 'orchestrator configure',
+        })
+        void engine?.tick()
+        return {
+          configured: true,
+          applied: Object.fromEntries(Object.keys(patch).map((key) => [key, updated[key]])),
+          ticket: this.#ticketLine(updated),
+        }
+      },
 
       move: (ticket, to, reason) => {
         const updated = moveToColumn({

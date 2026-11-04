@@ -20,10 +20,22 @@
 // orchestrator has no tool that approves, discards or closes a ticket, and no
 // tool for a question that genuinely needs a human — a worker question that does
 // not need one is answered with `kanban_message`. What it can do is
-// create, read, move, start, retry, kick, message, and edit — where create only
-// files a new ticket into Backlog and edit only touches the title or body of a
-// ticket nothing has started yet, under the same pristine lock as the human edit
-// boundary. Completion stays a human call.
+// create, read, move, start, retry, kick, message, edit and configure — where
+// create only files a new ticket into Backlog, edit only touches the title or
+// body of a ticket nothing has started yet, under the same pristine lock as the
+// human edit boundary, and configure changes the *settings* of an open ticket
+// (preset, write mode, worktree, priority, plan timing, budget) through the same
+// store validation the human create form goes through. Completion stays a human
+// call.
+//
+// A read also has to be answerable: the standing directive tells the
+// orchestrator to read a parked question before deciding whether it needs a
+// human, so `kanban_ticket` and `kanban_board` carry the question itself, not
+// just the fact that something is waiting (KAN-66).
+
+import { PLAN_QUESTIONS, PLAN_TIMINGS, validateTicketModes } from './lifecycle.mjs'
+import { questionFromParkReason } from './recovery.mjs'
+import { WRITE_MODES } from './store.mjs'
 
 export const ORCHESTRATOR_PRESET_ID = 'dsh-kanban-orchestrator'
 export const ORCHESTRATOR_TITLE = 'Kanban orchestrator'
@@ -304,6 +316,85 @@ export function createDigestWindow({
 }
 
 /**
+ * The question a ticket is waiting on, in the one shape every surface uses.
+ *
+ * Two owners know about a question, and they do not always agree, so the order
+ * matters:
+ *
+ *   - the **live** wait: a session paused *inside* its turn on an unanswered
+ *     `ask_user_question`. The driver has the batch the model actually wrote,
+ *     with its options — the fullest account there is;
+ *   - the **park**: the engine parked the ticket because its turn ended on a
+ *     question. Only the question text survives, embedded in the park reason.
+ *
+ * A live batch wins when both exist: it is the current turn's ask, and it carries
+ * the options the orchestrator needs in order to answer it itself.
+ *
+ * @param {object} ticket the ticket row (its `needsAttentionReason` is the park)
+ * @param {{questions?: Array<object>}|null} [liveWait] the driver's pending question wait
+ * @returns {{questions: Array<object>, source: 'live'|'park'}|null}
+ */
+export function pendingQuestionFacts(ticket, liveWait = null) {
+  const live = Array.isArray(liveWait?.questions) ? liveWait.questions : []
+  if (live.length > 0) return { questions: live, source: 'live' }
+  const parked = questionFromParkReason(ticket?.needsAttentionReason)
+  if (parked !== null) return { questions: [{ question: parked, options: [] }], source: 'park' }
+  return null
+}
+
+/**
+ * The ticket settings `kanban_configure` can change, as every read shows them.
+ *
+ * A lever you cannot see the state of is a guess: the case that prompted this
+ * (KAN-65) is a card filed without its preset, write mode or worktree, and the
+ * orchestrator could only learn that from a human. So the board row and the
+ * ticket read both carry the current answer, and `kanban_configure` reports the
+ * same block back after a change.
+ *
+ * @param {object} ticket
+ */
+function settingsFacts(ticket) {
+  return {
+    preset: ticket.preset ?? null,
+    writeMode: ticket.writeMode ?? null,
+    worktree: ticket.worktree === true,
+    priority: ticket.priority,
+    planTiming: ticket.planTiming,
+    planQuestions: ticket.planQuestions,
+    allowPaid: ticket.allowPaid === true,
+  }
+}
+
+/**
+ * The one-line facts of one ticket, as every orchestrator surface shows it: the
+ * board rows, the `kanban_ticket` read, and the restart snapshot all come
+ * through here, so a question cannot appear in one and be missing from another.
+ *
+ * The store owns the ticket fields; the host hands in what only the live driver
+ * knows (`running`, `waitingOnHuman`, and the live question batch) as `live`.
+ *
+ * @param {object} ticket
+ * @param {{running?: boolean, waitingOnHuman?: boolean, liveWait?: {questions?: Array<object>}|null}} [live]
+ */
+export function ticketLineFacts(ticket, live = {}) {
+  return {
+    key: ticket.key,
+    title: ticket.title,
+    column: ticket.column,
+    phase: ticket.phase,
+    parked: ticket.needsAttentionReason ?? null,
+    pendingQuestion: pendingQuestionFacts(ticket, live.liveWait ?? null),
+    settings: settingsFacts(ticket),
+    running: live.running === true,
+    waitingOnHuman: live.waitingOnHuman === true,
+    attemptCount: ticket.attemptCount,
+    spentUsd: ticket.spentUsd,
+    budgetUsd: ticket.budgetUsd,
+    updatedAt: ticket.updatedAt,
+  }
+}
+
+/**
  * The board as one compact message. The orchestrator starts every restart with
  * this instead of replaying history it was not there for, so it has to say
  * where the work stands right now: what is moving, what is stuck, what is waiting
@@ -331,6 +422,14 @@ export function boardSnapshotText(board) {
     if (ticket.column) bits.push(ticket.column)
     if (ticket.phase) bits.push(ticket.phase)
     if (ticket.parked) bits.push(`PARKED: ${clip(ticket.parked, 90)}`)
+    // The park line is the engine's sentence and gets clipped; the question is
+    // the thing the orchestrator has to *answer*, so it gets its own line at the
+    // full digest width, with the options it may choose from.
+    const asking = ticket.pendingQuestion?.questions?.[0]?.question
+    if (asking) {
+      const options = ticket.pendingQuestion.questions[0].options
+      bits.push(`ASKING: ${clip(asking, MAX_DIGEST_CHARS)}${Array.isArray(options) && options.length > 0 ? ` [${clip(options.join(' | '), 90)}]` : ''}`)
+    }
     if (ticket.running === true) bits.push('running')
     if (Number.isFinite(ticket.attemptCount) && ticket.attemptCount > 0) bits.push(`attempt ${ticket.attemptCount}`)
     if (ticket.waitingOnHuman === true) bits.push('waiting on a person')
@@ -382,11 +481,79 @@ function requireField(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
 }
 
+/**
+ * The ticket settings `kanban_configure` may change after creation (KAN-66).
+ * These are the fields the human create form sets and nothing else could reach:
+ * frozen for the orchestrator until now. Column, phase and the plan are not on
+ * the list — moving and planning have their own tools, and a plan belongs to the
+ * phase that produces it.
+ */
+const CONFIGURE_KEYS = ['preset', 'writeMode', 'worktree', 'priority', 'planTiming', 'planQuestions', 'allowPaid', 'budgetUsd']
+
+/** The nullable pair: an id (or mode) to set, or null to fall back to the default. */
+const NULLABLE_STRING = { oneOf: [{ type: 'string' }, { type: 'null' }] }
+
+/**
+ * `kanban_configure`: the settings patch, checked key by key.
+ *
+ * The same vocabulary the create form applies, checked here so the model gets a
+ * sentence it can correct rather than a store error: `WRITE_MODES`,
+ * `PLAN_TIMINGS` and `PLAN_QUESTIONS` are the very lists the store validates
+ * against, and the mode pair and the paid-needs-budget rule are re-run on the
+ * *resulting* ticket, not just on what was sent — turning a ticket paid without
+ * giving it a budget is as invalid as filing one that way.
+ *
+ * @param {object} ticket the resolved ticket row
+ * @param {object} args the raw tool arguments
+ * @returns {{ok: true, patch: object}|{ok: false, message: string}}
+ */
+function configurePatch(ticket, args) {
+  const patch = {}
+  for (const key of CONFIGURE_KEYS) {
+    if (args[key] !== undefined) patch[key] = args[key]
+  }
+  if (Object.keys(patch).length === 0) {
+    return { ok: false, message: `nothing to configure: give at least one of ${CONFIGURE_KEYS.join(', ')}` }
+  }
+  if (patch.preset !== undefined && patch.preset !== null) {
+    if (typeof patch.preset !== 'string' || patch.preset.trim() === '') {
+      return { ok: false, message: 'preset must be an agent preset id, or null for the harness default' }
+    }
+    patch.preset = patch.preset.trim()
+  }
+  if (patch.writeMode !== undefined && patch.writeMode !== null && !WRITE_MODES.includes(patch.writeMode)) {
+    return { ok: false, message: `writeMode must be one of ${WRITE_MODES.join(', ')}, or null for the purpose default` }
+  }
+  for (const key of ['worktree', 'allowPaid']) {
+    if (patch[key] !== undefined && typeof patch[key] !== 'boolean') {
+      return { ok: false, message: `${key} must be true or false` }
+    }
+  }
+  if (patch.priority !== undefined && !Number.isInteger(patch.priority)) {
+    return { ok: false, message: 'priority must be an integer' }
+  }
+  if (patch.budgetUsd !== undefined && (!Number.isFinite(patch.budgetUsd) || patch.budgetUsd < 0)) {
+    return { ok: false, message: 'budgetUsd must be a finite number of dollars, 0 or more' }
+  }
+  if (patch.planTiming !== undefined && !PLAN_TIMINGS.includes(patch.planTiming)) {
+    return { ok: false, message: `planTiming must be one of ${PLAN_TIMINGS.join(', ')}` }
+  }
+  if (patch.planQuestions !== undefined && !PLAN_QUESTIONS.includes(patch.planQuestions)) {
+    return { ok: false, message: `planQuestions must be one of ${PLAN_QUESTIONS.join(', ')}` }
+  }
+  const modes = validateTicketModes(patch.planTiming ?? ticket.planTiming, patch.planQuestions ?? ticket.planQuestions)
+  if (!modes.ok) return { ok: false, message: modes.reason }
+  if (patch.allowPaid === true && !((patch.budgetUsd ?? ticket.budgetUsd) > 0)) {
+    return { ok: false, message: 'a paid ticket needs a positive budgetUsd — send budgetUsd with allowPaid' }
+  }
+  return { ok: true, patch }
+}
+
 export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_board',
     description:
-      'Read the whole board as the orchestrator sees it: every open ticket with its column, phase, park reason, attempt count and whether a session is running on it. No gate — read freely, as often as you like.',
+      'Read the whole board as the orchestrator sees it: every open ticket with its column, phase, park reason, attempt count, whether a session is running on it, the question it is waiting on when one is open (`pendingQuestion`), and the settings `kanban_configure` can change. No gate — read freely, as often as you like.',
     parameters: {},
     guard: () => ({ ok: true }),
     run: async (_args, api) => api.board(),
@@ -394,7 +561,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_ticket',
     description:
-      'Read one ticket in full: body, plan and its conditions with the latest claims, the last review, its sessions and its recent events. Use this before acting on a ticket so the action matches what the record actually says.',
+      'Read one ticket in full: body, plan and its conditions with the latest claims, the last review, its sessions and its recent events — plus `pendingQuestion`, the question a worker is waiting on with its options, when one is open. Use this before acting on a ticket so the action matches what the record actually says.',
     parameters: { ticket: TICKET_ARG },
     guard: (args, api) => requireTicket(api, args.ticket),
     run: async (args, api, resolved) => api.ticket(resolved.ticket),
@@ -462,6 +629,35 @@ export const ORCHESTRATOR_TOOL_SPECS = [
       return { ok: true, ticket, patch }
     },
     run: async (_args, api, checked) => api.edit(checked.ticket, checked.patch),
+  },
+  {
+    name: 'kanban_configure',
+    description:
+      'Change the settings of an open ticket that were filed wrong: which agent preset its sessions mount, the build write mode, whether it gets its own git worktree, its priority, when planning runs, whether it asks or decides autonomously, and its paid budget. This is the lever for the case where you discover a card was created with the wrong combination — a change to the harness filed without the Creator preset, Full Access or a worktree — instead of asking a person to flip it in the UI. Every value goes through the same validation the create form applies, and a closed ticket refuses: Done and Discarded belong to the human. Name the reason; it is recorded on the ticket.',
+    parameters: {
+      ticket: TICKET_ARG,
+      preset: { ...NULLABLE_STRING, description: 'An agent preset id the sessions mount, or null for the harness default.' },
+      writeMode: { ...NULLABLE_STRING, description: `The build sandbox mode: ${WRITE_MODES.join(', ')}, or null for the purpose default.` },
+      worktree: { type: 'boolean', description: 'Whether the ticket gets its own git worktree.' },
+      priority: { type: 'integer', description: 'Sort priority, higher first.' },
+      planTiming: { type: 'string', enum: PLAN_TIMINGS, description: 'When planning runs: now, or at_pickup when the engine reaches it.' },
+      planQuestions: { type: 'string', enum: PLAN_QUESTIONS, description: 'interactive asks a person; autonomous lets the engine take the recommended answer.' },
+      allowPaid: { type: 'boolean', description: 'Whether paid providers may run this ticket. Needs a positive budgetUsd.' },
+      budgetUsd: { type: 'number', description: 'Spend cap in dollars, 0 or more.' },
+      reason: { type: 'string', description: 'Why, in one line. It goes into the ticket’s event log.' },
+    },
+    guard: (args, api) => {
+      const found = requireTicket(api, args.ticket)
+      if (!found.ok) return found
+      const ticket = found.ticket
+      if (ticket.column !== 'backlog' && ticket.column !== 'working') {
+        return { ok: false, message: `${ticket.key} is in ${ticket.column}; only an open ticket can be reconfigured` }
+      }
+      const checked = configurePatch(ticket, args)
+      if (!checked.ok) return checked
+      return { ok: true, ticket, patch: checked.patch, reason: requireField(args.reason) }
+    },
+    run: async (_args, api, checked) => api.configure(checked.ticket, checked.patch, checked.reason),
   },
   {
     name: 'kanban_move',
@@ -580,7 +776,7 @@ export const ORCHESTRATOR_TOOL_NAMES = ORCHESTRATOR_TOOL_SPECS.map((spec) => spe
  * @param {string} name
  * @param {object} args
  * @param {object} api - the host seam: board, ticket, resolveTicket, create,
- *   edit, ticketEditable, move, start, retry, kick, message, sessions.
+ *   edit, ticketEditable, configure, move, start, retry, kick, message, sessions.
  */
 export async function runOrchestratorTool(name, args, api) {
   const spec = ORCHESTRATOR_TOOL_SPECS.find((candidate) => candidate.name === name)
