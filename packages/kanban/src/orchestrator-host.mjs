@@ -140,13 +140,44 @@ export class KanbanOrchestrator {
     }
   }
 
+  /** True while a human has paused the orchestrator; read from the store so a restart keeps it. */
+  get paused() {
+    try {
+      return this.store.isOrchestratorPaused() === true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Pause or resume. While paused nothing flows between the engine and the
+   * session: digests are dropped and tool calls refused. The session itself is
+   * left alone. Resuming sends one fresh board snapshot rather than a backlog.
+   */
+  setPaused(paused) {
+    const next = paused === true
+    const was = this.paused
+    this.store.setOrchestratorPaused(next)
+    if (next === was) return this.state()
+    if (next) {
+      this.window.dispose()
+      this.window = createDigestWindow({ windowMs: this.windowMs, deliver: (text) => this.#deliver(text, 'events') })
+      this.log.info('orchestrator: paused by a human')
+    } else {
+      this.log.info('orchestrator: resumed by a human')
+      if (this.phase === 'live' && !this.disposed && this.#config().enabled) this.#announce(this.#config())
+    }
+    return this.state()
+  }
+
   /** What the Work page's button needs to know before it tries to open it. */
   state() {
     const config = this.#config()
-    if (!config.enabled) return { state: 'off', sessionId: config.sessionId, detail: 'orchestratorEnabled is false' }
-    if (this.#liveAgent() !== null) return { state: 'live', sessionId: config.sessionId, detail: null }
-    if (this.#archived()) return { state: 'archived', sessionId: config.sessionId, detail: 'the session is archived; unarchive it to use the orchestrator' }
-    return { state: 'starting', sessionId: config.sessionId, detail: this.detail }
+    const paused = this.paused
+    if (!config.enabled) return { state: 'off', sessionId: config.sessionId, detail: 'orchestratorEnabled is false', paused }
+    if (this.#liveAgent() !== null) return { state: 'live', sessionId: config.sessionId, detail: null, paused }
+    if (this.#archived()) return { state: 'archived', sessionId: config.sessionId, detail: 'the session is archived; unarchive it to use the orchestrator', paused }
+    return { state: 'starting', sessionId: config.sessionId, detail: this.detail, paused }
   }
 
   // ------------------------------------------------------------- lifecycle --
@@ -415,7 +446,7 @@ export class KanbanOrchestrator {
 
   /** One committed store event. Cheap, synchronous, and never throws. */
   ingest(event) {
-    if (this.disposed || this.#config().enabled === false) return
+    if (this.disposed || this.#config().enabled === false || this.paused) return
     // Nothing is buffered before the session exists: a restart greets the
     // orchestrator with a board snapshot, which already says what happened while
     // it was not there. Buffering the events themselves would deliver a stale
@@ -432,6 +463,8 @@ export class KanbanOrchestrator {
   }
 
   #deliver(text, kind) {
+    // Dropped, not refused: a refusal would put the lines back and retry them.
+    if (this.paused) return true
     const agent = this.#liveAgent()
     if (agent === null) return false
     try {
@@ -486,6 +519,7 @@ export class KanbanOrchestrator {
     const store = this.store
     const engine = this.engine
     return {
+      paused: () => this.paused,
       resolveTicket: (keyOrId) => store.getTicket(keyOrId) ?? null,
 
       board: () => {

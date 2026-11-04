@@ -38,6 +38,8 @@ import { questionFromParkReason } from './recovery.mjs'
 import { WRITE_MODES } from './store.mjs'
 
 export const ORCHESTRATOR_PRESET_ID = 'dsh-kanban-orchestrator'
+/** What a tool call answers while a human has paused the orchestrator. */
+export const ORCHESTRATOR_PAUSED_MESSAGE = 'The orchestrator is paused by a human; do not change the board.'
 export const ORCHESTRATOR_TITLE = 'Kanban orchestrator'
 /** The stable session id: one per deployment, reused across restarts. */
 export const ORCHESTRATOR_SESSION_ID = 'kanban-orchestrator'
@@ -779,6 +781,7 @@ export const ORCHESTRATOR_TOOL_NAMES = ORCHESTRATOR_TOOL_SPECS.map((spec) => spe
  *   edit, ticketEditable, configure, move, start, retry, kick, message, sessions.
  */
 export async function runOrchestratorTool(name, args, api) {
+  if (api?.paused?.() === true) throw new Error(ORCHESTRATOR_PAUSED_MESSAGE)
   const spec = ORCHESTRATOR_TOOL_SPECS.find((candidate) => candidate.name === name)
   if (spec === undefined) throw new Error(`unknown orchestrator tool ${name}`)
   const input = args !== null && typeof args === 'object' ? args : {}

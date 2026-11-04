@@ -360,6 +360,22 @@ export class KanbanStore {
     return `${this.changeStatements.total.get().n}.${this.changeStatements.version.get().data_version}`;
   }
 
+  /** Whether a human has paused the orchestrator. Persisted, so a restart keeps it. */
+  isOrchestratorPaused() {
+    const row = this.db.prepare("SELECT value FROM runtime_state WHERE key = 'orchestrator_paused'").get();
+    return row !== undefined && row.value === '1';
+  }
+
+  /** Set the orchestrator pause. Returns the stored value. */
+  setOrchestratorPaused(paused) {
+    const value = paused === true ? '1' : '0';
+    this.db.prepare(
+      "INSERT INTO runtime_state (key, value, updated_at) VALUES ('orchestrator_paused', ?, ?) "
+      + 'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    ).run(value, new Date().toISOString());
+    return value === '1';
+  }
+
   updateTicket(idOrKey, patch, { actor = 'human', reason = '' } = {}) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);

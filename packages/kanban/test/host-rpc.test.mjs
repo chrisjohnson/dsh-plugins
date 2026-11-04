@@ -270,3 +270,26 @@ test('a new ticket has no worktree intent when the worktree service is not mount
   const id = (await rpc('create', { title: 'demo', body: '', column: 'backlog' })).value.ticket.id
   assert.equal(store.getTicket(id).worktree, false)
 })
+
+test('orchestratorSetPaused toggles the pause, validates its input, and the board and status report it', { skip }, async () => {
+  const { rpc, store } = await boot()
+  const before = await rpc('orchestrator')
+  assert.equal(before.ok, true, JSON.stringify(before))
+  assert.equal(before.value.paused, false)
+  assert.equal((await rpc('board')).value.orchestratorPaused, false)
+
+  const bad = await rpc('orchestratorSetPaused', { paused: 'yes' })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.error.code, 'bad_request')
+
+  const paused = await rpc('orchestratorSetPaused', { paused: true })
+  assert.equal(paused.ok, true, JSON.stringify(paused))
+  assert.equal(paused.value.paused, true)
+  assert.equal(store.isOrchestratorPaused(), true, 'stored, so a restart keeps it')
+  assert.equal((await rpc('board')).value.orchestratorPaused, true)
+  assert.equal((await rpc('orchestrator')).value.paused, true)
+
+  const resumed = await rpc('orchestratorSetPaused', { paused: false })
+  assert.equal(resumed.value.paused, false)
+  assert.equal((await rpc('board', { compact: true })).value.orchestratorPaused, false)
+})

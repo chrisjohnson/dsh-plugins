@@ -56,6 +56,7 @@ const ENDPOINTS = [
   'sessionInfo',
   'readImage',
   'orchestrator',
+  'orchestratorSetPaused',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -244,7 +245,7 @@ export default async function kanban(ctx, config = {}) {
 
     // The board is built by one module (src/board-snapshot.mjs) for the RPC and
     // the push channel alike, so both always say the same thing.
-    const snapshots = createBoardSnapshots({ store, driver, engine });
+    const snapshots = createBoardSnapshots({ store, driver, engine, orchestratorPaused: () => store.isOrchestratorPaused() });
     const feed = new BoardFeed({ token: snapshots.token, build: snapshots.build });
     boardFeedRef.current = feed;
     ctx.effect(() => () => {
@@ -449,6 +450,17 @@ export default async function kanban(ctx, config = {}) {
             if (orchestrator === null) return fail('unavailable', 'the kanban orchestrator is not running in this host');
             const answer = orchestrator.state();
             if (answer.state === 'starting') void Promise.resolve(orchestrator.ensure()).catch(() => {});
+            return { ok: true, value: answer };
+          }
+          case 'orchestratorSetPaused': {
+            // A human pause: nothing flows between the engine and the
+            // orchestrator session until it is lifted. Persisted, so it
+            // survives a restart.
+            const orchestrator = orchestratorRef.current;
+            if (orchestrator === null) return fail('unavailable', 'the kanban orchestrator is not running in this host');
+            if (typeof p.paused !== 'boolean') return fail('bad_request', 'paused must be true or false');
+            const answer = orchestrator.setPaused(p.paused);
+            boardFeedRef.current?.notify();
             return { ok: true, value: answer };
           }
           case 'create': {

@@ -2905,7 +2905,19 @@ var CSS =
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
-						h("button", { className: "kb-btn", title: "Open the permanent orchestrator session that keeps tickets moving", onClick: function () { openOrchestrator(); }, children: "Orchestrator" }),
+						board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
+						h("button", { className: "kb-btn", title: "Open the permanent orchestrator session that keeps tickets moving", onClick: function () { openOrchestrator(); }, children: "Open orchestrator" }),
+						h("button", {
+							className: "kb-btn" + (board && board.orchestratorPaused ? " primary" : ""),
+							title: board && board.orchestratorPaused ? "Let board events and tool calls reach the orchestrator again" : "Stop all traffic between the board engine and the orchestrator",
+							onClick: function () {
+								var pause = !(board && board.orchestratorPaused);
+								rpc("orchestratorSetPaused", { paused: pause }).then(function (res) {
+									if (res && res.ok) { setNotice(null); loadBoard(); } else { setNotice(res && res.error ? res.error.message : "That did not work."); }
+								}, function () { setNotice("Could not reach the Host."); });
+							},
+							children: board && board.orchestratorPaused ? "Resume orchestrator" : "Pause orchestrator"
+						}),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })

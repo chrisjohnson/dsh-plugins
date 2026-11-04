@@ -102,7 +102,7 @@ export function digest(text) {
 /**
  * @param {{store: object, driver: object, engine: object, now?: () => number}} owners
  */
-export function createBoardSnapshots({ store, driver, engine, now = Date.now }) {
+export function createBoardSnapshots({ store, driver, engine, now = Date.now, orchestratorPaused = () => false }) {
   let seq = 0;
   // Which run of the host the counter belongs to: a restart starts it over, and
   // a page must not mistake the new run's first boards for old ones.
@@ -197,6 +197,7 @@ export function createBoardSnapshots({ store, driver, engine, now = Date.now }) 
       columns: byColumn,
       // Done and Discarded share one column on the board, newest closed first.
       closed: closedNewestFirst([...byColumn.done, ...byColumn.discarded]),
+      orchestratorPaused: orchestratorPaused() === true,
     };
     seq += 1;
     return { seq, boot, token: builtToken, asOf: nowMs, board, signature: digest(stableJson(board)) };
@@ -214,5 +215,5 @@ export function compactBoard(board) {
   const { done, discarded, ...open } = board.columns;
   void done;
   void discarded;
-  return { counts: board.counts, columns: open, closed: board.closed, compact: true };
+  return { counts: board.counts, columns: open, closed: board.closed, orchestratorPaused: board.orchestratorPaused === true, compact: true };
 }
