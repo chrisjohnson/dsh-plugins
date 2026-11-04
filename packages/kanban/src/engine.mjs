@@ -428,8 +428,15 @@ export class Engine {
         continue;
       }
       // Approval is a park, not a loop: the only thing the engine does here on
-      // its own is pick up a hand-over a restart cut off.
-      if (ticket.phase === 'verify' && this.resumeMarks.has(ticket.id)) await this.resumeApproval(ticket);
+      // its own is re-run the hand-over. A resume mark means a restart cut one
+      // off; an un-parked verify ticket is a retry (KAN-64), and it goes back to
+      // the same human gate instead of burning a fresh plan and build round.
+      if (ticket.phase === 'verify') {
+        if (this.resumeMarks.has(ticket.id)) await this.resumeApproval(ticket);
+        // A park lifted because a human is talking in the session is theirs, not
+        // the engine's: it keeps out until that turn ends.
+        else if (!this.reactivations.has(ticket.id)) await this.retryApproval(ticket);
+      }
       return;
     }
   }
@@ -1044,19 +1051,49 @@ export class Engine {
    */
   async resumeApproval(ticket) {
     this.resumeMarks.delete(ticket.id);
+    return this.approvalHandover(ticket, {
+      opening: 'The service restarted while you were handing this work over. Your conversation is intact; give the hand-over again.',
+    });
+  }
+
+  /**
+   * The hand-over a retry of an approval park asks for (KAN-64). The work already
+   * passed review, so a retry does not re-plan it: the ticket goes back to the
+   * same human gate by way of the hand-over it never got to send. Unlike the
+   * restart resume, a session that cannot be reopened is replaced — that is what
+   * the park promises ("a fresh session from a summary of the work so far"), and
+   * the summary already says the review passed.
+   */
+  async retryApproval(ticket) {
+    return this.approvalHandover(ticket, {
+      opening: 'This ticket reached the approval gate but its hand-over never got through. The work is unchanged: give the hand-over now, without redoing anything.',
+      instruction: this.pendingInstruction(ticket, 'approver'),
+      coldStart: true,
+    });
+  }
+
+  /**
+   * The approval hand-over, in one place: reopen the conversation that holds the
+   * work, flip its role to `approver` (which arms the approval tools), ask it for
+   * the hand-over, and let that turn park the ticket at 'Awaiting human approval'.
+   *
+   * `opening` is the line that says why the session is being asked again;
+   * `instruction` is a retry note the approver has not been spoken to about yet.
+   * When no session can be reopened, `coldStart` decides what happens: false parks
+   * the ticket with the reason (a restart lost nothing that a human cannot open),
+   * true starts a fresh session from the recovery summary.
+   */
+  async approvalHandover(ticket, { opening, instruction = '', coldStart = false } = {}) {
     const route = this.resolveRoute('approver', ticket.attemptCount);
     const resumed = await this.continuity(ticket, 'build');
-    if (!resumed.ok) {
+    const cold = coldStart === true && resumed.ok !== true;
+    if (cold !== true && resumed.ok !== true) {
       this.resumeFailed(ticket, 'approval', resumed.reason);
       return { kind: 'wait' };
     }
     if (route.provider === null || route.model === null) {
       this.store.setNeedsAttention(ticket.id, 'Awaiting human approval');
       return { kind: 'wait' };
-    }
-    if (this.driver.isLive?.(resumed.sessionId) === true) {
-      this.driver.setPhase(resumed.sessionId, 'approver');
-      this.driver.setRoute(resumed.sessionId, route);
     }
     const reviewRow = this.store.latestArtifact(ticket.id, 'review');
     const review = reviewRow === undefined ? null : safeJson(reviewRow.content);
@@ -1068,15 +1105,26 @@ export class Engine {
         deferred = [];
       }
     }
-    const prompt = this.composePrompt(
-      'The service restarted while you were handing this work over. Your conversation is intact; give the hand-over again.',
-      render(this.getPrompts().bodies.approval, {
-        key: ticket.key,
-        title: ticket.title,
-        deferred: deferredBlock(deferred, this.store.listConditions(ticket.id)),
-      }),
-    );
-    return this.approvalTurn(ticket, route, prompt);
+    const body = render(this.getPrompts().bodies.approval, {
+      key: ticket.key,
+      title: ticket.title,
+      deferred: deferredBlock(deferred, this.store.listConditions(ticket.id)),
+    });
+    if (cold) {
+      // No conversation to continue: the replacement is told what the lost one
+      // knew — the review passed and what shipped — before it is asked to hand
+      // the work over.
+      const prompt = this.composePrompt(this.buildSeed(ticket), opening, body, instruction);
+      return this.approvalTurn(ticket, route, prompt);
+    }
+    // Flip the session that is about to be prompted before prompting it, so the
+    // approval tools are live for this turn even when the build session was
+    // reopened after a restart and its role is still whatever it last was.
+    if (this.driver.isLive?.(resumed.sessionId) === true) {
+      this.driver.setPhase(resumed.sessionId, 'approver');
+      this.driver.setRoute(resumed.sessionId, route);
+    }
+    return this.approvalTurn(ticket, route, this.composePrompt(opening, body, instruction));
   }
 
   /** The approval turn itself: send the hand-over, then park for the human unless the agent already closed the ticket. */
@@ -1282,6 +1330,10 @@ export class Engine {
    * the role that resumes (see `pendingInstruction`); the session that holds
    * the earlier work is reopened by that prompt's turn, or replaced by one that
    * starts from a summary of it.
+   *
+   * The ticket resumes in the phase it was parked in (KAN-64), so unsticking a
+   * ticket that is one step from the human gate does not re-run the steps behind
+   * it.
    */
   retry(ticket, { instruction, patch, actor = 'human' } = {}) {
     if (typeof instruction === 'string' && instruction.trim() !== '') {
@@ -1978,10 +2030,18 @@ export class Engine {
     };
   }
 
+  /**
+   * Which phase a retry restarts the ticket in. A retry is a nudge at the round
+   * that is stuck, not a restart of the whole workflow: with a plan on record the
+   * ticket resumes where it stands. The two special cases are the phases whose
+   * work is already finished — a parked review only needs a reviewer (KAN-31) and
+   * a parked approval only needs the hand-over again (KAN-64), so neither burns a
+   * fresh build round on work that already passed.
+   */
   retryPhase(ticket) {
     if (this.store.listConditions(ticket.id).length === 0) return 'plan';
     if (ticket.phase === 'review') return 'review';
-    if (ticket.phase === 'verify') return 'plan';
+    if (ticket.phase === 'verify') return 'verify';
     if (ticket.phase === 'plan') return 'plan';
     return 'implement';
   }

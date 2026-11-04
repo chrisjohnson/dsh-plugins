@@ -18,7 +18,9 @@ import {
   eventKinds,
   gitRepo,
   lastPrompt,
+  liveSession,
   pickedUp,
+  promptCounts,
   setup,
 } from './support/engine-harness.mjs'
 
@@ -157,6 +159,105 @@ test('a retry instruction at the review phase goes to the reviewer', async () =>
   await settle(engine, ticket.id)
   assert.match(lastPrompt(store, ticket.id, 'reviewer'), /check the docs\/ path too/)
   assert.equal(driver.turns.length > 0, true)
+})
+
+// ------------------------------------------- retry at the approval gate (KAN-64)
+//
+// The state KAN-62 was left in: the work passed review, only the approval
+// hand-over died with the service, and the ticket parked with a promise that a
+// retry starts a fresh session from a summary of the work so far. A retry keeps
+// that promise: it re-runs the hand-over, not the plan and the build behind it.
+
+const APPROVAL_PARK = 'approval session could not be reopened after a restart (the session file is gone); a human Retry starts a fresh session from a summary of the work so far'
+
+/**
+ * A ticket parked at the approval gate after a passing review. `live` keeps its
+ * build session on the driver; otherwise the session is gone and reactivation
+ * answers however the test sets `driver.reactivation`.
+ */
+function approvalParked({ live = false } = {}) {
+  const made = engineFor({ approval: [null] })
+  const { store, driver } = made
+  const ticket = pickedUp(store)
+  const plan = normalizePlan(PLAN)
+  store.replaceConditions(ticket.id, 1, plan.conditions, 'plan')
+  store.addArtifact(ticket.id, 'plan', JSON.stringify({ ...plan, planVersion: 1 }))
+  store.addArtifact(ticket.id, 'implement_result', JSON.stringify(IMPLEMENTATION))
+  store.addArtifact(ticket.id, 'review', JSON.stringify(REVIEW_PASS))
+  for (const step of ['implement', 'review', 'verify']) {
+    store.transitionTicket(ticket.id, { phase: step }, { actor: 'engine', reason: 'seed' })
+  }
+  store.setAttempt(ticket.id, 1, 0)
+  liveSession(driver, ticket.id)
+  const lost = live ? undefined : driver.dropSession(ticket.id, 'build', store)
+  store.setNeedsAttention(ticket.id, APPROVAL_PARK)
+  return { ...made, ticket: store.getTicket(ticket.id), lost }
+}
+
+test('a retry of an approval park goes back to the approval gate, not to plan', async () => {
+  const { store, driver, engine, ticket } = approvalParked({ live: true })
+  engine.retry(store.getTicket(ticket.id), { instruction: 'the release step never ran: push the tag, then hand the work over' })
+  await settle(engine, ticket.id)
+  const after = store.getTicket(ticket.id)
+  assert.equal(after.phase, 'verify', 'the ticket stays at the approval gate')
+  assert.equal(after.needsAttentionReason, 'Awaiting human approval', 'one retry lands it back on the human')
+  assert.equal(after.attemptCount, 0, 'the hand-over spends no attempt')
+  assert.deepEqual(promptCounts(store, ticket.id), { planner: 0, implementer: 0, reviewer: 0, approver: 1 }, 'no plan, build or review round ran')
+  assert.equal(driver.turns.length, 1, 'exactly one turn was sent')
+  const prompt = lastPrompt(store, ticket.id, 'approver')
+  assert.match(prompt, /give the hand-over now/)
+  assert.match(prompt, /Human instruction for the next attempt:\nthe release step never ran: push the tag, then hand the work over/)
+  assert.equal(/This is a new session for/.test(prompt), false, 'the live session already holds the work')
+})
+
+test('a retry of an approval park reopens the session that holds the work', async () => {
+  const { store, driver, engine, ticket, lost } = approvalParked()
+  driver.reactivations.length = 0
+  driver.reactivation = { ok: true }
+  const sessionsBefore = driver.counter
+  engine.retry(store.getTicket(ticket.id), { instruction: 'hand the work over; the restart is deferred to a human' })
+  await settle(engine, ticket.id)
+  assert.deepEqual(driver.reactivations.map((r) => r.purpose), ['build'], 'asked for the earlier build session back')
+  assert.equal(driver.counter, sessionsBefore, 'no new session was created')
+  assert.equal(driver.liveTicketSession(ticket.id, 'build'), lost, 'the same session id carries the hand-over')
+  assert.equal(driver.turns.at(-1), lost)
+  assert.ok(eventKinds(store, ticket.id).includes('session_resumed'))
+  const after = store.getTicket(ticket.id)
+  assert.equal(after.phase, 'verify')
+  assert.equal(after.needsAttentionReason, 'Awaiting human approval')
+  assert.deepEqual(promptCounts(store, ticket.id), { planner: 0, implementer: 0, reviewer: 0, approver: 1 })
+  assert.match(lastPrompt(store, ticket.id, 'approver'), /hand the work over; the restart is deferred to a human/)
+})
+
+test('a retry of an approval park with no session to reopen starts one from the summary', async () => {
+  const { store, driver, engine, ticket, lost } = approvalParked()
+  const sessionsBefore = driver.counter
+  engine.retry(store.getTicket(ticket.id), { instruction: 'the deploy is deferred; hand the work over as it stands' })
+  await settle(engine, ticket.id)
+  const fresh = driver.liveTicketSession(ticket.id, 'build')
+  assert.notEqual(fresh, lost, 'a new session stands in for the one that is gone')
+  assert.equal(driver.counter, sessionsBefore + 1)
+  const prompt = lastPrompt(store, ticket.id, 'approver')
+  assert.match(prompt, /^This is a new session for /)
+  assert.match(prompt, /ALREADY PASSED REVIEW/, 'the summary says the work already passed review')
+  assert.match(prompt, /Do not redo or restructure it/)
+  assert.match(prompt, /Last implementation \(complete\): created notes\.txt/, 'and what shipped')
+  assert.match(prompt, /the deploy is deferred; hand the work over as it stands/, 'plus the retry instruction')
+  const after = store.getTicket(ticket.id)
+  assert.equal(after.phase, 'verify')
+  assert.equal(after.needsAttentionReason, 'Awaiting human approval')
+  assert.deepEqual(promptCounts(store, ticket.id), { planner: 0, implementer: 0, reviewer: 0, approver: 1 })
+})
+
+test('a retry of an approval park does not crowd out a human talking in the session', async () => {
+  const { store, driver, engine, ticket } = approvalParked({ live: true })
+  // The park was lifted because a human started a turn in the build session, not
+  // because anyone retried: the engine keeps out of that conversation.
+  engine.reactivations.set(ticket.id, { sessionId: 'session-live', reason: APPROVAL_PARK })
+  engine.retry(store.getTicket(ticket.id), { instruction: 'ignore this retry' })
+  await settle(engine, ticket.id)
+  assert.equal(driver.turns.length, 0, "no hand-over was sent over the human's turn")
+  assert.deepEqual(promptCounts(store, ticket.id), { planner: 0, implementer: 0, reviewer: 0, approver: 0 })
 })
 
 // ------------------------------------------------------- the no-progress guard

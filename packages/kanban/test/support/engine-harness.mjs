@@ -216,6 +216,23 @@ export function lastPrompt(store, ticketId, role) {
   return id === 0 ? null : store.getArtifact(id).content
 }
 
+/** How many prompts each role has been sent: the shape of the work the engine actually did. */
+export function promptCounts(store, ticketId) {
+  const counts = { planner: 0, implementer: 0, reviewer: 0, approver: 0 }
+  for (const artifact of store.listArtifacts(ticketId, { limit: 500 })) {
+    const role = /^(planner|implementer|reviewer|approver)_prompt_/.exec(artifact.kind)?.[1]
+    if (role !== undefined) counts[role] += 1
+  }
+  return counts
+}
+
+/** Put a live session on the driver the way an in-flight round leaves one, and hand back its id. */
+export function liveSession(driver, ticketId, purpose = 'build', sessionId = 'session-live') {
+  driver.ticketSessions.set(`${ticketId}:${purpose}`, sessionId)
+  driver.sessions.set(sessionId, { role: purpose, purpose })
+  return sessionId
+}
+
 export function eventKinds(store, ticketId) {
   return store.listEvents(ticketId, { limit: 500 }).map((event) => event.kind)
 }
