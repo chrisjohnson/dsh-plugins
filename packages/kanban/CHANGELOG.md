@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+## 0.31.0
+
+### Added
+
+- **A human pause for the orchestrator.** The Work page header has a **Pause
+  orchestrator** / **Resume orchestrator** button next to **Open orchestrator**,
+  and an amber **Orchestrator paused** chip while it is on. While paused nothing
+  flows between the engine and the orchestrator session: board events are dropped
+  (no backlog is kept), and every orchestrator tool call is refused with "The
+  orchestrator is paused by a human; do not change the board.", so a turn already
+  in flight cannot move tickets. The session is not torn down and a person can
+  still open it and talk to it. Resuming sends one fresh board snapshot. The
+  switch is stored in the database (schema 8, `runtime_state`), so it survives a
+  restart; it rides the board payload (`orchestratorPaused`), so every open page
+  follows without a reload. New RPC `orchestratorSetPaused {paused}`; the
+  `orchestrator` answer now carries `paused`.
+
 ## 0.30.0
 
 ### Added

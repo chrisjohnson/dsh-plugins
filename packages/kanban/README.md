@@ -543,6 +543,15 @@ in the ordinary conversation view — same history, same composer, same everythi
 (unarchive it; the engine will not mint a second permanent session) or `off`
 (`orchestratorEnabled: false`).
 
+**Pausing it.** **Pause orchestrator** (beside the button that opens it) cuts all
+traffic between the engine and the orchestrator: board events are dropped, every
+orchestrator tool call is refused, and an amber **Orchestrator paused** chip shows
+on every open page. The session stays put and you can still talk to it. **Resume
+orchestrator** sends it one fresh board snapshot. The switch is stored in the
+database, so a restart keeps it. RPC: `POST /api/kanban/orchestratorSetPaused
+{paused: boolean}`; the `orchestrator` answer and the board payload both report
+`paused` / `orchestratorPaused`.
+
 **What it is fed.** On (re)start it receives a `[board snapshot]`: counts, then
 one line per open ticket — key, title, column, phase, and `PARKED:` with the
 reason, `ASKING:` with the question a worker is waiting on (and its options),

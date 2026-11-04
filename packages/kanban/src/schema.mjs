@@ -4,7 +4,7 @@
 // `prompts` or `settings` table, the value belongs in YAML instead (see
 // src/config.mjs and the README's config table).
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -280,6 +280,16 @@ ALTER TABLE conditions ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0 CHECK (def
 ALTER TABLE conditions ADD COLUMN human_evidence TEXT NOT NULL DEFAULT '';
 `;
 
+const V8 = `
+-- Durable runtime switches set by a person from the board (today: the
+-- orchestrator pause). One row per switch, so a restart keeps what was chosen.
+CREATE TABLE IF NOT EXISTS runtime_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -319,5 +329,10 @@ export const MIGRATIONS = [
     version: 7,
     name: 'deferred-conditions',
     sql: V7,
+  },
+  {
+    version: 8,
+    name: 'runtime-state',
+    sql: V8,
   },
 ];
