@@ -43,6 +43,19 @@ test('the host pushes snapshots over a streaming route and does no idle polling 
   assert.match(host, /#touchMeta/)
 })
 
+test('the snapshot carries each provider\'s trailing 60 s of output buckets', async () => {
+  const host = (await sources())['host.mjs']
+  // The Activity graphs draw one series per provider, so the frame has to ship it:
+  // a named 60-second window read on the same clock as the rest of the snapshot
+  // and attached to that provider's own rates object.
+  assert.match(host, /const HISTORY_SECONDS = 60/)
+  assert.match(host, /this\.rates\.providerHistory\(provider\.name, HISTORY_SECONDS, snap\.asOf\)/)
+  // A provider with no meter keeps a null rates object rather than an invented one.
+  assert.match(host, /rates: rates === null \? null : \{ \.\.\.rates, history60: history60 \?\? \[\] \}/)
+  // The all-providers summary the aggregate figures come from is untouched.
+  assert.match(host, /rates: this\.rates\.summary\(snap\.asOf\)/)
+})
+
 test('no credentials, endpoints or provider wire code', async () => {
   const files = await sources()
   for (const [name, text] of Object.entries(files)) {

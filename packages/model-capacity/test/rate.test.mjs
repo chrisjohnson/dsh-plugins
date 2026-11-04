@@ -96,6 +96,54 @@ test('the book keeps one global and one per-provider meter, created on first use
   assert.equal(book.providerSummary('never-used', now), null)
 })
 
+test('history is oldest-first, one value per second, with idle seconds read as zero', () => {
+  const { m } = meter()
+  m.add(40, T0 + 100)
+  m.add(30, T0 + 2100)
+  // Seconds 0..4 of this meter: traffic in 0 and 2, nothing in 1, 3 and 4.
+  assert.deepEqual(m.history(5, T0 + 4500), [40, 0, 30, 0, 0])
+})
+
+test('history never reaches back before the meter started', () => {
+  const { m } = meter()
+  m.add(12, T0 + 100)
+  // Two seconds old, asked for 60: the series is the two seconds it has lived.
+  assert.deepEqual(m.history(60, T0 + 1500), [12, 0])
+  assert.equal(m.history(60, T0 + 61 * 1000).length, 60)
+})
+
+test('a full window of steady traffic reads as 60 equal buckets', () => {
+  const { m } = meter()
+  for (let s = 0; s < 120; s += 1) m.add(10, T0 + s * 1000 + 500)
+  const series = m.history(60, T0 + 119 * 1000 + 500)
+  assert.equal(series.length, 60)
+  assert.deepEqual(series, new Array(60).fill(10))
+})
+
+test('a correction that drives a bucket below zero is reported, not floored', () => {
+  const { m } = meter()
+  m.add(100, T0 + 100)
+  // The usage chunk arrives a second later and says the call made only 60 tokens.
+  m.add(-40, T0 + 1100)
+  assert.deepEqual(m.history(3, T0 + 1200), [100, -40])
+  // A bucket can be pushed under zero outright; the sign survives into the series.
+  m.add(5, T0 + 2100)
+  m.add(-30, T0 + 2100)
+  assert.deepEqual(m.history(3, T0 + 2200), [100, -40, -25])
+})
+
+test('the history60 series the snapshot ships is providerHistory at 60 buckets', () => {
+  let now = T0
+  const book = new RateBook({ now: () => now })
+  book.add('p1', 24, T0 + 100)
+  book.add('p2', 6, T0 + 100)
+  now = T0 + 1000
+  assert.deepEqual(book.providerHistory('p1', 60, now), [24, 0])
+  assert.deepEqual(book.providerHistory('p2', 60, now), [6, 0])
+  // A provider that has never streamed has no series to draw at all.
+  assert.equal(book.providerHistory('never-used', 60, now), null)
+})
+
 test('streamed fragments are estimated by length; other chunks add nothing', () => {
   assert.equal(estimateChunkTokens({ type: 'text-delta', index: 0, text: 'abcdefgh' }), 2)
   assert.equal(estimateChunkTokens({ type: 'reasoning-delta', index: 0, text: 'abcd' }), 1)

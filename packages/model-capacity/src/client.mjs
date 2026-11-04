@@ -38,37 +38,59 @@ window.__ModuleLoader__.load({
 			return value >= 100 ? String(Math.round(value)) : value.toFixed(1);
 		}
 
-		function Sparkline(props) {
-			var values = props.values || [];
-			var width = 120, height = 28;
-			if (values.length < 2) return h("svg", { className: "mc-spark", width: width, height: height, "aria-hidden": "true" });
+		// One provider's output over the last minute: the same polyline technique the
+		// old top-of-page sparkline used, stretched to the full card width and given a
+		// plain relative time axis. No y scale and no value labels — the status line
+		// above already states the now and 1-minute figures, so the graph's whole job
+		// is shape: when this provider was busy, and how hard.
+		var GRAPH_POINTS = 60;
+		var GRAPH_W = 600;
+		var GRAPH_H = 44;
+		var GRAPH_PAD = 3;
+		var GRAPH_AXIS = [
+			{ key: "t60", label: "-60s", at: "0%", edge: "start" },
+			{ key: "t45", label: "-45s", at: "25%", edge: "middle" },
+			{ key: "t30", label: "-30s", at: "50%", edge: "middle" },
+			{ key: "t15", label: "-15s", at: "75%", edge: "middle" },
+			{ key: "tnow", label: "now", at: "100%", edge: "end" }
+		];
+
+		function graphPoints(values) {
+			var step = GRAPH_W / (GRAPH_POINTS - 1);
+			var baseline = GRAPH_H - GRAPH_PAD;
+			var span = GRAPH_H - 2 * GRAPH_PAD;
 			var max = 1;
-			values.forEach(function (v) { if (v > max) max = v; });
-			var step = width / (SPARK_POINTS - 1);
-			var offset = width - (values.length - 1) * step;
-			var points = values.map(function (v, i) {
-				return (offset + i * step).toFixed(1) + "," + (height - 2 - (v / max) * (height - 4)).toFixed(1);
-			}).join(" ");
-			return h("svg", { className: "mc-spark", width: width, height: height, viewBox: "0 0 " + width + " " + height, "aria-hidden": "true" },
-				h("polyline", { points: points, fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round" }));
+			var i;
+			for (i = 0; i < values.length; i += 1) { if (values[i] > max) max = values[i]; }
+			var pairs = [];
+			for (i = 0; i < values.length; i += 1) {
+				// A bucket pushed below zero by a usage correction draws as zero: the
+				// axis has no room below it, and the shape is what is being read.
+				var value = values[i] > 0 ? values[i] : 0;
+				pairs.push({ x: GRAPH_W - (values.length - 1 - i) * step, y: baseline - (value / max) * span });
+			}
+			// The newest second is pinned to the right edge, so a provider that
+			// started five seconds ago draws five seconds of line and grows leftwards
+			// rather than pretending the earlier minute was idle.
+			if (pairs.length === 1) pairs.unshift({ x: GRAPH_W - step, y: pairs[0].y });
+			if (pairs.length === 0) pairs = [{ x: 0, y: baseline }, { x: GRAPH_W, y: baseline }];
+			return pairs.map(function (p) { return p.x.toFixed(1) + "," + p.y.toFixed(1); }).join(" ");
 		}
 
-		function RateCell(props) {
-			return h("div", { className: "mc-kpi mc-rate " + props.tone + (props.live ? " is-live" : "") },
-				h("div", { className: "mc-kpi-value" }, fmtRate(props.value), h("small", null, " tok/s")),
-				h("div", { className: "mc-kpi-label", children: props.label }),
-				h("div", { className: "mc-kpi-hint", children: props.hint }),
-				props.history ? h(Sparkline, { values: props.history }) : null
-			);
-		}
-
-		function RateStrip(props) {
-			var rates = props.rates || { instant: 0, avg1m: 0, avg5m: 0, avg1h: 0, totalTokens: 0 };
-			return h("div", { className: "mc-rates", "data-live": rates.instant > 0 ? "true" : "false" },
-				h(RateCell, { tone: "mc-tone-teal", value: rates.instant, label: "Concurrent output now", hint: "all providers, last 3 s", history: props.history, live: rates.instant > 0 }),
-				h(RateCell, { tone: "mc-tone-blue", value: rates.avg1m, label: "1 minute average", hint: "all providers, concurrent" }),
-				h(RateCell, { tone: "mc-tone-violet", value: rates.avg5m, label: "5 minute average", hint: "all providers, concurrent" }),
-				h(RateCell, { tone: "mc-tone-amber", value: rates.avg1h, label: "1 hour average", hint: "all providers, concurrent" })
+		function ProviderGraph(props) {
+			var rates = props.rates;
+			var values = rates && Array.isArray(rates.history60) ? rates.history60 : [];
+			if (values.length > GRAPH_POINTS) values = values.slice(values.length - GRAPH_POINTS);
+			return h("div", { className: "mc-graph" },
+				h("svg", { className: "mc-graph-plot", viewBox: "0 0 " + GRAPH_W + " " + GRAPH_H, preserveAspectRatio: "none", "aria-hidden": "true" },
+					h("polyline", {
+						points: graphPoints(values), fill: "none", stroke: "currentColor",
+						strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round", vectorEffect: "non-scaling-stroke"
+					})),
+				h("div", { className: "mc-graph-axis" }, GRAPH_AXIS.map(function (tick) {
+					var style = tick.edge === "start" ? { left: 0 } : tick.edge === "end" ? { right: 0 } : { left: tick.at, transform: "translateX(-50%)" };
+					return h("span", { key: tick.key, className: "mc-graph-tick is-" + tick.edge, style: style, children: tick.label });
+				}))
 			);
 		}
 
@@ -101,10 +123,14 @@ window.__ModuleLoader__.load({
 			+ ".mc-kpi-value{font:650 24px/28px Inter,sans-serif;font-variant-numeric:tabular-nums;color:var(--mc-accent)}"
 			+ ".mc-kpi-label{margin-top:2px;font-weight:600;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--dsw-alias-label-secondary,#555)}"
 			+ ".mc-kpi-hint{margin-top:2px;font-size:10px;color:var(--dsw-alias-label-tertiary,#999)}"
-			+ ".mc-rates{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}"
-			+ ".mc-rate .mc-kpi-value small{font:500 11px/16px Inter,sans-serif;color:var(--dsw-alias-label-tertiary,#888)}"
-			+ ".mc-rate.is-live{box-shadow:0 0 0 1px color-mix(in srgb,var(--mc-accent) 35%,transparent),0 8px 24px color-mix(in srgb,var(--mc-accent) 14%,transparent)}"
-			+ ".mc-spark{display:block;margin-top:6px;color:var(--mc-accent);opacity:.85;max-width:100%}"
+			+ ".mc-graph{margin:11px 0 12px;position:relative;z-index:1}"
+			+ ".mc-graph-plot{display:block;width:100%;height:44px;color:var(--mc-accent);opacity:.9}"
+			+ ".mc-graph-axis{position:relative;height:11px;margin-top:3px;border-top:1px solid color-mix(in srgb,var(--dsw-alias-label-secondary,#888) 16%,transparent)}"
+			+ ".mc-graph-tick{position:absolute;top:3px;font:500 9px/11px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#999);white-space:nowrap}"
+			+ ".mc-graph-tick::before{content:'';position:absolute;top:-4px;width:1px;height:3px;background:currentColor;opacity:.55}"
+			+ ".mc-graph-tick.is-start::before{left:0}"
+			+ ".mc-graph-tick.is-middle::before{left:50%}"
+			+ ".mc-graph-tick.is-end::before{right:0}"
 			+ ".mc-sc-rate{font:600 10px/14px ui-monospace,monospace;color:var(--mc-accent);white-space:nowrap}"
 			+ ".mc-tone-blue{--mc-accent:#3b82f6;--mc-accent-2:#06b6d4}"
 			+ ".mc-tone-violet{--mc-accent:#8b5cf6;--mc-accent-2:#d946ef}"
@@ -225,7 +251,7 @@ window.__ModuleLoader__.load({
 			+ "@keyframes mc-poof{0%{transform:scale(1);opacity:1}100%{transform:scale(1.08);opacity:0}}"
 			+ "@media (prefers-color-scheme:dark){.mc-provider,.mc-session-card,.mc-kpi{background:var(--dsw-alias-bg-layer-1,#16181d)}.mc-session-card.mc-live{background:linear-gradient(135deg,rgba(34,197,94,.08),var(--dsw-alias-bg-layer-1,#16181d))}.mc-tag{background:rgba(255,255,255,.06)}.mc-empty-card{background:rgba(255,255,255,.02)}}"
 			+ "@media (prefers-reduced-motion:reduce){.mc-session-card.mc-live,.mc-session-card.mc-enter,.mc-session-card.mc-live.mc-enter,.mc-sc-state.live i,.mc-status i{animation:none}.mc-session-card.mc-ghost{display:none}.mc-session-card{transition:none}.mc-capbar>span{transition:none}}"
-			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-rates{grid-template-columns:repeat(2,minmax(0,1fr))}.mc-provider-grid{grid-template-columns:1fr}}";
+			+ "@media (max-width:720px){.mc-kpis{grid-template-columns:1fr}.mc-provider-grid{grid-template-columns:1fr}}";
 
 
 		function ensureStyles() {
@@ -423,11 +449,10 @@ window.__ModuleLoader__.load({
 		var FALLBACK_POLL_MS = 2000;
 		var RETRY_BASE_MS = 2000;
 		var RETRY_MAX_MS = 30000;
-		var SPARK_POINTS = 90;
 
 		function createFeed(env) {
 			var listeners = new Set();
-			var state = { snapshot: null, error: null, history: [], mode: "idle" };
+			var state = { snapshot: null, error: null, mode: "idle" };
 			var controller = null;
 			var pollTimer = null;
 			var retryTimer = null;
@@ -443,11 +468,7 @@ window.__ModuleLoader__.load({
 				emit();
 			}
 			function ingest(snapshot) {
-				var history = state.history;
-				var instant = snapshot && snapshot.rates ? snapshot.rates.instant : 0;
-				history = history.concat([instant || 0]);
-				if (history.length > SPARK_POINTS) history = history.slice(history.length - SPARK_POINTS);
-				set({ snapshot: snapshot, error: null, history: history });
+				set({ snapshot: snapshot, error: null });
 			}
 			function hidden() {
 				return !!(env.document && env.document.hidden);
@@ -775,6 +796,7 @@ window.__ModuleLoader__.load({
 						h("small", { children: "active + queued" })
 					)
 				),
+				h(ProviderGraph, { rates: p.rates }),
 				h("div", { className: "mc-capbar" + (p.waiters.length > 0 ? " is-waiting" : "") },
 					h("span", { style: { width: pct + "%" } })
 				),
@@ -928,7 +950,6 @@ window.__ModuleLoader__.load({
 					),
 					notice ? h("div", { className: "mc-notice", children: notice }) : null,
 					error ? h("div", { className: "mc-notice", children: error }) : null,
-					snapshot === null ? null : h(RateStrip, { rates: snapshot.rates, history: feedState.history }),
 					snapshot === null ? h("div", { className: "mc-empty", children: "Loading capacity state…" }) :
 						snapshot.providers.length === 0 ? h("div", { className: "mc-empty", children: "No provider has been used yet." }) :
 							h(React.Fragment, null,
