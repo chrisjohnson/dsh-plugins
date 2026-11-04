@@ -5,6 +5,27 @@
 
 ## Unreleased
 
+## 0.28.0
+
+### Changed
+
+- **The orchestrator now runs to a standing directive (KAN-62).** Its system prompt
+  states the job in one line — drive every ticket to the state where it is **ready
+  for human approval** — and the only levers it may use to get there:
+  `kanban_message` for corrections and next-step instructions into a worker
+  session, `kanban_retry` for a parked ticket with a concrete instruction,
+  `kanban_kick` for a halted session, and `kanban_start` for idle Backlog work. Two
+  boundaries are spelled out alongside it. A ticket parked on a worker question is no
+  longer simply left to wait: the orchestrator reads the question and, when the
+  answer does not require a human, answers it itself with `kanban_message` so the
+  work continues, escalating only the questions that genuinely need a person. And it
+  never runs deploys or service restarts — it has no such lever and must not work
+  around that; when a ticket's remaining work is getting a change into "production",
+  whatever that is for the project, it instructs the build session to trigger the
+  complete deployment steps, and reports what only a human can do as a deferred
+  condition. The `kanban_message` tool description and the module header carry the
+  same policy, so prompt, tool contract and docs read as one rule.
+
 ## 0.27.0
 
 ### Added

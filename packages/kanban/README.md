@@ -555,8 +555,9 @@ of a ticket nothing has started) to author; `kanban_move` (Backlog ⇄ Working),
 instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
 that halted mid-turn) and `kanban_message` (a note into a ticket's live session)
 to act. That is the whole menu, and it is enforced in code, not in prose: there is
-no tool that approves, discards or closes a ticket, none that answers a question a
-session asked a human, and the session runs under a read-only sandbox with `write`
+no tool that approves, discards or closes a ticket, and none for a question that
+genuinely needs a human — a worker question that does not need one is answered with
+`kanban_message` — while the session runs under a read-only sandbox with `write`
 and `edit` restricted away. A filed ticket goes through the same store path a human
 creation uses and its `created` event carries `actor: 'orchestrator'`; an edit
 takes title and body only, and is locked by the same pristine rule as the human
