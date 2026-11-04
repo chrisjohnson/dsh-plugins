@@ -1283,33 +1283,33 @@ export class Engine {
    * the earlier work is reopened by that prompt's turn, or replaced by one that
    * starts from a summary of it.
    */
-  retry(ticket, { instruction, patch } = {}) {
+  retry(ticket, { instruction, patch, actor = 'human' } = {}) {
     if (typeof instruction === 'string' && instruction.trim() !== '') {
-      this.store.addArtifact(ticket.id, 'attempt_feedback', `Human instruction for the next attempt:\n${instruction}`);
+      this.store.addArtifact(ticket.id, 'attempt_feedback', `${actor === 'orchestrator' ? 'Orchestrator' : 'Human'} instruction for the next attempt:\n${instruction}`);
     }
     if (patch !== undefined && patch !== null && typeof patch === 'object') {
-      this.store.updateTicket(ticket.id, patch, { actor: 'human', reason: 'needs_attention resolution' });
+      this.store.updateTicket(ticket.id, patch, { actor, reason: 'needs_attention resolution' });
     }
     const resumePhase = this.retryPhase(ticket);
     this.store.setAttempt(ticket.id, 0, 0);
     this.store.appendEvent(ticket.id, 'budget_reset', {
       phaseFrom: ticket.phase,
       phaseTo: resumePhase,
-      actor: 'human',
-      payload: { from: ticket.attemptCount, to: 0, reason: 'human retry' },
+      actor,
+      payload: { from: ticket.attemptCount, to: 0, reason: `${actor} retry` },
     });
     // A human retry is new input, so the unchanged-tree guard starts over: the
     // tree it remembers was left by a round the human has now responded to.
     if (this.store.latestArtifact(ticket.id, 'rework_signature') !== undefined) {
-      this.store.addArtifact(ticket.id, 'rework_signature', JSON.stringify({ diffHash: null, failingIds: [], reset: 'human retry' }, null, 2));
+      this.store.addArtifact(ticket.id, 'rework_signature', JSON.stringify({ diffHash: null, failingIds: [], reset: `${actor} retry` }, null, 2));
     }
     this.resumeMarks.delete(ticket.id);
     // Retry lifts the park and relaunches the ticket in the column it is in: a
     // Working ticket runs again immediately; a Backlog one waits idle until it is
     // dragged to Working (or plans in place if it is a plan-now ticket back at
     // the plan phase).
-    this.store.clearNeedsAttention(ticket.id, { actor: 'human', reason: 'human retry' });
-    const updated = this.store.transitionTicket(ticket.id, { phase: resumePhase }, { actor: 'human', reason: 'human retry' });
+    this.store.clearNeedsAttention(ticket.id, { actor, reason: `${actor} retry` });
+    const updated = this.store.transitionTicket(ticket.id, { phase: resumePhase }, { actor, reason: `${actor} retry` });
     void this.tick();
     return updated;
   }

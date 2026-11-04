@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 
 import { DEFAULT_CONFIG, DEPRECATED_ROLE_KEYS, ROLES, resolveConfig, routeForAttempt } from '../src/config.mjs'
 
-test('defaults resolve with the four workflow roles', () => {
+test('defaults resolve with the four workflow roles plus the orchestrator', () => {
   const { config, warnings } = resolveConfig({})
   assert.deepEqual(warnings, [])
-  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer', 'approver'])
+  assert.deepEqual(ROLES, ['planner', 'implementer', 'reviewer', 'approver', 'orchestrator'])
   assert.deepEqual(Object.keys(config.roles).sort(), [...ROLES].sort())
   assert.equal(config.defaultPlanTiming, 'at_pickup')
   assert.equal(config.defaultPlanQuestions, 'interactive')
@@ -81,4 +81,41 @@ test('every default prompt, approval included, loads from the package prompts di
   assert.match(prompts.bodies.approval, /^Without making any further changes, offer the user a selection of a few options for next steps that would enable you to wrap this work up\./)
   assert.equal(prompts.bodies.approval.includes('{{plan}}'), false, 'approval prompt still dumps the plan')
   assert.equal(prompts.bodies.approval.includes('{{review}}'), false, 'approval prompt still dumps the review')
+})
+
+// KAN-60: the orchestrator's own keys. They are config because they survive a
+// deleted database, and they are optional because a deployment that drives its
+// board by hand must be able to say so with one key.
+test('the orchestrator is on, with a stable session id and a 30s digest window', () => {
+  const { config } = resolveConfig({})
+  assert.equal(config.orchestratorEnabled, true)
+  assert.equal(config.orchestratorSessionId, 'kanban-orchestrator')
+  assert.equal(config.orchestratorDigestWindowMs, 30000)
+  assert.deepEqual(config.roles.orchestrator, { provider: null, model: null, reasoningEffort: null })
+})
+
+test('a deployment may retune the orchestrator without restating anything else', () => {
+  const { config } = resolveConfig({
+    orchestratorEnabled: false,
+    orchestratorSessionId: 'board-keeper',
+    orchestratorDigestWindowMs: 5000,
+    roles: { orchestrator: { provider: 'local', model: 'small' } },
+  })
+  assert.equal(config.orchestratorEnabled, false)
+  assert.equal(config.orchestratorSessionId, 'board-keeper')
+  assert.equal(config.orchestratorDigestWindowMs, 5000)
+  assert.equal(config.roles.orchestrator.provider, 'local')
+  // The untouched roles keep their defaults: a config row merges, it does not replace.
+  assert.equal(config.roles.planner.provider, null)
+})
+
+test('a malformed orchestrator setting is refused with the key named', () => {
+  assert.throws(() => resolveConfig({ orchestratorEnabled: 'yes' }), /orchestratorEnabled: must be a boolean/)
+  assert.throws(() => resolveConfig({ orchestratorSessionId: '  ' }), /orchestratorSessionId: must be a non-empty string/)
+  assert.throws(() => resolveConfig({ orchestratorDigestWindowMs: 0 }), /orchestratorDigestWindowMs: must be a positive number/)
+})
+
+test('a deployment row that names only its own roles still gets the orchestrator entry', () => {
+  const { config } = resolveConfig({ roles: { planner: { provider: 'p', model: 'm' } } })
+  assert.equal(config.roles.orchestrator.provider, null)
 })

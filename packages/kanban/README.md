@@ -517,6 +517,69 @@ untouched and the ticket says so: a `plan_revision_rejected` event and a red
 banner on the detail with the reason. Once the build has started the action is
 refused.
 
+## The orchestrator session (0.26.0)
+
+The engine drives a ticket from plan to approval, and a ticket that parks waits
+for a person. The orchestrator is the session that stops "a person" being the
+only thing between a park and a retry: one permanent DSH session that watches the
+board, nudges what is stuck, and tells you what it did.
+
+It is a session, not a panel. The Work page has an **Orchestrator** button in its
+header row; it asks the Host which session the orchestrator is (`POST
+/api/kanban/orchestrator` → `{sessionId, state}`) and opens it, so you talk to it
+in the ordinary conversation view — same history, same composer, same everything.
+`state` is `live`, `starting` (the button waits a moment and retries), `archived`
+(unarchive it; the engine will not mint a second permanent session) or `off`
+(`orchestratorEnabled: false`).
+
+**What it is fed.** On (re)start it receives a `[board snapshot]`: counts, then
+one line per open ticket — key, title, column, phase, and `PARKED:` with the
+reason, `running`, `waiting on a person`. After that, committed store events in
+the high-signal set (`needs_attention_reason`, `attention_cleared`, `stalled`,
+`phase_changed`, `column_changed`, `done`, `discarded`, `aborted`,
+`grant_applied`, `plan_approved`, `retry_scheduled`, `restart_recovered`,
+`auto_recovered`, `guard_denied`, `preset_fallback`) arrive as `[board events]`
+digests, coalesced in a `orchestratorDigestWindowMs` window so a burst of
+movement is one message and not fifteen turns. Two kinds of event never reach it:
+anything it caused itself (`actor: 'orchestrator'` — its own moves are not news),
+and a third queued digest while two are still unread, so a session that is busy
+answering you is never buried in board traffic. Everything is delivered through
+`followup`, which queues: a digest cannot interrupt a turn, so it cannot interrupt
+you.
+
+**What it can do.** `kanban_board`, `kanban_ticket` and `kanban_sessions` to read;
+`kanban_move` (Backlog ⇄ Working), `kanban_start` (planning or build),
+`kanban_retry` (a parked ticket, with an instruction and a fresh attempt budget),
+`kanban_kick` (continue a ticket session that halted mid-turn) and
+`kanban_message` (a note into a ticket's live session) to act. That is the whole
+menu, and it is enforced in code, not in prose: there is no tool that approves,
+discards, closes or edits a ticket, none that answers a question a session asked a
+human, and the session runs under a read-only sandbox with `write` and `edit`
+restricted away. A call that crosses a boundary is refused at the tool with a
+sentence explaining whose call it was instead.
+
+**Why it has its own preset.** The orchestrator must stay answerable, and a
+session that can hold a turn for a minute is not. The bundle declares
+`dsh-kanban-orchestrator` (row `dsh-kanban-orchestrator-preset`): a
+`@deepseek-ai/dsh-bash-sandbox` executor with `timeoutMs: 5000` and
+`maxTimeoutMs: 5000`, so a shell command runs 5 seconds and is then promoted to a
+background job the session reads with `job_output`; `@deepseek-ai/dsh-tool-jobs`
+with `waitTimeoutMs: 5000` and `maxWaitTimeoutMs: 5000`, so a wait returns in 5
+seconds whatever the job is doing; `tool-fs` and `tool-fs-search` for reading;
+`agent-instructions` and `time-context`; and the compaction group, because a
+session that lives for days cannot afford one unbounded context. It carries no
+persona — `prompts/orchestrator.md` is registered as a complete prompt section on
+that agent's scope, and it is the whole system prompt.
+
+Its model is a route like any other: `roles.orchestrator`, editable in the Model
+routing dialog (it appears there as **Orchestrator**). Unset falls back to the
+deployment default model.
+
+**When it cannot start** — no route, no `agentPresets` service, the session
+archived — the board is unaffected: the engine logs one line, the endpoint reports
+the state, and the button says what is missing. A retry is attempted every 30s and
+a click nudges it immediately.
+
 ## Config
 
 <!-- verify-allow: config-documented -->
@@ -531,7 +594,10 @@ Everything below lives on the `kanban` row.
 | `liveCheckoutReadOnlyCommands[]` | command prefixes (token prefix, word boundaries) a build session may run from a live checkout as read-only inspection, on top of the built-in set. A deployment lists its own inspection commands; a matching segment with a write redirect, or chained with anything not read-only, is still denied. Default none. |
 | `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: the copy is removed through `dsh-better-git-worktree` (0.3.0+) only when it sits under a `.dsh-worktrees` root, is not a live checkout (a `liveCheckouts` path, other than a copy under its `.dsh-worktrees`) and is not used by another open ticket; a copy with uncommitted, unpushed or stashed work, or whose state cannot be read, is left in place and its sessions stay unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
-| `roles{}` | `planner`, `implementer`, `reviewer`, `approver`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
+| `roles{}` | `planner`, `implementer`, `reviewer`, `approver` and `orchestrator`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
+| `orchestratorEnabled` | whether the permanent orchestrator session runs at all (default `true`). Off means the session is never created and the Work page's Orchestrator button says so; everything else about the board is unchanged. See [The orchestrator session](#the-orchestrator-session-0260). |
+| `orchestratorSessionId` | the stable DSH session id of that session (default `kanban-orchestrator`). Stable across restarts on purpose: it is the same conversation tomorrow, and the fixed thing the Work page opens. |
+| `orchestratorDigestWindowMs` | how long a batch of board events waits for company before it is delivered to the orchestrator (default 30000). A burst of movement costs one message and one turn; a longer window makes it slower to notice. |
 | `confidenceThreshold` | default `0.70`. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
 | `maxAttempts` | implement/review rounds before `needs_attention`. |
@@ -544,8 +610,9 @@ Everything below lives on the `kanban` row.
 | `defaultBudgetUsd`, `retentionDays`, `promptsDir` | budget, artifact retention, prompt directory. |
 
 Prompts are markdown files under `prompts/`: `plan-human.md`, `plan-self.md`,
-`implement.md`, `rework.md`, `review.md`, `approval.md`. Their hashes are recorded
-on runs and spans.
+`implement.md`, `rework.md`, `review.md`, `approval.md`, and `orchestrator.md`
+(the orchestrator session's complete system prompt, not a phase prompt). Their
+hashes are recorded on runs and spans.
 
 A prompt says the job and nothing the session can already see. Plan and build
 prompts open a fresh session, so they carry the full ticket, plan and conditions.

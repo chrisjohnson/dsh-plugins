@@ -143,9 +143,13 @@ for (const dir of packages) {
   const notSkipped = !composed.includes(`skipping profile bundle ${JSON.stringify(name)}`);
   // 1. the bundle became a layer of its own, attributed to this package
   const layer = new RegExp(`^# == ${name}$`, 'm').test(composed);
-  // 2. its row is present with the id its patch declares
+  // 2. its row is present with the id its patch declares.
+  //    A row is a list item, so only `- id:` lines count. A bare `id:` line is a
+  //    config FIELD of some row - an agent preset's `config.id`, for one - and the
+  //    composition never carries it at the top level, so reading it as a row id
+  //    would demand a row that does not exist.
   const patch = readFileSync(join(dir, manifest.dsh.bundle.patch), 'utf8');
-  const ids = [...patch.matchAll(/^\s*-?\s*id:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+  const ids = [...patch.matchAll(/^\s*-\s+id:\s*(\S+)\s*$/gm)].map((m) => m[1]);
   const rowsPresent = ids.length > 0 && ids.every((id) => new RegExp(`^- id: ${id}$`, 'm').test(composed));
   // 3. the profile manifest records the dependency and the bundle
   const profileManifest = JSON.parse(readFileSync(join(home, 'profiles', 'web', 'package.json'), 'utf8'));

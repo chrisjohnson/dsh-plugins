@@ -220,7 +220,10 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
   assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'reorder' \}\)/)
   assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
-  assert.match((await sources())['engine.mjs'], /this\.store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'needs_attention resolution' \}\)/)
+  // KAN-60: the retry patch names whoever asked, so the actor is a variable here
+  // and not a literal — the guard this test keeps is that the write is one call
+  // inside retry(), not a raw store write on the endpoint.
+  assert.match((await sources())['engine.mjs'], /this\.store\.updateTicket\(ticket\.id, patch, \{ actor, reason: 'needs_attention resolution' \}\)/)
 })
 
 // --------------------------------------------------------------- KAN-7
@@ -611,7 +614,10 @@ test('a human retry resets the attempt budget on both endpoints and records it',
   const engine = files['engine.mjs']
   assert.match(engine, /this\.store\.setAttempt\(ticket\.id, 0, 0\)/)
   assert.match(engine, /'budget_reset'/)
-  assert.match(engine, /from: ticket\.attemptCount, to: 0, reason: 'human retry'/)
+  // KAN-60: the reset is recorded under whoever asked ('human' or
+  // 'orchestrator'), so the reason is a template — the fact under test is that
+  // the event carries the old and new attempt counts.
+  assert.match(engine, /from: ticket\.attemptCount, to: 0, reason: `\$\{actor\} retry`/)
   // The reset happens before the phase transition, so the next round is round one.
   const body = engine.slice(engine.indexOf('  retry(ticket,'), engine.indexOf('  async rerunReview('))
   assert.ok(body.indexOf('setAttempt') < body.indexOf('transitionTicket'), 'the budget is reset before the ticket moves')
