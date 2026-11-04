@@ -21,6 +21,7 @@ import {
   createDigestWindow,
   digestEvent,
   isWatchedEvent,
+  nextOrchestratorSessionId,
   runOrchestratorTool,
 } from '../src/orchestrator.mjs'
 
@@ -294,6 +295,7 @@ function fakeApi(over = {}) {
       retry: record('retry'),
       kick: record('kick'),
       message: record('message'),
+      discard: record('discard'),
       sessions: record('sessions'),
     },
   }
@@ -311,12 +313,12 @@ test('every declared tool is reachable and has a model-facing contract', () => {
   }
 })
 
-test('the orchestrator can author tickets but cannot approve, discard or close them', () => {
-  // The boundary KAN-63 moved: filing a ticket and fixing the title/body of an
-  // unstarted one are now the orchestrator's. Ending a ticket is not. KAN-66
-  // added `kanban_configure`: the settings of an open ticket are its own lever
-  // now, which is still not a way to close one.
-  const forbidden = /approve|discard|close|delete|submit|answer/
+test('the orchestrator can author, configure and discard tickets but cannot approve or close them', () => {
+  // The boundary KAN-65 moved: discarding an open ticket is the orchestrator's,
+  // with a reason (KAN-66 had already given it `kanban_configure` for an open
+  // ticket's settings). Approving and closing as done are not, so nothing in this
+  // tool set may even spell them — the board owner kept those two.
+  const forbidden = /approve|close|delete|submit|answer/
   for (const name of ORCHESTRATOR_TOOL_NAMES) {
     assert.equal(forbidden.test(name), false, `${name} crosses the boundary`)
   }
@@ -324,6 +326,7 @@ test('the orchestrator can author tickets but cannot approve, discard or close t
     'kanban_board',
     'kanban_configure',
     'kanban_create',
+    'kanban_discard',
     'kanban_edit',
     'kanban_kick',
     'kanban_message',
@@ -333,6 +336,30 @@ test('the orchestrator can author tickets but cannot approve, discard or close t
     'kanban_start',
     'kanban_ticket',
   ])
+})
+
+test('discard needs a reason and refuses a ticket that is already closed', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(() => runOrchestratorTool('kanban_discard', { ticket: 'KAN-1' }, api), /reason is required/)
+  await assert.rejects(() => runOrchestratorTool('kanban_discard', { ticket: 'KAN-1', reason: '   ' }, api), /reason is required/)
+  assert.equal(calls.length, 0, 'a refused call never reaches the host seam')
+
+  for (const column of ['done', 'discarded']) {
+    const closed = fakeApi({ ticket: fakeTicket({ column, phase: 'closed' }) })
+    await assert.rejects(
+      () => runOrchestratorTool('kanban_discard', { ticket: 'KAN-1', reason: 'superseded by KAN-9' }, closed.api),
+      new RegExp(`already ${column}; only an open ticket can be discarded`),
+    )
+    assert.equal(closed.calls.some((call) => call[0] === 'discard'), false)
+  }
+})
+
+test('a valid discard hands the resolved ticket and the trimmed reason to the seam', async () => {
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_discard', { ticket: 'KAN-1', reason: '  a duplicate of KAN-9  ' }, api)
+  assert.equal(calls[0][0], 'discard')
+  assert.equal(calls[0][1].id, 't-1', 'the guard hands over the resolved ticket, not the string it was given')
+  assert.equal(calls[0][2], 'a duplicate of KAN-9')
 })
 
 test('a read tool needs nothing and reaches the host seam', async () => {
@@ -434,6 +461,73 @@ test('create cannot file a body that references an image it cannot attach', asyn
   assert.equal(calls.length, 0)
 })
 
+test('create passes the settings a build needs straight through to the seam', async () => {
+  // KAN-65: a dsh-deploy/dsh-plugins build is denied install, lab and git access
+  // under the defaults, so the orchestrator has to be able to file the card with
+  // the Creator preset, Full Access and a worktree on. The guard checks shape
+  // only; whether a preset id exists is the host seam's question.
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_create', {
+    title: 't',
+    body: 'b',
+    preset: 'cordis',
+    writeMode: 'danger-full-access',
+    worktree: true,
+    planTiming: 'at_pickup',
+    planQuestions: 'autonomous',
+  }, api)
+  assert.deepEqual(calls[0], ['create', {
+    title: 't',
+    body: 'b',
+    priority: undefined,
+    preset: 'cordis',
+    writeMode: 'danger-full-access',
+    worktree: true,
+    planTiming: 'at_pickup',
+    planQuestions: 'autonomous',
+  }])
+})
+
+test('create leaves a setting it was not given at the store default', async () => {
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b', writeMode: 'workspace-write' }, api)
+  const filed = calls[0][1]
+  assert.equal(filed.writeMode, 'workspace-write')
+  for (const key of ['preset', 'worktree', 'planTiming', 'planQuestions']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(filed, key), false, `${key} was pinned to a default nobody asked for`)
+  }
+})
+
+test('create refuses a write mode outside the sandbox vocabulary', async () => {
+  const { api, calls } = fakeApi()
+  for (const writeMode of ['full-access', 'yolo', 'READ-ONLY', 3]) {
+    await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', writeMode }, api), /writeMode must be one of/)
+  }
+  assert.equal(calls.length, 0)
+})
+
+test('create refuses a plan mode the lifecycle does not know', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', planTiming: 'soon' }, api), /planTiming must be one of/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', planQuestions: 'silent' }, api), /planQuestions must be one of/)
+  // A half-given pair is completed with the store's own defaults, then checked.
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b', planTiming: 'now' }, api)
+  assert.deepEqual(calls[0][1], { title: 't', body: 'b', priority: undefined, planTiming: 'now', planQuestions: 'interactive' })
+  assert.equal(calls.length, 1)
+})
+
+test('create refuses a worktree that is not a boolean and a preset that is blank', async () => {
+  const { api, calls } = fakeApi()
+  for (const worktree of ['yes', 1, 'true']) {
+    await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', worktree }, api), /worktree must be true or false/)
+  }
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', preset: '   ' }, api), /preset must be a non-empty string/)
+  assert.equal(calls.length, 0)
+  // Turning it off explicitly is a real answer, not a missing one.
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b', worktree: false }, api)
+  assert.equal(calls[0][1].worktree, false)
+})
+
 test('edit needs at least one of title and body', async () => {
   const { api, calls } = fakeApi()
   await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1' }, api), /nothing to edit/)
@@ -479,4 +573,26 @@ test('a tool that throws inside the host seam surfaces as a tool error', async (
 test('arguments that are not an object are treated as empty, not crashed on', async () => {
   const { api } = fakeApi()
   await assert.rejects(() => runOrchestratorTool('kanban_ticket', null, api), /required/)
+})
+
+// ------------------------------------------------------------------ rotation --
+
+test('a detach rotates the session id forward and never reuses one', () => {
+  // An archived id stays archived, so the fresh session after a detach has to be
+  // a new id — reusing the retired one would come back dead.
+  assert.equal(nextOrchestratorSessionId('kanban-orchestrator'), 'kanban-orchestrator-2')
+  assert.equal(nextOrchestratorSessionId('kanban-orchestrator-2'), 'kanban-orchestrator-3')
+  assert.equal(nextOrchestratorSessionId('kanban-orchestrator-3'), 'kanban-orchestrator-4')
+})
+
+test('the stored generation wins over the id suffix when the two disagree', () => {
+  assert.equal(nextOrchestratorSessionId('kanban-orchestrator', 4), 'kanban-orchestrator-5')
+  assert.equal(nextOrchestratorSessionId('kanban-orchestrator-2', 7), 'kanban-orchestrator-8')
+})
+
+test('a renamed orchestrator keeps its own stem, and junk falls back to the default', () => {
+  assert.equal(nextOrchestratorSessionId('my-orch', null), 'my-orch-2')
+  assert.equal(nextOrchestratorSessionId('my-orch-9', NaN), 'my-orch-10')
+  assert.equal(nextOrchestratorSessionId('', 0), 'kanban-orchestrator-2')
+  assert.equal(nextOrchestratorSessionId(undefined, -3), 'kanban-orchestrator-2')
 })

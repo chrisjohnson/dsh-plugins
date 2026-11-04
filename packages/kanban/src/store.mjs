@@ -1216,4 +1216,29 @@ export class KanbanStore {
     for (const row of rows) out[row.col] = Number(row.n);
     return out;
   }
+
+  // ---------------------------------------------------------------------- kv --
+  //
+  // The board's runtime state that is not a ticket (v9): today, which session id
+  // the orchestrator is living in after a "Restart orchestrator" rotation. These
+  // are not configuration — a person never edits them — which is why they can sit
+  // here while providers, roles and prompts stay in YAML.
+
+  /** The stored value for `key`, or null when nothing is stored under it. */
+  kvGet(key) {
+    const row = this.db.prepare('SELECT value FROM kv WHERE key = ?').get(String(key));
+    return row === undefined ? null : String(row.value);
+  }
+
+  /** Store `value` under `key`, replacing whatever was there. */
+  kvSet(key, value) {
+    const text = String(value);
+    this.db
+      .prepare(
+        `INSERT INTO kv (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(String(key), text);
+    return text;
+  }
 }

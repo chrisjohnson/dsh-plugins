@@ -90,6 +90,12 @@ export function assertTransition(from, to, { actor = 'engine', reason = '', outs
     return { ok: false, reason: `phase ${from.phase} -> ${to.phase} is not allowed` };
   }
   if (columnMove && TERMINAL_COLUMNS.includes(to.column) && actor !== 'engine' && actor !== 'human') {
+    // KAN-65: the board owner moved discard to the orchestrator, so an
+    // orchestrator may end an open ticket — into Discarded and nowhere else.
+    // Done is still unreachable by any actor but the engine and a human: the
+    // approval that puts a ticket there is the one call this plugin never hands
+    // to a model.
+    if (actor === 'orchestrator' && to.column === 'discarded') return { ok: true };
     return { ok: false, reason: `only the engine or a human may close a ticket (actor=${actor})` };
   }
   return { ok: true };

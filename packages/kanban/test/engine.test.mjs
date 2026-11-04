@@ -191,6 +191,18 @@ function pickedUp(store, extra = {}) {
   return store.getTicket(ticket.id)
 }
 
+/**
+ * A ticket discard is legal on: the state machine only closes a ticket that has
+ * left planning, so the phases are walked the way the engine would walk them.
+ */
+function discardable(store, extra = {}) {
+  const ticket = pickedUp(store, extra)
+  for (const phase of ['implement', 'review', 'verify']) {
+    store.transitionTicket(ticket.id, { phase }, { actor: 'engine', reason: 'seed' })
+  }
+  return store.getTicket(ticket.id)
+}
+
 test('flat plan -> implement -> review -> approval -> approve', async () => {
   const { store, engine, driver } = setup()
   const ticket = pickedUp(store)
@@ -1404,4 +1416,35 @@ test('a rework round that moves the tree is not called no-progress', async () =>
   assert.equal(store.getTicket(ticket.id).phase, 'verify')
   assert.equal(store.getTicket(ticket.id).needsAttentionReason, 'Awaiting human approval')
   assert.equal(store.getTicket(ticket.id).attemptCount, 3)
+})
+
+// ------------------------------------------------------------------- discard --
+//
+// KAN-65: the orchestrator may discard an open ticket, so the engine's discard
+// path records who asked. The human endpoints never pass an actor and must go on
+// reading exactly as they did; the orchestrator seam passes its own, and the
+// board has to be able to tell the two apart from the events alone.
+
+test('discard credits the human when nobody says otherwise', async () => {
+  const { store, engine } = setup()
+  const ticket = discardable(store)
+  const discarded = await engine.discard(ticket.id, 'superseded by KAN-9')
+  assert.equal(discarded.column, 'discarded')
+  const events = store.listEvents(ticket.id)
+  const moved = events.filter((event) => event.kind === 'column_changed').pop()
+  assert.equal(moved.actor, 'human', 'the transition records the human as its author')
+  const ended = events.find((event) => event.kind === 'discarded')
+  assert.equal(ended.actor, 'human')
+  assert.equal(ended.payload.reason, 'superseded by KAN-9')
+})
+
+test('discard credits the orchestrator when the orchestrator seam asks for it', async () => {
+  const { store, engine } = setup()
+  const ticket = discardable(store)
+  const discarded = await engine.discard(ticket.id, 'a duplicate of KAN-9', { actor: 'orchestrator' })
+  assert.equal(discarded.column, 'discarded')
+  assert.equal(discarded.phase, 'closed')
+  const events = store.listEvents(ticket.id)
+  assert.equal(events.filter((event) => event.kind === 'column_changed').pop().actor, 'orchestrator')
+  assert.equal(events.find((event) => event.kind === 'discarded').actor, 'orchestrator')
 })

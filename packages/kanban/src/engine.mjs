@@ -1173,13 +1173,19 @@ export class Engine {
     return done;
   }
 
-  async discard(ticketId, reason = '') {
+  /**
+   * Close a ticket without approval. `options.actor` is who the record credits:
+   * the human endpoints leave it at `'human'`, and the orchestrator's
+   * `kanban_discard` passes `'orchestrator'` so the board can tell who threw the
+   * work away (KAN-65). Everything else about the move is the same path.
+   */
+  async discard(ticketId, reason = '', { actor = 'human' } = {}) {
     const ticket = this.store.getTicket(ticketId);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${ticketId}`);
     await this.closeTicketSessions(ticket.id);
-    const discarded = this.store.transitionTicket(ticket.id, { column: 'discarded', phase: 'closed' }, { actor: 'human', reason: reason || 'discarded' });
+    const discarded = this.store.transitionTicket(ticket.id, { column: 'discarded', phase: 'closed' }, { actor, reason: reason || 'discarded' });
     this.endRun(ticket.id);
-    this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo: 'closed', actor: 'human', payload: { reason } });
+    this.appendEvent(ticket.id, 'discarded', { phaseFrom: ticket.phase, phaseTo: 'closed', actor, payload: { reason } });
     this.postClose(discarded);
     return discarded;
   }

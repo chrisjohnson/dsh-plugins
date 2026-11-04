@@ -17,16 +17,18 @@
 // these tools and delivering these texts — lives in src/orchestrator-host.mjs.
 //
 // Safe autonomy is a property of the tool set, not of the prompt: the
-// orchestrator has no tool that approves, discards or closes a ticket, and no
-// tool for a question that genuinely needs a human — a worker question that does
+// orchestrator has no tool that approves or closes a ticket as done, and no tool
+// for a question that genuinely needs a human — a worker question that does
 // not need one is answered with `kanban_message`. What it can do is
-// create, read, move, start, retry, kick, message, edit and configure — where
-// create only files a new ticket into Backlog, edit only touches the title or
-// body of a ticket nothing has started yet, under the same pristine lock as the
-// human edit boundary, and configure changes the *settings* of an open ticket
-// (preset, write mode, worktree, priority, plan timing, budget) through the same
-// store validation the human create form goes through. Completion stays a human
-// call.
+// create, read, move, start, retry, kick, message, edit, configure and discard —
+// where create files a new ticket into Backlog with the settings its build needs,
+// edit only touches the title or body of a ticket nothing has started yet, under
+// the same pristine lock as the human edit boundary, configure changes the
+// *settings* of an open ticket (preset, write mode, worktree, priority, plan
+// timing, budget) through the same store validation the human create form goes
+// through, and discard needs a reason and refuses a ticket that is already Done or
+// Discarded. Completion stays a human call: the board owner moved discard over to
+// the orchestrator on 2026-11-04, and kept approve and close.
 //
 // A read also has to be answerable: the standing directive tells the
 // orchestrator to read a parked question before deciding whether it needs a
@@ -54,6 +56,32 @@ export const MAX_DIGEST_LINES = 40
 export const MAX_BOARD_LINES = 40
 /** Characters kept from a park reason or an instruction in a digest line. */
 export const MAX_DIGEST_CHARS = 180
+
+/**
+ * The session id a detach rotates to.
+ *
+ * A restart of the orchestrator session archives the current one and starts a
+ * fresh id rather than reusing the archived one: the host's archived-session
+ * guard and the restart-resume path both refuse a reused id, so the conversation
+ * would come back dead. Rotation is therefore monotonic — `kanban-orchestrator`,
+ * then `kanban-orchestrator-2`, then `-3` — and the number is derived from the id
+ * it is rotating from, so a deployment that renamed its orchestrator keeps its
+ * own name as the stem.
+ *
+ * @param {string} currentId - the id being retired.
+ * @param {number|null|undefined} generation - the rotation count stored beside
+ *   it. When it is missing or unusable the suffix of `currentId` decides, so the
+ *   helper never needs the store to be right for the id to be unique.
+ * @returns {string} the next id.
+ */
+export function nextOrchestratorSessionId(currentId, generation = null) {
+  const raw = typeof currentId === 'string' && currentId.trim() !== '' ? currentId.trim() : ORCHESTRATOR_SESSION_ID
+  const suffixed = /^(.*)-(\d+)$/.exec(raw)
+  const stem = suffixed !== null ? suffixed[1] : raw
+  const fromId = suffixed !== null ? Number(suffixed[2]) : 1
+  const current = Number.isFinite(generation) && Number(generation) >= 1 ? Math.floor(Number(generation)) : fromId
+  return `${stem}-${current + 1}`
+}
 
 /**
  * The event kinds worth waking the orchestrator for, and the family each one
@@ -551,6 +579,50 @@ function configurePatch(ticket, args) {
   return { ok: true, patch }
 }
 
+/**
+ * The create settings a ticket's later sessions run under (KAN-15/KAN-18), now
+ * reachable from `kanban_create` as well as from the human form. These are shape
+ * checks only — a preset id's existence can only be answered by the live registry,
+ * so the host seam does that, exactly as the human create path does.
+ *
+ * Returns `{ ok: false, message }` or `{ ok: true, settings }`, where `settings`
+ * carries only the keys that were actually given: an omitted one stays the store
+ * default instead of being pinned to it.
+ */
+function createSettings(args) {
+  const settings = {}
+  if (args.preset !== undefined && args.preset !== null) {
+    const preset = requireField(args.preset)
+    if (preset === null) {
+      return { ok: false, message: 'preset must be a non-empty string when given; leave it out for the harness default' }
+    }
+    settings.preset = preset
+  }
+  if (args.writeMode !== undefined && args.writeMode !== null) {
+    if (typeof args.writeMode !== 'string' || !WRITE_MODES.includes(args.writeMode)) {
+      return { ok: false, message: `writeMode must be one of ${WRITE_MODES.join(', ')}; leave it out for the purpose default` }
+    }
+    settings.writeMode = args.writeMode
+  }
+  if (args.worktree !== undefined && args.worktree !== null) {
+    if (typeof args.worktree !== 'boolean') {
+      return { ok: false, message: 'worktree must be true or false when given' }
+    }
+    settings.worktree = args.worktree
+  }
+  if (args.planTiming !== undefined || args.planQuestions !== undefined) {
+    // The store validates the pair together, so a half-given pair is completed
+    // with the same defaults the store would apply, then checked.
+    const planTiming = args.planTiming ?? 'at_pickup'
+    const planQuestions = args.planQuestions ?? 'interactive'
+    const modes = validateTicketModes(planTiming, planQuestions)
+    if (!modes.ok) return { ok: false, message: modes.reason }
+    settings.planTiming = planTiming
+    settings.planQuestions = planQuestions
+  }
+  return { ok: true, settings }
+
+
 export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_board',
@@ -571,11 +643,16 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_create',
     description:
-      'File a new ticket into Backlog: a title, a markdown body, and an optional integer priority. This is how work you discover gets onto the board — including a rule about how the board itself should be run — instead of waiting for a person to type it. The ticket lands exactly where a human files one: Backlog, unstarted, waiting to be planned. It cannot attach images, and filing it starts nothing.',
+      'File a new ticket into Backlog: a title, a markdown body, an optional integer priority, and the settings its build session runs under — `preset`, `writeMode`, `worktree`, `planTiming` and `planQuestions`. This is how work you discover gets onto the board — including a rule about how the board itself should be run — instead of waiting for a person to type it. Use the settings when the work cannot be done without them: a build of dsh-deploy or dsh-plugins needs `preset: "cordis"`, `writeMode: "danger-full-access"` and `worktree: true` or every install, lab and git push it attempts is denied. The ticket lands exactly where a human files one: Backlog, unstarted, waiting to be planned. It cannot attach images, and filing it starts nothing.',
     parameters: {
       title: { type: 'string', required: true, description: 'One line naming the work.' },
       body: { type: 'string', required: true, description: 'The body in markdown: what you found, why it matters, and what done looks like.' },
       priority: { type: 'integer', description: 'Optional sort priority, higher first. Defaults to 0.' },
+      preset: { type: 'string', description: 'Agent preset id for the ticket’s build session, e.g. "cordis" for Creator mode. Omit for the harness default.' },
+      writeMode: { type: 'string', description: `Sandbox write mode for the build session: one of ${WRITE_MODES.join(', ')}. Omit for the purpose default.` },
+      worktree: { type: 'boolean', description: 'Whether the ticket gets its own git worktree. Omit to mirror the human form, which turns it on whenever the worktree service is available.' },
+      planTiming: { type: 'string', description: '"at_pickup" (plan when the engine takes it) or "now" (plan on creation). Defaults to "at_pickup".' },
+      planQuestions: { type: 'string', description: '"interactive" (the planner may ask a person) or "autonomous" (it decides alone). Defaults to "interactive".' },
     },
     guard: (args) => {
       const title = requireField(args.title)
@@ -587,9 +664,22 @@ export const ORCHESTRATOR_TOOL_SPECS = [
       }
       const imageRef = rejectImageRefs(body)
       if (imageRef !== null) return imageRef
-      return { ok: true, title, body, priority: Number.isInteger(args.priority) ? args.priority : undefined }
+      const checked = createSettings(args)
+      if (checked.ok !== true) return checked
+      return {
+        ok: true,
+        title,
+        body,
+        priority: Number.isInteger(args.priority) ? args.priority : undefined,
+        settings: checked.settings,
+      }
     },
-    run: async (_args, api, checked) => api.create({ title: checked.title, body: checked.body, priority: checked.priority }),
+    run: async (_args, api, checked) => api.create({
+      title: checked.title,
+      body: checked.body,
+      priority: checked.priority,
+      ...checked.settings,
+    }),
   },
   {
     name: 'kanban_edit',
@@ -758,6 +848,28 @@ export const ORCHESTRATOR_TOOL_SPECS = [
     run: async (args, api, resolved) => api.message(resolved.ticket, args.text, args.purpose ?? null),
   },
   {
+    name: 'kanban_discard',
+    description:
+      'Discard a ticket: close it without approval, with a reason, because the work is not going to be done — a duplicate, a misread, something the board owner has decided against. It needs a reason, and it refuses a ticket that is already Done or Discarded. This is the only way you can end a ticket; approving and closing as done stay human actions, and a ticket that still has a chance gets `kanban_retry`, not this.',
+    parameters: {
+      ticket: TICKET_ARG,
+      reason: { type: 'string', required: true, description: 'Why this work is being thrown away. One or two sentences; it goes into the ticket’s event log.' },
+    },
+    guard: (args, api) => {
+      const found = requireTicket(api, args.ticket)
+      if (!found.ok) return found
+      const reason = requireField(args.reason)
+      if (reason === null) {
+        return { ok: false, message: 'a reason is required: say why this work is being discarded, not just that it is' }
+      }
+      if (found.ticket.column === 'done' || found.ticket.column === 'discarded') {
+        return { ok: false, message: `${found.ticket.key} is already ${found.ticket.column}; only an open ticket can be discarded` }
+      }
+      return { ok: true, ticket: found.ticket, reason }
+    },
+    run: async (_args, api, resolved) => api.discard(resolved.ticket, resolved.reason),
+  },
+  {
     name: 'kanban_sessions',
     description:
       'List every workflow session the board knows about with its state: running, idle, waiting on a person, or gone. This is where a stalled ticket is diagnosed — the session that owes the next event is named here.',
@@ -778,7 +890,8 @@ export const ORCHESTRATOR_TOOL_NAMES = ORCHESTRATOR_TOOL_SPECS.map((spec) => spe
  * @param {string} name
  * @param {object} args
  * @param {object} api - the host seam: board, ticket, resolveTicket, create,
- *   edit, ticketEditable, configure, move, start, retry, kick, message, sessions.
+ *   edit, ticketEditable, configure, move, start, retry, kick, message, discard,
+ *   sessions.
  */
 export async function runOrchestratorTool(name, args, api) {
   if (api?.paused?.() === true) throw new Error(ORCHESTRATOR_PAUSED_MESSAGE)
