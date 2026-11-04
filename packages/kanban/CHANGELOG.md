@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.26.0
+
 ### Added
 
 - **A permanent Kanban orchestrator session (KAN-60).** One always-on session per
