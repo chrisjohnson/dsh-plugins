@@ -151,7 +151,7 @@ test('every component shares the one stream, and the last one to leave closes it
   assert.equal(t.timers.size, 0, 'no timer survives the last subscriber')
 })
 
-test('frames split across reads are reassembled; a malformed line is skipped; the rate history is bounded', async () => {
+test('frames split across reads are reassembled and a malformed line is skipped', async () => {
   const t = load()
   t.mount('sidebar.panellist')
   await t.flush()
@@ -163,10 +163,11 @@ test('frames split across reads are reassembled; a malformed line is skipped; th
   t.streams[0].send(text.slice(30) + 'not json\n' + frame({ waitSeq: 3 }))
   await t.flush()
   assert.equal(t.state().snapshot.waitSeq, 3)
-  assert.deepEqual(Array.from(t.state().history), [42, 0])
+  // The frame is the whole story now: the per-provider graph series arrives inside
+  // it, so the feed keeps no client-side accumulation of its own.
+  assert.equal('history' in t.state(), false)
   t.streams[0].send(frame().repeat(200))
   await t.flush()
-  assert.equal(t.state().history.length, 90)
   assert.equal(t.rpcCalls.length, 0)
 })
 

@@ -17,6 +17,8 @@ const PLUGIN_NAME = 'dsh-model-capacity';
 const API_BASE = '/api/modelCapacity';
 const STREAM_ENDPOINT = 'stream';
 const META_MAX_AGE_MS = 10000;
+/** Seconds of per-provider output history each Activity graph draws. */
+const HISTORY_SECONDS = 60;
 const ENDPOINTS = ['snapshot', 'sessionWaits', 'cancelSession', 'cancelWaiter', 'forceRelease', 'setLimits'];
 
 export default class ModelCapacity extends Service {
@@ -278,12 +280,18 @@ export default class ModelCapacity extends Service {
   snapshot() {
     this.#touchMeta();
     const snap = this.manager.snapshot();
-    const providers = snap.providers.map((provider) => ({
-      ...provider,
-      rates: this.rates.providerSummary(provider.name, snap.asOf),
-      active: provider.active.map((lease) => ({ ...lease, ...this.describe(lease.sessionId) })),
-      waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.describe(waiter.sessionId) })),
-    }));
+    const providers = snap.providers.map((provider) => {
+      const rates = this.rates.providerSummary(provider.name, snap.asOf);
+      // Null until this provider has streamed anything: a provider that has never
+      // run has no history to draw, rather than an hour of measured silence.
+      const history60 = this.rates.providerHistory(provider.name, HISTORY_SECONDS, snap.asOf);
+      return {
+        ...provider,
+        rates: rates === null ? null : { ...rates, history60: history60 ?? [] },
+        active: provider.active.map((lease) => ({ ...lease, ...this.describe(lease.sessionId) })),
+        waiters: provider.waiters.map((waiter) => ({ ...waiter, ...this.describe(waiter.sessionId) })),
+      };
+    });
     return {
       enabled: isEnabled(this.config),
       asOf: snap.asOf,

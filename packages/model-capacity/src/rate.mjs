@@ -66,6 +66,35 @@ export class RateMeter {
     return Math.max(0, (sum * 1000) / Math.max(1000, Math.min(spanMs, ageMs)));
   }
 
+  /**
+   * The trailing `count` one-second buckets, oldest first, in tokens per second
+   * (a bucket is one second, so its token count is its rate).
+   *
+   * Two things keep the series honest for a graph: a bucket the meter never saw
+   * reads 0, and the series never reaches back before the meter started, so a
+   * young provider draws a short line growing in from the right edge instead of
+   * claiming 55 idle seconds it has not lived through. Buckets are NOT floored
+   * at zero — a usage correction can push one below zero, and hiding that would
+   * misreport what the provider counted.
+   *
+   * The last value is the second still in progress, so the series moves with
+   * every chunk, which is what a live graph wants.
+   */
+  history(count = this.horizonSec, at = this.now()) {
+    const wanted = Math.min(Math.max(1, Math.floor(count)), this.horizonSec);
+    const sec = Math.floor(at / 1000);
+    const firstSec = Math.floor(this.startedAtMs / 1000);
+    const length = Math.max(0, Math.min(wanted, sec - firstSec + 1));
+    const out = new Array(length);
+    for (let back = length - 1; back >= 0; back -= 1) {
+      const second = sec - back;
+      const slot = ((second % this.horizonSec) + this.horizonSec) % this.horizonSec;
+      const value = this.stamps[slot] === second ? this.counts[slot] : 0;
+      out[length - 1 - back] = round1(value);
+    }
+    return out;
+  }
+
   /** Sum of the `count` one-second buckets ending at second `last`. */
   #sum(last, count) {
     let sum = 0;
@@ -114,6 +143,12 @@ export class RateBook {
 
   providerSummary(provider, at = this.now()) {
     return this.byProvider.get(provider)?.summary(at) ?? null;
+  }
+
+  /** The provider's own trailing `count` buckets, or null when it has no meter yet. */
+  providerHistory(provider, count = this.horizonSec, at = this.now()) {
+    const meter = this.byProvider.get(provider);
+    return meter === undefined ? null : meter.history(count, at);
   }
 }
 

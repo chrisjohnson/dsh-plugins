@@ -149,19 +149,25 @@ are already interrupted by the restart). No database is used.
   card, not the row). Capacity events reach the page within about 150 ms, so this
   lands while you are looking at it. Under `prefers-reduced-motion` none of it runs — no ghost is even
   mounted, and the lists simply update.
-- **Throughput.** The top of the page shows the output tokens per second of every
-  model call running in this DSH instance added together: a live **now** figure
-  (trailing 3 s, with a sparkline of the last 90 frames) and the **1 minute**,
-  **5 minute** and **1 hour** averages. Each provider card repeats its own now and
-  1-minute figures and each active call card shows that call's own rate. The
+- **Throughput.** Each provider card draws its own output-rate graph across the last
+  60 seconds: one point per second of output tokens, full card width, sitting between
+  the provider's status line and its capacity bar, with a plain relative time axis
+  (`-60s`, `-45s`, `-30s`, `-15s`, `now`) and no y scale or value labels — the graph's
+  job is shape (when was this provider busy, and how hard), and the numbers stay in
+  the status line above it, which keeps its `N concurrent model calls · X tok/s now ·
+  Y avg 1m` figures. The row of all-providers rate cards the top of the page used to
+  carry is gone; the aggregate `rates` summary is still in the snapshot for anything
+  else that wants it. Each active call card shows that call's own rate. The
   rate is counted from the stream itself: streamed text, reasoning and tool-call
   fragments count at four characters per token while they arrive, and when the
   provider's usage chunk comes in the call is corrected to the provider's own
   output-token count, so totals are exact and only the live figure is an
   estimate. The averages are over the whole window, idle time included, and a
   meter younger than the window averages over its own age, so a freshly started
-  host is not diluted. They are in-memory and start from zero at a host restart.
-  Prompt-processing (prefill) rates are not shown.
+  host is not diluted; a graph does the same thing — it starts at the right edge and
+  grows leftwards instead of showing a flat minute the provider never lived through.
+  They are in-memory and start from zero at a host restart. Prompt-processing
+  (prefill) rates are not shown.
 - `conversation.input.dock` on every session: appears only while that session has
   a queued call.
 - Controls: **Cancel turn** (safe; cancels the session's active turn, which
@@ -187,7 +193,12 @@ is being read.
 
 Metering costs a constant amount per streamed chunk: one add to a one-second
 bucket in a fixed ring (3600 buckets per meter, one meter overall and one per
-provider), with no allocation and no growth with traffic.
+provider), with no allocation and no growth with traffic. The per-provider graph
+series is read out of that same ring — 60 numbers per provider per frame, oldest
+first — so nothing is buffered a second time on either side. Because the window
+slides, a frame within a minute of the last token differs from the one before it
+and is sent; once a provider's minute is empty again the frames are identical and
+the idle-snapshot rule above takes over.
 
 If the stream cannot be held (a proxy that buffers or drops long responses, or an
 older Host) the page falls back to a `snapshot` poll every 2 s while visible and
