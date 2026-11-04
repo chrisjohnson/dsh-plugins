@@ -281,6 +281,14 @@ function fakeApi(over = {}) {
       resolveTicket: (key) => (key === 'KAN-1' || key === 't-1' ? (over.ticket ?? fakeTicket()) : null),
       board: record('board'),
       ticket: record('ticket'),
+      create: record('create'),
+      edit: record('edit'),
+      // The pristine lock is a boolean, not a result object: the guard asks it
+      // the same question the human edit boundary asks the store.
+      ticketEditable: (...args) => {
+        calls.push(['ticketEditable', ...args])
+        return over.ticketEditable === undefined ? true : over.ticketEditable
+      },
       move: record('move'),
       start: record('start'),
       retry: record('retry'),
@@ -303,13 +311,17 @@ test('every declared tool is reachable and has a model-facing contract', () => {
   }
 })
 
-test('the orchestrator has no tool that approves, discards, closes or edits', () => {
-  const forbidden = /approve|discard|close|delete|edit|create|submit|answer/
+test('the orchestrator can author tickets but cannot approve, discard or close them', () => {
+  // The boundary KAN-63 moved: filing a ticket and fixing the title/body of an
+  // unstarted one are now the orchestrator's. Ending a ticket is not.
+  const forbidden = /approve|discard|close|delete|submit|answer/
   for (const name of ORCHESTRATOR_TOOL_NAMES) {
     assert.equal(forbidden.test(name), false, `${name} crosses the boundary`)
   }
   assert.deepEqual([...ORCHESTRATOR_TOOL_NAMES].sort(), [
     'kanban_board',
+    'kanban_create',
+    'kanban_edit',
     'kanban_kick',
     'kanban_message',
     'kanban_move',
@@ -389,6 +401,71 @@ test('message needs text and a known purpose', async () => {
     /purpose must be/,
   )
   await runOrchestratorTool('kanban_message', { ticket: 'KAN-1', text: 'the lockfile is stale' }, api)
+})
+
+test('create needs a title and a body, and nothing else', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(() => runOrchestratorTool('kanban_create', {}, api), /title is required/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: '  ', body: 'b' }, api), /title is required/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't' }, api), /body is required/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: '   ' }, api), /body is required/)
+  assert.equal(calls.length, 0, 'a refused call never reaches the host seam')
+})
+
+test('create takes an integer priority and nothing else', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', priority: 'high' }, api), /integer/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { title: 't', body: 'b', priority: 1.5 }, api), /integer/)
+  await runOrchestratorTool('kanban_create', { title: ' t ', body: 'the body', priority: 3 }, api)
+  assert.deepEqual(calls[0], ['create', { title: 't', body: 'the body', priority: 3 }])
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b' }, api)
+  assert.deepEqual(calls[1], ['create', { title: 't', body: 'b', priority: undefined }])
+})
+
+test('create cannot file a body that references an image it cannot attach', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(
+    () => runOrchestratorTool('kanban_create', { title: 't', body: 'look: ![shot](kanban-image:pending-abc)' }, api),
+    /kanban-image:/,
+  )
+  assert.equal(calls.length, 0)
+})
+
+test('edit needs at least one of title and body', async () => {
+  const { api, calls } = fakeApi()
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1' }, api), /nothing to edit/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', title: '  ' }, api), /cannot be empty/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', body: '' }, api), /cannot be empty/)
+  assert.equal(calls.filter((call) => call[0] === 'edit').length, 0)
+})
+
+test('edit only edits an unstarted ticket: the pristine lock is the same one the human boundary uses', async () => {
+  const started = fakeApi({ ticket: fakeTicket({ column: 'working', phase: 'implement' }), ticketEditable: false })
+  await assert.rejects(
+    () => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', title: 'new' }, started.api),
+    /already started; it can no longer be edited/,
+  )
+  assert.equal(started.calls.some((call) => call[0] === 'edit'), false)
+
+  for (const column of ['done', 'discarded']) {
+    const closed = fakeApi({ ticket: fakeTicket({ column, phase: 'done' }) })
+    await assert.rejects(
+      () => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', title: 'new' }, closed.api),
+      /only a Backlog or Working ticket can be edited/,
+    )
+  }
+})
+
+test('edit hands the host seam a patch of title and body only', async () => {
+  const pristine = fakeApi({ ticket: fakeTicket({ column: 'backlog', phase: 'plan' }) })
+  await runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', title: ' A cleaner title ' }, pristine.api)
+  assert.deepEqual(pristine.calls.at(-1), ['edit', pristine.api.resolveTicket('KAN-1'), { title: 'A cleaner title' }])
+  await runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', title: 't', body: 'the new body' }, pristine.api)
+  assert.deepEqual(pristine.calls.at(-1)[2], { title: 't', body: 'the new body' })
+  await assert.rejects(
+    () => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', body: '![x](kanban-image:pending-1)' }, pristine.api),
+    /kanban-image:/,
+  )
 })
 
 test('a tool that throws inside the host seam surfaces as a tool error', async () => {

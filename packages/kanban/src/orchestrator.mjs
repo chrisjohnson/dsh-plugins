@@ -17,9 +17,12 @@
 // these tools and delivering these texts — lives in src/orchestrator-host.mjs.
 //
 // Safe autonomy is a property of the tool set, not of the prompt: the
-// orchestrator has no tool that approves, discards, closes or edits a ticket,
-// and no tool that answers a question a session asked a human. What it can do is
-// move, start, retry, kick, message and read.
+// orchestrator has no tool that approves, discards or closes a ticket, and no
+// tool that answers a question a session asked a human. What it can do is
+// create, read, move, start, retry, kick, message, and edit — where create only
+// files a new ticket into Backlog and edit only touches the title or body of a
+// ticket nothing has started yet, under the same pristine lock as the human edit
+// boundary. Completion stays a human call.
 
 export const ORCHESTRATOR_PRESET_ID = 'dsh-kanban-orchestrator'
 export const ORCHESTRATOR_TITLE = 'Kanban orchestrator'
@@ -360,6 +363,24 @@ function requireTicket(api, ticket) {
   return { ok: true, ticket: found }
 }
 
+/**
+ * A body the orchestrator writes is plain markdown: it has no way to upload an
+ * attachment, so a `kanban-image:` reference in one of its bodies could only
+ * ever be a broken ref. Refused at the guard instead of filed and left dangling.
+ */
+const IMAGE_REF_TOKEN = 'kanban-image:'
+
+function rejectImageRefs(body) {
+  return typeof body === 'string' && body.includes(IMAGE_REF_TOKEN)
+    ? { ok: false, message: `a body you write cannot contain "${IMAGE_REF_TOKEN}" — the orchestrator cannot attach images` }
+    : null
+}
+
+/** Non-empty check for an authoring field; the stored value is the trimmed one. */
+function requireField(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
 export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_board',
@@ -376,6 +397,70 @@ export const ORCHESTRATOR_TOOL_SPECS = [
     parameters: { ticket: TICKET_ARG },
     guard: (args, api) => requireTicket(api, args.ticket),
     run: async (args, api, resolved) => api.ticket(resolved.ticket),
+  },
+  {
+    name: 'kanban_create',
+    description:
+      'File a new ticket into Backlog: a title, a markdown body, and an optional integer priority. This is how work you discover gets onto the board — including a rule about how the board itself should be run — instead of waiting for a person to type it. The ticket lands exactly where a human files one: Backlog, unstarted, waiting to be planned. It cannot attach images, and filing it starts nothing.',
+    parameters: {
+      title: { type: 'string', required: true, description: 'One line naming the work.' },
+      body: { type: 'string', required: true, description: 'The body in markdown: what you found, why it matters, and what done looks like.' },
+      priority: { type: 'integer', description: 'Optional sort priority, higher first. Defaults to 0.' },
+    },
+    guard: (args) => {
+      const title = requireField(args.title)
+      if (title === null) return { ok: false, message: 'a title is required' }
+      const body = requireField(args.body)
+      if (body === null) return { ok: false, message: 'a body is required: say what the work is, in markdown' }
+      if (args.priority !== undefined && args.priority !== null && !Number.isInteger(args.priority)) {
+        return { ok: false, message: 'priority must be an integer when given' }
+      }
+      const imageRef = rejectImageRefs(body)
+      if (imageRef !== null) return imageRef
+      return { ok: true, title, body, priority: Number.isInteger(args.priority) ? args.priority : undefined }
+    },
+    run: async (_args, api, checked) => api.create({ title: checked.title, body: checked.body, priority: checked.priority }),
+  },
+  {
+    name: 'kanban_edit',
+    description:
+      'Fix the title and/or the body of a ticket that has not started — a Backlog or Working card no session has touched. Use it when the record is wrong or thin: a garbled title, a body missing the detail you just learned. It cannot touch a plan, conditions, review or verdicts (those belong to the phases that produce them), and a ticket anything has started answers that it can no longer be edited.',
+    parameters: {
+      ticket: TICKET_ARG,
+      title: { type: 'string', description: 'The new title. Leave it out to keep the current one.' },
+      body: { type: 'string', description: 'The new body, in markdown. Leave it out to keep the current one.' },
+    },
+    guard: (args, api) => {
+      const found = requireTicket(api, args.ticket)
+      if (!found.ok) return found
+      const ticket = found.ticket
+      if (ticket.column !== 'backlog' && ticket.column !== 'working') {
+        return { ok: false, message: `${ticket.key} is in ${ticket.column}; only a Backlog or Working ticket can be edited` }
+      }
+      // The same pristine lock as the human edit boundary (src/edit.mjs): once a
+      // role is working from the card, the card is frozen for everyone.
+      if (api.ticketEditable(ticket) !== true) {
+        return { ok: false, message: `${ticket.key} has already started; it can no longer be edited` }
+      }
+      const patch = {}
+      if (args.title !== undefined) {
+        const title = requireField(args.title)
+        if (title === null) return { ok: false, message: 'a new title cannot be empty; leave it out to keep the current one' }
+        patch.title = title
+      }
+      if (args.body !== undefined) {
+        const body = requireField(args.body)
+        if (body === null) return { ok: false, message: 'a new body cannot be empty; leave it out to keep the current one' }
+        const imageRef = rejectImageRefs(body)
+        if (imageRef !== null) return imageRef
+        patch.body = body
+      }
+      if (Object.keys(patch).length === 0) {
+        return { ok: false, message: 'nothing to edit: give a title, a body, or both' }
+      }
+      return { ok: true, ticket, patch }
+    },
+    run: async (_args, api, checked) => api.edit(checked.ticket, checked.patch),
   },
   {
     name: 'kanban_move',
@@ -493,8 +578,8 @@ export const ORCHESTRATOR_TOOL_NAMES = ORCHESTRATOR_TOOL_SPECS.map((spec) => spe
  *
  * @param {string} name
  * @param {object} args
- * @param {object} api - the host seam: board, ticket, resolveTicket, move, start,
- *   retry, kick, message, sessions.
+ * @param {object} api - the host seam: board, ticket, resolveTicket, create,
+ *   edit, ticketEditable, move, start, retry, kick, message, sessions.
  */
 export async function runOrchestratorTool(name, args, api) {
   const spec = ORCHESTRATOR_TOOL_SPECS.find((candidate) => candidate.name === name)

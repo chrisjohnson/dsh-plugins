@@ -276,6 +276,20 @@ test('creating a ticket with the worktree intent stores no workspace', () => {
   assert.equal(created.payload.worktree, true)
 })
 
+test('the created event records who filed the ticket (KAN-63)', () => {
+  const { store } = setup()
+  // The human paths pass nothing and keep the old actor.
+  const byHuman = store.createTicket({ title: 'filed by hand' })
+  const humanEvent = store.listEvents(byHuman.id).find((event) => event.kind === 'created')
+  assert.equal(humanEvent.actor, 'human')
+  // The orchestrator's kanban_create goes through this same path with its actor,
+  // so the board can tell authorship apart without a second write path.
+  const byOrchestrator = store.createTicket({ title: 'filed by the orchestrator' }, { actor: 'orchestrator' })
+  const orchEvent = store.listEvents(byOrchestrator.id).find((event) => event.kind === 'created')
+  assert.equal(orchEvent.actor, 'orchestrator')
+  assert.equal(orchEvent.payload.title, 'filed by the orchestrator')
+})
+
 // ------------------------------------------------------------------- KAN-31
 
 test('a deferred condition round-trips through the store', () => {

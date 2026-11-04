@@ -548,15 +548,21 @@ answering you is never buried in board traffic. Everything is delivered through
 you.
 
 **What it can do.** `kanban_board`, `kanban_ticket` and `kanban_sessions` to read;
-`kanban_move` (Backlog ⇄ Working), `kanban_start` (planning or build),
-`kanban_retry` (a parked ticket, with an instruction and a fresh attempt budget),
-`kanban_kick` (continue a ticket session that halted mid-turn) and
-`kanban_message` (a note into a ticket's live session) to act. That is the whole
-menu, and it is enforced in code, not in prose: there is no tool that approves,
-discards, closes or edits a ticket, none that answers a question a session asked a
-human, and the session runs under a read-only sandbox with `write` and `edit`
-restricted away. A call that crosses a boundary is refused at the tool with a
-sentence explaining whose call it was instead.
+`kanban_create` (file a new ticket into Backlog — work it discovers, including a
+rule about how the board should be run) and `kanban_edit` (fix the title or body
+of a ticket nothing has started) to author; `kanban_move` (Backlog ⇄ Working),
+`kanban_start` (planning or build), `kanban_retry` (a parked ticket, with an
+instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
+that halted mid-turn) and `kanban_message` (a note into a ticket's live session)
+to act. That is the whole menu, and it is enforced in code, not in prose: there is
+no tool that approves, discards or closes a ticket, none that answers a question a
+session asked a human, and the session runs under a read-only sandbox with `write`
+and `edit` restricted away. A filed ticket goes through the same store path a human
+creation uses and its `created` event carries `actor: 'orchestrator'`; an edit
+takes title and body only, and is locked by the same pristine rule as the human
+edit boundary — once anything has touched a ticket, it can no longer be edited. A
+call that crosses a boundary is refused at the tool with a sentence explaining
+whose call it was instead.
 
 **Why it has its own preset.** The orchestrator must stay answerable, and a
 session that can hold a turn for a minute is not. The bundle declares
