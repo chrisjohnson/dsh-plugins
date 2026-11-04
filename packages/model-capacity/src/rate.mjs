@@ -68,7 +68,9 @@ export class RateMeter {
 
   /**
    * The trailing `count` one-second buckets, oldest first, in tokens per second
-   * (a bucket is one second, so its token count is its rate).
+   * (a bucket is one second, so its token count is its rate). This is the series
+   * the capacity snapshot ships as `providers[].rates.history60` when asked for
+   * sixty of them, which is what each Activity provider graph draws.
    *
    * Two things keep the series honest for a graph: a bucket the meter never saw
    * reads 0, and the series never reaches back before the meter started, so a
