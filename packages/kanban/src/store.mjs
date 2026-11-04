@@ -214,7 +214,13 @@ export class KanbanStore {
 
   // ---------------------------------------------------------------- tickets
 
-  createTicket(input) {
+  /**
+   * File a new ticket. `options.actor` is who the `created` event records: the
+   * human paths leave it at `'human'`, the orchestrator's `kanban_create` passes
+   * `'orchestrator'` so the board can tell authorship apart without a second
+   * write path (KAN-63).
+   */
+  createTicket(input, { actor = 'human' } = {}) {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (title === '') throw new StoreError('bad_request', 'title is required');
     const planTiming = input.planTiming ?? 'at_pickup';
@@ -290,7 +296,7 @@ export class KanbanStore {
         }
       }
       this.#event(id, 'created', {
-        actor: 'human',
+        actor,
         payload: { key, title, planTiming, planQuestions, priority, allowPaid, budgetUsd, preset, writeMode, worktree: worktree === 1 },
       });
       return this.getTicket(id);

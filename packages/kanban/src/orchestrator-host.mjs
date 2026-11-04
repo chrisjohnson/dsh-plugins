@@ -18,7 +18,9 @@
 //     queues: a digest never interrupts a turn, so it never interrupts the human.
 //   - It is a reader with levers, not a worker. Read-only sandbox mode, the
 //     write and edit tools restricted away, and a tool set with no approve, no
-//     discard, no close and no ticket edit in it.
+//     discard and no close in it. It can file a new ticket into Backlog and fix
+//     the title or body of one nothing has started, on the same pristine lock the
+//     human edit boundary uses; everything past that belongs to a person.
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -526,6 +528,44 @@ export class KanbanOrchestrator {
           })),
         }
       },
+
+      /**
+       * `kanban_create`: the same store path a human filing a ticket takes
+       * (src/host.mjs), so the card shows up on the board and in digests like
+       * any other — only the recorded actor differs. The worktree default is
+       * mirrored from that path: intent is ON whenever the worktree service is
+       * mounted, because a ticket without its own worktree would plan inside a
+       * live checkout.
+       */
+      create: ({ title, body, priority }) => {
+        const ticket = store.createTicket(
+          {
+            title,
+            body,
+            ...(priority === undefined ? {} : { priority }),
+            column: 'backlog',
+            worktree: typeof this.ctx.get('betterGitWorktree')?.createForPath === 'function',
+          },
+          { actor: 'orchestrator' },
+        )
+        void engine?.tick()
+        return { created: true, ticket: this.#ticketLine(ticket) }
+      },
+
+      /**
+       * `kanban_edit`: the patch carries title and body keys only — the guard in
+       * src/orchestrator.mjs built it and checked the pristine lock through
+       * `ticketEditable`. The store writes the `ticket_updated` event with this
+       * actor and the list of fields that actually changed.
+       */
+      edit: (ticket, patch) => {
+        const updated = store.updateTicket(ticket.id, patch, { actor: 'orchestrator', reason: 'orchestrator edit' })
+        void engine?.tick()
+        return { edited: true, ticket: this.#ticketLine(updated) }
+      },
+
+      /** The human edit boundary's lock (src/edit.mjs), asked of the store. */
+      ticketEditable: (ticket) => this.store.isEditable(ticket.id),
 
       move: (ticket, to, reason) => {
         const updated = moveToColumn({
