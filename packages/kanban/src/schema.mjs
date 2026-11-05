@@ -2,9 +2,11 @@
 //
 // State only. If a migration ever looks like it wants a `providers`, `roles`,
 // `prompts` or `settings` table, the value belongs in YAML instead (see
-// src/config.mjs and the README's config table).
+// src/config.mjs and the README's config table). The `kv` table added in v9 is
+// not a loophole: it holds facts the plugin discovers while running (which
+// orchestrator session is live), never a value a person configures.
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 9;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -280,6 +282,31 @@ ALTER TABLE conditions ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0 CHECK (def
 ALTER TABLE conditions ADD COLUMN human_evidence TEXT NOT NULL DEFAULT '';
 `;
 
+const V8 = `
+-- Durable runtime switches set by a person from the board (today: the
+-- orchestrator pause). One row per switch, so a restart keeps what was chosen.
+CREATE TABLE IF NOT EXISTS runtime_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+const V9 = `
+-- KAN-65: a place for the board's own runtime state — not configuration (that
+-- stays YAML, see the header), and not a switch a person sets (that is
+-- runtime_state, v8). These are facts the plugin learns while it runs and has to
+-- survive a restart. The first one is which session id the orchestrator is
+-- using: "Restart orchestrator" archives the current session and rotates to a
+-- fresh id, and the next boot has to resume the rotated one instead of the id in
+-- the config row. Key/value text, because nothing here is ever queried by
+-- anything but its key.
+CREATE TABLE IF NOT EXISTS kv (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`;
+
 export const MIGRATIONS = [
   {
     version: 1,
@@ -319,5 +346,15 @@ export const MIGRATIONS = [
     version: 7,
     name: 'deferred-conditions',
     sql: V7,
+  },
+  {
+    version: 8,
+    name: 'runtime-state',
+    sql: V8,
+  },
+  {
+    version: 9,
+    name: 'board-kv',
+    sql: V9,
   },
 ];

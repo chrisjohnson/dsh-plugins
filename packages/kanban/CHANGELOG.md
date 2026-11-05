@@ -27,6 +27,74 @@
   time-critical corrections only, and that `kanban_sessions` shows running versus
   idle so the choice is deliberate.
 
+## 0.32.0
+
+- **The orchestrator can discard a ticket (KAN-65).** `kanban_discard` ends an open
+  ticket with a required non-empty reason, and refuses one that is already Done or
+  Discarded. It runs the engine's own discard path — sessions closed, run ended,
+  post-close archive — and both the transition and the `discarded` event record
+  `actor: 'orchestrator'`, so the board can say who threw the work away. A ticket
+  that never left planning is moved by column alone rather than forced into a
+  closed phase — the phase graph only reaches `closed` from `verify`, and the work
+  an orchestrator discards is usually a Backlog duplicate (found by the lab e2e).
+  This is a
+  deliberate move of one lever across the boundary, on the board owner's
+  instruction: **approve and close stay human-only**. The state machine admits an
+  orchestrator into `discarded` and into no other terminal column, so Done remains
+  unreachable by any model.
+- **`kanban_create` takes the settings a build needs to run (KAN-65).** Alongside
+  title, body and priority it now accepts `preset`, `writeMode`, `worktree`,
+  `planTiming` and `planQuestions`, with the same meanings the human form gives
+  them. Shape is checked in the tool — a `writeMode` outside the sandbox
+  vocabulary, a bad plan-mode pair, a non-boolean `worktree` or a blank preset is
+  refused before anything is filed — and a preset id is resolved against the live
+  registry exactly as the human path does, so an unknown one is a refusal naming
+  it. An omitted setting stays at the store default; an omitted `worktree` mirrors
+  the human form and is on whenever the worktree service is mounted. Everything is
+  recorded with `actor: 'orchestrator'`. This exists because a build of
+  `dsh-deploy` or `dsh-plugins` is denied dependency installs, lab runs and git
+  pushes under the defaults, so those cards have to be filed Creator preset +
+  Full Access + worktree on — which the orchestrator's prompt now says.
+- **Restart orchestrator, with no service restart (KAN-65).** A session's tools and
+  prompt are decorated when it is created, so a tool shipped by a release does not
+  exist in the live orchestrator until the service restarts — and a restart ends
+  every session on the box. The Work page header gains a **Restart orchestrator**
+  button: it confirms, calls the new `orchestratorDetach` endpoint, and the Host
+  archives the current session (stopping the turn inside it) and starts a fresh one
+  with the current preset, prompt and tools, greeted with a board snapshot. The id
+  rotates (`kanban-orchestrator` → `-2` → `-3`) rather than reusing the archived
+  one, and the new id is persisted in the board db — migration v9 adds a `kv` table
+  for the board's own runtime state — so every later boot resumes the rotated
+  session. The archived predecessor keeps its transcript in the session list.
+
+### Changed
+
+- **The orchestrator's prompt separates dsh work from generic board work (KAN-65).**
+  Most tickets target `dsh-deploy`/`dsh-plugins`, and those repos have habits — the
+  plugin release loop, the pin/lockfile flow, the lab and its smoke modules, the
+  production restart. A new section says plainly that those are conditional, not
+  universal: when reviewing a plan, writing a retry instruction, or choosing what a
+  session's next step is, the orchestrator must not apply a dsh-deploy assumption to
+  a ticket on another project. The boundary paragraph and the `kanban_create`
+  guidance were rewritten to match the tools above.
+
+## 0.31.0
+
+### Added
+
+- **A human pause for the orchestrator.** The Work page header has a **Pause
+  orchestrator** / **Resume orchestrator** button next to **Open orchestrator**,
+  and an amber **Orchestrator paused** chip while it is on. While paused nothing
+  flows between the engine and the orchestrator session: board events are dropped
+  (no backlog is kept), and every orchestrator tool call is refused with "The
+  orchestrator is paused by a human; do not change the board.", so a turn already
+  in flight cannot move tickets. The session is not torn down and a person can
+  still open it and talk to it. Resuming sends one fresh board snapshot. The
+  switch is stored in the database (schema 8, `runtime_state`), so it survives a
+  restart; it rides the board payload (`orchestratorPaused`), so every open page
+  follows without a reload. New RPC `orchestratorSetPaused {paused}`; the
+  `orchestrator` answer now carries `paused`.
+
 ## 0.30.0
 
 ### Added

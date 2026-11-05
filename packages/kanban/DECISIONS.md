@@ -633,7 +633,25 @@ restart or a generic park.
   is still true and parking it would make a rejected edit look like a failure of
   the ticket.
 
-## 2026-11-04 — a message may interrupt (0.31.0, KAN-67)
+## 2026-11-04 — a human pause for the orchestrator (0.31.0)
+
+A person needs to stop a misbehaving orchestrator without editing config or
+restarting anything.
+
+- **One switch cuts both directions.** Dropping digests alone would leave a turn
+  already in flight free to move tickets, so tool calls are refused too, with a
+  sentence the model can act on. Both checks read the same stored flag.
+- **Dropped, not queued.** Events that happen while paused are not replayed on
+  resume; the orchestrator gets one fresh board snapshot, which says where things
+  stand now rather than narrating a stale past.
+- **Stored in the database, not config.** It is runtime state a person sets from
+  the board, and it must survive a restart; a config row would be overwritten by
+  the next reload and needs an editor. It rides the board payload, so the existing
+  change token and push stream carry it to every page.
+- **The session is left alone.** Pausing never closes or archives it, so the human
+  can still read it and talk to it.
+
+## 2026-11-04 — a message may interrupt (0.33.0, KAN-67)
 
 - **API found:** `agent.steer(message)` on the same agent object the plugin
   already calls `agent.followup(message)` on (`@deepseek-ai/dsh-agent-loop`,

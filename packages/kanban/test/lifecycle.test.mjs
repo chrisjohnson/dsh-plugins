@@ -88,3 +88,19 @@ test("queue order: priority first, then the arranged order, then creation", () =
   const d = { priority: 0, sortOrder: 1000, createdAt: "0" }
   assert.deepEqual([a, b, c, d].sort(compareQueue), [c, d, b, a])
 })
+
+test("an orchestrator may discard an open ticket and may not approve one", () => {
+  // KAN-65 moved discard across the boundary and left Done where it was, so the
+  // actor rule is asymmetric and has to stay that way.
+  const open = { column: "working", phase: "verify" }
+  assert.equal(assertTransition(open, { column: "discarded", phase: "closed" }, { actor: "orchestrator" }).ok, true)
+  assert.equal(assertTransition(open, { column: "done", phase: "closed" }, { actor: "orchestrator" }).ok, false)
+  assert.match(assertTransition(open, { column: "done", phase: "closed" }, { actor: "orchestrator" }).reason, /actor=orchestrator/)
+  // Anything else still cannot close a ticket either.
+  assert.equal(assertTransition(open, { column: "discarded", phase: "closed" }, { actor: "judge" }).ok, false)
+  // And the two actors that always could, still can.
+  assert.equal(assertTransition(open, { column: "discarded", phase: "closed" }, { actor: "human" }).ok, true)
+  assert.equal(assertTransition(open, { column: "done", phase: "closed" }, { actor: "human" }).ok, true)
+  // A discarded ticket is a sink for the orchestrator too: no reopening.
+  assert.equal(assertTransition({ column: "discarded", phase: "closed" }, { column: "working", phase: "implement" }, { actor: "orchestrator" }).ok, false)
+})

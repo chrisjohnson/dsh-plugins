@@ -360,6 +360,22 @@ export class KanbanStore {
     return `${this.changeStatements.total.get().n}.${this.changeStatements.version.get().data_version}`;
   }
 
+  /** Whether a human has paused the orchestrator. Persisted, so a restart keeps it. */
+  isOrchestratorPaused() {
+    const row = this.db.prepare("SELECT value FROM runtime_state WHERE key = 'orchestrator_paused'").get();
+    return row !== undefined && row.value === '1';
+  }
+
+  /** Set the orchestrator pause. Returns the stored value. */
+  setOrchestratorPaused(paused) {
+    const value = paused === true ? '1' : '0';
+    this.db.prepare(
+      "INSERT INTO runtime_state (key, value, updated_at) VALUES ('orchestrator_paused', ?, ?) "
+      + 'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    ).run(value, new Date().toISOString());
+    return value === '1';
+  }
+
   updateTicket(idOrKey, patch, { actor = 'human', reason = '' } = {}) {
     const ticket = this.getTicket(idOrKey);
     if (ticket === undefined) throw new StoreError('not_found', `no ticket ${idOrKey}`);
@@ -1199,5 +1215,30 @@ export class KanbanStore {
     const out = { backlog: 0, working: 0, done: 0, discarded: 0 };
     for (const row of rows) out[row.col] = Number(row.n);
     return out;
+  }
+
+  // ---------------------------------------------------------------------- kv --
+  //
+  // The board's runtime state that is not a ticket (v9): today, which session id
+  // the orchestrator is living in after a "Restart orchestrator" rotation. These
+  // are not configuration — a person never edits them — which is why they can sit
+  // here while providers, roles and prompts stay in YAML.
+
+  /** The stored value for `key`, or null when nothing is stored under it. */
+  kvGet(key) {
+    const row = this.db.prepare('SELECT value FROM kv WHERE key = ?').get(String(key));
+    return row === undefined ? null : String(row.value);
+  }
+
+  /** Store `value` under `key`, replacing whatever was there. */
+  kvSet(key, value) {
+    const text = String(value);
+    this.db
+      .prepare(
+        `INSERT INTO kv (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(String(key), text);
+    return text;
   }
 }

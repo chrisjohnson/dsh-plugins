@@ -788,3 +788,42 @@ test('the orchestrator message seam carries the plan out: steer to inject, follo
   // Both paths send the same payload, so a steered note reads like a queued one.
   assert.match(host, /text: `\[orchestrator\] \$\{text\}`/)
 })
+
+// --------------------------------------------------------------- KAN-65
+
+test('orchestratorDetach is a registered endpoint that answers from the orchestrator', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /'orchestratorDetach',/, 'orchestratorDetach must be in ENDPOINTS so the route is registered')
+  const caseBody = host.slice(host.indexOf("case 'orchestratorDetach'"))
+  assert.match(caseBody, /orchestratorRef\.current/, 'it must reach the live orchestrator, not a new one')
+  assert.match(caseBody, /await orchestrator\.detach\(\)/)
+  // A refusal is a message the board owner reads, not a stack trace.
+  assert.match(caseBody, /result\?\.ok !== true/)
+  assert.match(caseBody, /return \{ ok: true, value: \{ previousId: result\.previousId, sessionId: result\.sessionId, state: result\.state \} \}/)
+})
+
+test('the orchestrator seam files tickets with their settings and discards as itself', async () => {
+  const files = await sources()
+  const host = files['orchestrator-host.mjs']
+  // create: every setting reaches the store, under the orchestrator actor.
+  const create = host.slice(host.indexOf('create: async ('), host.indexOf('edit: (ticket, patch)'))
+  for (const field of ['preset', 'writeMode', 'planTiming', 'planQuestions']) {
+    assert.ok(create.includes(`...(${field} === undefined`), `create must pass ${field} through only when it was given`)
+  }
+  // worktree is the one setting that is never simply omitted: like the human
+  // form, an omitted one means "on if the worktree service is mounted".
+  assert.match(create, /worktree: worktree === undefined/)
+  assert.match(create, /betterGitWorktree'\)\?\.createForPath === 'function'/)
+  assert.match(create, /presets\.resolve\(String\(preset\)\)/, 'a preset id is checked against the live registry, as on the human path')
+  assert.match(create, /actor: 'orchestrator'/)
+  // discard: the engine's own path, credited to the orchestrator.
+  assert.match(host, /discard: async \(ticket, reason\) => \{/)
+  assert.match(host, /engine\.discard\(ticket\.id, reason, \{ actor: 'orchestrator' \}\)/)
+  // The retired session is archived with its work stopped, and the new id is
+  // persisted, or the next boot resumes the archived one.
+  assert.match(host, /registry\.archiveSession\(previousId, \{ stopActivity: true \}\)/)
+  assert.match(host, /this\.store\.kvSet\(KV_SESSION_ID, nextId\)/)
+  assert.match(host, /nextOrchestratorSessionId\(previousId, config\.generation\)/)
+  assert.equal(/engine\.discard\(ticket\.id, reason\)/.test(host), false, 'the seam must not drop the actor')
+  assert.equal(files['orchestrator.mjs'].includes("import { WRITE_MODES } from './store.mjs'"), true)
+})
