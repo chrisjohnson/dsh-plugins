@@ -23,6 +23,7 @@ import { attentionFacts } from './attention.mjs';
 import { attemptLabel, closedNewestFirst, isAccruing, jumpSession, phaseSegments, workingMs } from './board-view.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
 import { isQuestionPark } from './recovery.mjs';
+import { queueSummary, wipQueue, workingOccupancy } from './wip.mjs';
 
 const NO_FACTS = { transitions: [], events: [], spans: [], sessions: [] };
 
@@ -102,7 +103,14 @@ export function digest(text) {
 /**
  * @param {{store: object, driver: object, engine: object, now?: () => number}} owners
  */
-export function createBoardSnapshots({ store, driver, engine, now = Date.now, orchestratorPaused = () => false }) {
+export function createBoardSnapshots({
+  store,
+  driver,
+  engine,
+  now = Date.now,
+  orchestratorPaused = () => false,
+  wipCap = null,
+}) {
   let seq = 0;
   // Which run of the host the counter belongs to: a restart starts it over, and
   // a page must not mistake the new run's first boards for old ones.
@@ -198,10 +206,26 @@ export function createBoardSnapshots({ store, driver, engine, now = Date.now, or
       // Done and Discarded share one column on the board, newest closed first.
       closed: closedNewestFirst([...byColumn.done, ...byColumn.discarded]),
       orchestratorPaused: orchestratorPaused() === true,
+      // KAN-72: the cap the engine enforces, how much of it is taken, and who is
+      // waiting — worked out from the rows already in hand, so the page's WIP
+      // pill and the engine's own admission rule can never disagree.
+      wip: wipBlock(tickets),
     };
     seq += 1;
     return { seq, boot, token: builtToken, asOf: nowMs, board, signature: digest(stableJson(board)) };
   };
+
+  /** The WIP block, or null on a board built without a cap provider. */
+  function wipBlock(tickets) {
+    if (typeof wipCap !== 'function') return null;
+    const { cap, source } = wipCap();
+    return {
+      cap,
+      source,
+      occupancy: workingOccupancy(tickets),
+      queue: queueSummary(wipQueue(tickets)),
+    };
+  }
 
   return { token, build };
 }
@@ -215,5 +239,12 @@ export function compactBoard(board) {
   const { done, discarded, ...open } = board.columns;
   void done;
   void discarded;
-  return { counts: board.counts, columns: open, closed: board.closed, orchestratorPaused: board.orchestratorPaused === true, compact: true };
+  return {
+    counts: board.counts,
+    columns: open,
+    closed: board.closed,
+    orchestratorPaused: board.orchestratorPaused === true,
+    wip: board.wip ?? null,
+    compact: true,
+  };
 }

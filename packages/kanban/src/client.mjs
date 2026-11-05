@@ -145,6 +145,15 @@ var CSS =
 		+ ".kb-chip.warn{background:#fff4e5;border-color:#f0c987;color:#8a5300}"
 		+ ".kb-chip.err{background:#fdecea;border-color:#f3b3ac;color:#9b1c1c}"
 		+ ".kb-chip.ok{background:#e8f6ec;border-color:#a8d8b5;color:#1d6b32}"
+		// KAN-72: the Working-cap pill in the page header, and the queue list the
+		// dialog shows. Full reads as a warning because that is when a drag is
+		// about to queue rather than start.
+		+ ".kb-wip{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 11px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l4,#d9d9d9);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:600 12px/16px ui-monospace,monospace;cursor:pointer}"
+		+ ".kb-wip:hover{border-color:var(--dsw-alias-state-business-primary,#3b82f6)}"
+		+ ".kb-wip.full{background:#fff4e5;border-color:#f0c987;color:#8a5300}"
+		+ ".kb-wip-queue{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}"
+		+ ".kb-wip-queue li{display:flex;gap:8px;align-items:baseline;font:400 13px/20px var(--dsw-font-family,sans-serif)}"
+		+ ".kb-wip-pos{font:600 11px/16px ui-monospace,monospace;color:var(--dsw-alias-label-tertiary,#888);min-width:18px}"
 		+ ".kb-body{flex:1;min-height:0;overflow:auto;padding:14px 18px 28px}"
 		+ ".kb-cols{display:grid;grid-template-columns:repeat(3,minmax(210px,1fr));gap:12px;align-items:start;min-width:700px}"
 		+ ".kb-col{border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-2,#f7f8fa);min-height:120px;display:flex;flex-direction:column;max-height:calc(100vh - 190px)}"
@@ -1188,7 +1197,11 @@ var CSS =
 				h("div", { className: "kb-colhead" },
 					h("span", { className: "kb-coldot" }),
 					h("span", { className: "kb-collabel", children: props.label }),
-					h("span", { className: "kb-count", children: items.length })
+					// KAN-72: Working wears "occupancy/cap" — the cap the engine
+					// enforces, not the raw card count. A parked card waits on a
+					// person rather than a worker, so it is not occupancy; the
+					// title says so when the two numbers differ.
+					h("span", { className: "kb-count", title: props.countTitle || null, children: props.countLabel === undefined || props.countLabel === null ? items.length : props.countLabel })
 				),
 				h("div", { className: "kb-list" },
 					items.length === 0 && !showLine
@@ -2711,6 +2724,80 @@ var CSS =
 			);
 		}
 
+		// KAN-72: the Work-In-Progress cap, adjustable from the page.
+		//
+		// The engine enforces the cap (src/wip.mjs); this is the control that
+		// changes it live. The number is stored in the board db, so it survives a
+		// restart and needs no config edit and no service bounce. The pill reads
+		// "WIP n/cap" — occupancy over the limit — because the thing a person
+		// needs before dragging a fourth card is the fact that there is no room.
+		// Lowering it below what is in Working re-queues the overflow, which the
+		// dialog says out loud: it is a visible consequence, not a silent one.
+		function WipControl(props) {
+			var st = React.useState(false);
+			var open = st[0], setOpen = st[1];
+			var dv = React.useState("");
+			var draft = dv[0], setDraft = dv[1];
+			var sv = React.useState(false);
+			var saving = sv[0], setSaving = sv[1];
+			var er = React.useState(null);
+			var error = er[0], setError = er[1];
+			var wip = props.wip || {};
+			var cap = typeof wip.cap === "number" ? wip.cap : null;
+			var occupancy = typeof wip.occupancy === "number" ? wip.occupancy : 0;
+			var queue = wip.queue || [];
+			var full = cap !== null && occupancy >= cap;
+			function startEdit() {
+				setDraft(cap === null ? "" : String(cap));
+				setError(null);
+				setOpen(true);
+			}
+			function save() {
+				var next = parseInt(draft, 10);
+				if (!(Number.isInteger(next) && next >= 1)) {
+					setError("The cap has to be a whole number of at least 1.");
+					return;
+				}
+				setSaving(true);
+				props.onSave(next).then(function (res) {
+					setSaving(false);
+					if (res && res.ok) { setOpen(false); setError(null); }
+					else { setError(res && res.error ? res.error.message : "That did not work."); }
+				}, function () { setSaving(false); setError("Could not reach the Host."); });
+			}
+			return h("span", { style: { display: "inline-flex" } },
+				h("button", {
+					className: "kb-wip" + (full ? " full" : ""),
+					title: "Working holds at most " + (cap === null ? "?" : cap) + " ticket" + (cap === 1 ? "" : "s") + ". Click to change the cap: the engine queues any move onto a full board and starts it when a slot frees.",
+					onClick: startEdit,
+					children: "WIP " + occupancy + "/" + (cap === null ? "?" : cap)
+				}),
+				h(Modal, { open: open, title: "Work-in-progress cap", onClose: function () { setOpen(false); setSaving(false); setError(null); } },
+					h("div", { className: "kb-form" },
+						h("div", { className: "kb-hint", children: "The most tickets the board may hold in Working at once. A move onto a full board is queued, not refused: the card waits in Backlog with its place in line and starts on its own when a slot frees." }),
+						h("div", { className: "kb-row" },
+							h("label", { className: "kb-hint" }, "Cap", " ",
+								h("input", { className: "kb-input", type: "number", min: "1", step: "1", value: draft, style: { width: 90, marginLeft: 6 }, onChange: function (ev) { setDraft(ev.target.value); } })),
+							h("span", { className: "kb-hint", children: occupancy + " in Working now" })
+						),
+						queue.length > 0 ? h("div", null,
+							h("div", { className: "kb-hint", children: "Waiting for a slot, in the order the engine will start them:" }),
+							h("ul", { className: "kb-wip-queue" }, queue.map(function (item) {
+								return h("li", { key: item.key },
+									h("span", { className: "kb-wip-pos", children: item.position + "." }),
+									h("b", { children: item.key }),
+									h("span", { children: item.title }));
+							}))) : null,
+						cap !== null && occupancy > cap ? h("div", { className: "kb-chip warn", children: (occupancy - cap) + " over the new cap: the lowest-priority of them go back to Backlog and wait." }) : null,
+						error ? h("div", { className: "kb-err", children: error }) : null,
+						h("div", { className: "kb-row" },
+							h("button", { className: "kb-btn primary", disabled: saving, onClick: save, children: saving ? "Saving…" : "Save" }),
+							h("button", { className: "kb-btn", onClick: function () { setOpen(false); }, children: "Cancel" }))
+					)
+				)
+			);
+		}
+
 		function KanbanPage() {
 			var live = useBoardStore();
 			var board = live.board;
@@ -2881,7 +2968,11 @@ var CSS =
 			function act(method, payload) {
 				return rpc(method, payload).then(function (res) {
 					if (res && res.ok) {
-						setNotice(null);
+						// KAN-72: a move onto a full board is not an error, so it
+						// does not read as one — the notice says where the ticket
+						// now stands, and the card's own park keeps saying it.
+						var queued = res.value && res.value.queued;
+						setNotice(queued ? queued.reason : null);
 						loadBoard();
 						if (selectedRef.current) loadDetail(selectedRef.current);
 					} else {
@@ -2920,6 +3011,13 @@ var CSS =
 			// Done and Discarded share one column, newest closed first (the host
 			// sends it ordered; the concat covers a payload without `closed`).
 			var closedItems = columns.closed || (board && board.closed) || (columns.done || []).concat(columns.discarded || []);
+			// KAN-72: the Working header speaks in the cap's units, so the number
+			// under "Working" is the one the pill and the engine agree on.
+			var wipInfo = board ? board.wip : null;
+			var wipLabel = wipInfo && typeof wipInfo.occupancy === "number" ? wipInfo.occupancy + "/" + wipInfo.cap : null;
+			var wipTitle = wipInfo && typeof wipInfo.occupancy === "number"
+				? wipInfo.occupancy + " of the " + (columns.working || []).length + " Working cards take a slot: a parked card waits on a person, not on a worker. The cap is " + wipInfo.cap + "."
+				: null;
 			return h("div", { className: "kb-root" },
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
@@ -2943,6 +3041,7 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 							},
 							children: board && board.orchestratorPaused ? "Resume orchestrator" : "Pause orchestrator"
 						}),
+						h(WipControl, { wip: board ? board.wip : null, onSave: function (cap) { return act("setWipCap", { cap: cap }); } }),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
@@ -2968,7 +3067,7 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 						),
 						h("div", { className: "kb-cols" + (mobileShow.backlog ? " show-backlog" : "") + (mobileShow.done ? " show-done" : "") },
 							h(Column, { column: "backlog", label: "Backlog", items: columns.backlog, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
-							h(Column, { column: "working", label: "Working", items: columns.working, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
+							h(Column, { column: "working", label: "Working", items: columns.working, countLabel: wipLabel, countTitle: wipTitle, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt, onStartPlanning: startPlanningNow, onStartBuild: startBuildNow }),
 							h(Column, { column: "done", label: "Done / Discarded", items: closedItems, onOpen: open, dragId: dragId, dropTarget: dropTarget, onDragStart: startDrag, onDragEnd: finishDrag, onDragOverColumn: dragOverColumn, onDropAt: dropAt })
 						)
 					)
@@ -3091,6 +3190,10 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 				});
 				work.then(function (res) {
 					if (res && res.ok === false) setNotice(res.error ? res.error.message : "That did not work.");
+					// KAN-72: the drag onto a full board queued the card instead
+					// of moving it. Say so — the card snapped back to where it
+					// was, and without this line it looks like the drop failed.
+					else if (res && res.value && res.value.queued) setNotice(res.value.queued.reason);
 					else setNotice(null);
 				}, function () { setNotice("Could not reach the Host."); }).then(function () {
 					boardStore.release();

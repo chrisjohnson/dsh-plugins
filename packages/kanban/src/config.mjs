@@ -130,10 +130,17 @@ export const DEFAULT_CONFIG = {
   /** A turn with no observable progress for this long is abandoned. */
   stallTimeoutMs: 600000,
 
-  /** Maximum workflow turns the engine may drive concurrently. A pure throttle:
-   * columns are intended state, so nothing is promoted or rejected on capacity —
-   * queued Working tickets simply wait for a free slot. */
-  wipCap: 4,
+  /**
+   * The seed for the Work-In-Progress cap (KAN-72): the most tickets the board
+   * may hold in Working at once, and the number of workflow turns the engine
+   * drives concurrently — one limit, enforced at the move, not a throttle that
+   * lets a fourth card in and makes it wait.
+   *
+   * This is the starting value only. Once a person sets the cap from the board's
+   * WIP control, the value stored in the board db wins, live and across a
+   * restart, without anyone editing this config.
+   */
+  wipCap: 3,
 
   defaultBudgetUsd: 0,
   /** Artifacts older than this are pruned; spans/usage/events are never pruned. */

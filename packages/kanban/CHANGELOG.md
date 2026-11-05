@@ -5,6 +5,57 @@
 
 ## Unreleased
 
+## 0.34.0
+
+### Added
+
+- **The Working cap is now the engine's rule, not a convention (KAN-72).** The
+  board owner asked for at most three tickets in Working at once, enforced
+  mechanically and adjustable live. `wipCap` already existed, but it only
+  throttled how many turns the engine *drove*: a human drag, a plan approval or
+  `kanban_start build` could always put a fourth card into Working, and the
+  orchestrator was trusted to self-police. Now every way into Working passes one
+  seam — `moveToColumn` in `src/build.mjs` — and at the cap the move is
+  **queued** rather than made: the ticket keeps its column, wears a park that
+  names the cap and its place in line
+  (`WIP cap 3/3 — queued at position 2. It starts automatically when a Working
+  slot frees.`), and the engine's tick promotes the head of that queue, in the
+  board's own priority order, the moment a slot frees — an approval, a discard,
+  a move back to Backlog, or a Working card parking on a human. Occupancy is
+  *unparked* Working tickets: a card held at the approval gate waits on a person,
+  not on a worker, so it does not take a slot. Filing a ticket straight into
+  Working obeys the same rule — at the cap it is created in Backlog with the
+  queue notice and the answer says so.
+- **A WIP pill on the board page changes the cap live (KAN-72).** The header
+  shows `WIP n/cap` and opens a dialog with the number, the tickets waiting and
+  their order; saving calls the new `setWipCap` endpoint. The value is stored in
+  the board db (`runtime_state`, the v8 table already used for the orchestrator
+  pause), so it takes effect on the next move with no config edit and no service
+  restart, and survives one. Lowering it below what is in Working re-queues the
+  overflow — lowest priority first, so the work the board most wants stays in
+  flight — and the Working column header now reads in the same units as the pill.
+  The configured `wipCap` is the seed: the db value wins once a person sets one,
+  and the `config` endpoint answers with the effective number plus
+  `wipCapSource`.
+- **The orchestrator can see the limit and is told to queue, not force
+  (KAN-72).** `kanban_board`'s `engine` block gains `working` (occupancy) and
+  `queue` (who is waiting, head first) beside `driving` and `wipCap`, and
+  `wipCap` is now the effective cap rather than the YAML value. `kanban_move`
+  and `kanban_start` hand back the readable refusal — `moved: false` /
+  `started: false` with a `queued` block naming cap, occupancy, position and the
+  same sentence the card shows — and the tool contracts and the orchestrator
+  prompt say that a queued ticket is the limit working as intended, not
+  something to retry or force open.
+
+### Changed
+
+- **`wipCap` defaults to 3, not 4 (KAN-72)**, and its meaning changed with the
+  enforcement: it is the seed for the occupancy cap the engine enforces, not a
+  pure driving throttle. A deployment that sets `wipCap` in its kanban row keeps
+  that number; one that relied on the default now starts at three in Working.
+  The same effective cap still throttles how many turns the engine drives, so
+  the occupancy limit and the concurrency limit cannot drift apart.
+
 ## 0.33.0
 
 ### Added

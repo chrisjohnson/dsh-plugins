@@ -22,6 +22,7 @@ import { normalizePlan, validatePlan, verifyReview, classifyGaps, nonDeferredPro
 import { countGrants, grantAdvisory, isPlanReady, planReadyReason } from './grants.mjs';
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 import { endedOnQuestion, questionParkReason, recoverySummary, restartResumeAllowed } from './recovery.mjs';
+import { createWipGate, overflowForLoweredCap, queueSummary, validCap, wipQueueReason } from './wip.mjs';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
@@ -240,6 +241,8 @@ export class Engine {
     /** the dsh-continue-kicker service once resolved; undefined = not looked up yet */
     this.kicker = undefined;
     this.kickerAnnounced = false;
+    /** the Working-occupancy cap and its queue (src/wip.mjs); read fresh every call */
+    this.wip = createWipGate({ store, getConfig: this.getConfig });
     if (this.driver !== null && typeof this.driver === 'object') {
       this.driver.approval = {
         approve: (ticketId, message) => this.approve(ticketId, message),
@@ -281,16 +284,19 @@ export class Engine {
         await this.recover();
       }
       this.driver.reconcileTurns();
-      // Columns are intended state: the engine launches what the human put in
-      // Working, plus Backlog tickets that asked to be planned now. wipCap is a
-      // pure concurrency throttle — queued tickets wait, nothing is promoted
-      // or rejected on capacity.
-      const config = this.getConfig();
+      // Columns are intended state, and the cap on Working is now one of the
+      // engine's own rules rather than a convention (KAN-72): the queue of
+      // tickets waiting for a slot is drained first, so the ticket that has
+      // waited longest in priority order is the one that takes the freed slot.
+      // The same effective cap throttles driving, so the occupancy limit and
+      // the concurrency limit can never disagree with each other.
+      const cap = this.wip.cap().cap;
+      this.promoteWipQueue(cap);
       // At the cap nothing can launch, so the store is not asked at all; below
       // it, only the tickets that could actually launch are read.
-      if (this.active.size < config.wipCap) {
+      if (this.active.size < cap) {
         for (const ticket of this.store.listRunnable()) {
-          if (this.disposed || this.active.size >= config.wipCap) break;
+          if (this.disposed || this.active.size >= cap) break;
           if (this.active.has(ticket.id)) continue;
           if (this.busy(ticket)) continue;
           this.launch(ticket);
@@ -302,6 +308,65 @@ export class Engine {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * Fill free Working slots from the head of the WIP queue. A promotion is an
+   * ordinary engine-driven column move: the park that said "queued" is lifted
+   * by the transition itself, and the launch loop picks the ticket up in this
+   * same tick.
+   *
+   * @returns {object[]} the tickets that moved, head first
+   */
+  promoteWipQueue(cap = this.wip.cap().cap) {
+    const promoted = [];
+    for (const ticket of this.store.listWipQueue()) {
+      if (this.disposed || this.store.countWorkingOccupancy() >= cap) break;
+      const updated = this.store.transitionTicket(ticket.id, { column: 'working' }, {
+        actor: 'engine',
+        reason: 'wip queue promotion',
+      });
+      if (updated.column === 'working') promoted.push(updated);
+    }
+    return promoted;
+  }
+
+  /**
+   * Change the cap from the board, live (KAN-72). Persisted in the board db, so
+   * a restart keeps the number a person chose, and read by every path above, so
+   * it takes effect on the next move without a service restart.
+   *
+   * Lowering it below what is in Working re-queues the overflow — lowest
+   * priority first, so the work the board most wants stays in flight — into
+   * Backlog with the same queue notice a refused move gets. Raising it needs no
+   * work here: the next tick promotes from the queue on its own.
+   *
+   * @returns {{cap: number, source: string, occupancy: number, queue: object[], requeued: object[]}}
+   */
+  setWipCap(value, { actor = 'human' } = {}) {
+    const cap = validCap(value);
+    if (cap === null) throw new StoreError('bad_request', 'the WIP cap must be a whole number of at least 1');
+    this.store.setSetting('wip_cap', String(cap), { actor, reason: 'WIP cap changed' });
+    const overflow = overflowForLoweredCap(this.store.listWorkingOccupancy(), cap);
+    for (const ticket of overflow) {
+      this.store.transitionTicket(ticket.id, { column: 'backlog' }, { actor: 'engine', reason: `WIP cap lowered to ${cap}` });
+    }
+    if (overflow.length > 0) {
+      // Positions are counted after the moves, against the queue as it now is,
+      // so a ticket that was already waiting keeps its place ahead of these.
+      const occupancy = this.store.countWorkingOccupancy();
+      const alreadyQueued = this.store.listWipQueue().length;
+      overflow.forEach((ticket, index) => {
+        this.store.setNeedsAttention(ticket.id, wipQueueReason({ cap, occupancy, position: alreadyQueued + index + 1 }), {
+          cap,
+          position: alreadyQueued + index + 1,
+          capLowered: true,
+        });
+      });
+    }
+    const state = this.wip.state();
+    void this.tick();
+    return { ...state, queue: queueSummary(state.queue), requeued: overflow.map((ticket) => ticket.key) };
   }
 
   launch(ticket) {

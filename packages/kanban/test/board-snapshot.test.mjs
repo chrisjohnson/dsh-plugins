@@ -16,6 +16,7 @@ import { attentionFacts } from '../src/attention.mjs'
 import { isQuestionPark } from '../src/recovery.mjs'
 import { attemptLabel, closedNewestFirst, jumpSession, phaseSegments, workingMs } from '../src/board-view.mjs'
 import { compactBoard, createBoardSnapshots, digest, stableJson } from '../src/board-snapshot.mjs'
+import { wipQueueReason } from '../src/wip.mjs'
 
 const NOW = Date.parse('2026-03-01T12:00:00.000Z')
 const at = (offsetMs) => new Date(NOW + offsetMs).toISOString()
@@ -346,3 +347,37 @@ test('digest is stable and content-addressed', () => {
   assert.notEqual(digest('a'), digest('b'))
   assert.match(digest('a'), /^[0-9a-f]{40}$/)
 })
+
+// ------------------------------------------------------------------ KAN-72 --
+//
+// The page's WIP pill and the engine's admission rule read the same numbers, so
+// the board payload carries them: the cap in force, how much of it is taken, and
+// who is waiting. All three come from the ticket rows the board already read.
+
+test('the board carries the WIP block: cap, occupancy and queue', () => {
+  const world = seeded()
+  const { t } = world
+  const snapshots = createBoardSnapshots({ ...world, now: () => NOW, wipCap: () => ({ cap: 3, source: 'config' }) })
+  const board = snapshots.build().board
+
+  assert.deepEqual(board.wip, { cap: 3, source: 'config', occupancy: 3, queue: [] })
+  assert.equal(board.wip.occupancy, 3, 'the three unparked Working cards; the parked ones wait on a person, not a worker')
+
+  storeQueueNotice(world, t.plain, { cap: 3, occupancy: 3, position: 1 })
+  storeQueueNotice(world, t.later, { cap: 3, occupancy: 3, position: 2 })
+  const queued = snapshots.build().board
+  assert.deepEqual(queued.wip.queue, [
+    { key: t.later.key, title: 'second backlog', position: 1, phase: 'plan' },
+    { key: t.plain.key, title: 'plain backlog', position: 2, phase: 'plan' },
+  ], 'priority order, head first, positions counted from the live queue')
+  assert.deepEqual(compactBoard(queued).wip, queued.wip, 'the compact payload the page polls carries it too')
+})
+
+test('a board built without a cap provider says nothing about the cap', () => {
+  const world = seeded()
+  assert.equal(createBoardSnapshots({ ...world, now: () => NOW }).build().board.wip, null)
+})
+
+function storeQueueNotice({ store }, ticket, { cap, occupancy, position }) {
+  store.setNeedsAttention(ticket.id, wipQueueReason({ cap, occupancy, position }))
+}

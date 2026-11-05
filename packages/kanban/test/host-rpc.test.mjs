@@ -293,3 +293,83 @@ test('orchestratorSetPaused toggles the pause, validates its input, and the boar
   assert.equal(resumed.value.paused, false)
   assert.equal((await rpc('board', { compact: true })).value.orchestratorPaused, false)
 })
+
+// ------------------------------------------------------------------ KAN-72 --
+//
+// The cap has to hold at the HTTP surface, not just in the pure module: this
+// drives the real host over the routes it registers. The occupancy is seeded
+// through the store at a closed phase on purpose — a live Working ticket would
+// be launched by the engine and parked on the stub host's missing agents
+// service inside the test, and a parked card is not a slot taken.
+
+/** Three unparked Working tickets the engine will not touch. */
+function fillWorking(store, n = 3) {
+  const ids = []
+  for (let i = 0; i < n; i += 1) {
+    const t = store.createTicket({ title: `holding ${i}`, column: 'working' })
+    for (const phase of ['implement', 'review', 'verify', 'closed']) {
+      store.transitionTicket(t.id, { phase }, { actor: 'engine', reason: 'seed' })
+    }
+    ids.push(t.id)
+  }
+  return ids
+}
+
+test('a full Working column queues the next arrival instead of taking it', { skip }, async () => {
+  const { rpc, store } = await boot()
+  const held = fillWorking(store)
+  const board0 = (await rpc('board')).value
+  assert.equal(board0.wip.cap, 3, 'the default seed is three, not the old four')
+  assert.equal(board0.wip.source, 'config')
+  assert.equal(board0.wip.occupancy, 3)
+
+  // Filed straight into Working: created in Backlog wearing the queue notice.
+  const filed = await rpc('create', { title: 'fourth', body: '', column: 'working' })
+  assert.equal(filed.ok, true, 'a queued filing is not an error')
+  assert.equal(filed.value.ticket.column, 'backlog')
+  assert.match(filed.value.ticket.needsAttentionReason, /^WIP cap 3\/3 — queued at position 1\./)
+  assert.equal(filed.value.queued.position, 1)
+
+  // Dragged into Working: same answer, next place in line.
+  const fifth = await rpc('create', { title: 'fifth', body: '', column: 'backlog' })
+  assert.equal(fifth.ok, true)
+  const dragged = fifth.value.ticket.id
+  const moved = await rpc('move', { id: dragged, column: 'working' })
+  assert.equal(moved.ok, true)
+  assert.equal(moved.value.ticket.column, 'backlog')
+  assert.equal(moved.value.queued.position, 2)
+  assert.match(moved.value.queued.reason, /WIP cap 3\/3/)
+
+  const board = (await rpc('board')).value
+  assert.deepEqual(board.wip.queue.map((q) => q.position), [1, 2])
+  assert.equal(board.wip.queue.length, 2)
+
+  // Out of Working is never refused, however full the column is.
+  const back = await rpc('move', { id: held[0], column: 'backlog' })
+  assert.equal(back.ok, true)
+  assert.equal(back.value.ticket.column, 'backlog')
+  assert.equal(back.value.queued, undefined)
+})
+
+test('setWipCap changes the cap live, re-queues the overflow, and persists', { skip }, async () => {
+  const { rpc, store } = await boot()
+  fillWorking(store, 3)
+
+  const lowered = await rpc('setWipCap', { cap: 2 })
+  assert.equal(lowered.ok, true, JSON.stringify(lowered))
+  assert.equal(lowered.value.cap, 2)
+  assert.equal(lowered.value.source, 'db')
+  assert.equal(lowered.value.occupancy, 2, 'one card went back to the queue')
+  assert.equal(lowered.value.requeued.length, 1)
+  assert.equal(store.countWorkingOccupancy(), 2)
+  assert.equal(store.getSetting('wip_cap'), '2', 'the board db holds it, so a restart keeps it')
+
+  const config = (await rpc('config')).value
+  assert.equal(config.wipCap, 2, 'the page reads the effective cap, not the YAML')
+  assert.equal(config.wipCapSource, 'db')
+
+  const bad = await rpc('setWipCap', { cap: 0 })
+  assert.equal(bad.ok, false)
+  assert.match(bad.error.message, /whole number of at least 1/)
+  assert.equal(store.getSetting('wip_cap'), '2', 'a refused cap changed nothing')
+})
