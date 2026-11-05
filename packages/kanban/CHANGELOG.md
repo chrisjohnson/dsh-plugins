@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.33.0
+
 ### Added
 
 - **`kanban_message` has a steer mode (KAN-67).** Every message the orchestrator
