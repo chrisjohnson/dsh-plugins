@@ -60,7 +60,7 @@ Current crash state is readable from the console at any time as
 ## Install
 
 ```sh
-dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-slot-guard-v0.1.0&path:/packages/slot-guard"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-slot-guard-v0.1.1&path:/packages/slot-guard"
 ```
 
 Then restart the service. Nothing takes effect until the browser half loads, and

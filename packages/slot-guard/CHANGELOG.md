@@ -3,6 +3,19 @@
 All notable changes to this plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.1 - 2026-11-05
+
+### Fixed
+
+- The recovery overlay never showed its advice line: `showOverlay` re-decoded an
+  empty string instead of the stored crash, so the hint read "Reload the page to
+  recover." with no word about the hook-order cause that was just decoded. The
+  decoded advice is now carried on `lastCrash` (also visible at
+  `window.__dshSlotGuard.lastCrash.advice`) and rendered in the overlay.
+- `window.__dshSlotGuard.overlayShown` reported `true` before the overlay
+  variable had been initialised (`overlay !== null` against a hoisted
+  `undefined`); it is now a plain truthiness check.
+
 ## 0.1.0 - 2026-11-05
 
 ### Added
