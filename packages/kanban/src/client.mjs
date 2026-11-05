@@ -2776,8 +2776,8 @@ var CSS =
 					h("div", { className: "kb-form" },
 						h("div", { className: "kb-hint", children: "The most tickets the board may hold in Working at once. A move onto a full board is queued, not refused: the card waits in Backlog with its place in line and starts on its own when a slot frees." }),
 						h("div", { className: "kb-row" },
-							h("label", { className: "kb-hint", for: "kb-wip-cap", children: "Cap" }),
-							h("input", { id: "kb-wip-cap", className: "kb-input", type: "number", min: "1", step: "1", value: draft, style: { width: 90 }, onInput: function (ev) { setDraft(ev.target.value); } }),
+							h("label", { className: "kb-hint" }, "Cap", " ",
+								h("input", { className: "kb-input", type: "number", min: "1", step: "1", value: draft, style: { width: 90, marginLeft: 6 }, onChange: function (ev) { setDraft(ev.target.value); } })),
 							h("span", { className: "kb-hint", children: occupancy + " in Working now" })
 						),
 						queue.length > 0 ? h("div", null,
