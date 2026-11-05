@@ -633,3 +633,52 @@ test('both plan prompts say what a path grant covers and what needs a command gr
     assert.match(body, /declare each as a command prefix/, name)
   }
 })
+
+// ------------------------------------------------------------------- KAN-71
+//
+// Plans kept spending their first steps on "set up the source clone" — clone the
+// plugins repo into a per-ticket directory, do not use the stale lab checkout — as
+// if the build started from a clean slate somewhere other than where the planner is
+// sitting. Plan, build and review all run in the ticket's one working copy, so both
+// planning prompts now say that out loud. The rendered artifact is what the planner
+// reads, so that is what gets pinned here (and `{{cwd}}` must arrive substituted).
+
+test('both plan prompts tell the planner the build shares its working copy', async () => {
+  for (const planQuestions of ['interactive', 'autonomous']) {
+    const { store, engine, promptOf } = await setup()
+    const created = store.createTicket({
+      title: 'demo',
+      body: 'make the note',
+      acceptance: ['note exists'],
+      workspaceCwd: CWD,
+      planTiming: 'at_pickup',
+      planQuestions,
+      column: 'working',
+    })
+    await engine.plan(store.getTicket(created.id))
+    const prompt = promptOf('planner_prompt_plan')
+    assert.ok(prompt, `the rendered ${planQuestions} plan prompt is recorded as an artifact`)
+    assert.match(
+      prompt,
+      /The build works in the same working copy you are planning in/,
+      `${planQuestions} prompt must say the build shares the planner's working copy`,
+    )
+    assert.match(prompt, /is what the build will find/, `${planQuestions} prompt must say what the planner sees is what the build gets`)
+    // The sentence belongs in the section that describes the build's environment.
+    const from = prompt.indexOf('## Sandbox grants')
+    const to = prompt.indexOf('## Release scope')
+    assert.ok(from >= 0 && to > from, 'the sandbox section is present and precedes the release-scope section')
+    const sandbox = prompt.slice(from, to)
+    assert.ok(sandbox.includes('same working copy'), `${planQuestions}: the sentence sits under Sandbox grants`)
+    // And the placeholder is resolved to the ticket's own workspace, not left raw.
+    assert.equal(prompt.includes('{{cwd}}'), false, 'the cwd placeholder is resolved')
+    assert.ok(sandbox.includes(CWD), `${planQuestions}: the prompt names the working copy the build inherits`)
+  }
+})
+
+test('both plan prompt files carry the shared-working-copy sentence', async () => {
+  const prompts = await loadPrompts({}, PACKAGE_DIR)
+  for (const name of ['plan-human', 'plan-self']) {
+    assert.match(prompts.bodies[name], /same working copy/, `${name} must carry the shared-working-copy sentence`)
+  }
+})
