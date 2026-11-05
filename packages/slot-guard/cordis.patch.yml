@@ -1,0 +1,13 @@
+# Bundle layer for dsh-slot-guard.
+#
+# `dsh plugin --profile web add <git-tag spec>` appends this package to
+# `dsh.profile.bundles`; dsh then applies this layer, which mounts the plugin row
+# (host half via `main`, browser half via the package's `dsh.client` declaration).
+#
+# The row carries NO config on purpose: a patch layer replaces a row's whole
+# `config` object instead of deep-merging, and this plugin has nothing to
+# configure. Disabling it removes the diagnostics and changes nothing else —
+# the page renders exactly as it did before the bundle existed.
+- insert:
+    - id: slot-guard
+      name: dsh-slot-guard
