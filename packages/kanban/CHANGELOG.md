@@ -19,6 +19,20 @@
   payload arrives. On a phone (≤768px) the labels are hidden and the bars shrink
   to 3px, leaving a colour cue that costs almost no vertical space.
 
+## 0.34.1
+
+### Fixed
+
+- **The planning prompts now say the build shares the planner's working copy
+  (KAN-71).** Plans kept opening with "set up the source clone": clone the plugins
+  repo into `<worktrees>/kanN-plugins`, check out the pin, do not use the stale lab
+  checkout — as if the build session started from a clean slate somewhere else. It
+  does not: plan, build and review all run in the ticket's one working copy, so what
+  the planner observes on disk (existing clones and checkouts, file state, git state)
+  is exactly what the build will find. Both `plan-human.md` and `plan-self.md` now
+  say so under **Sandbox grants**, and tell the planner to plan against the working
+  copy it can already see instead of assuming a fresh checkout.
+
 ## 0.34.0
 
 ### Added

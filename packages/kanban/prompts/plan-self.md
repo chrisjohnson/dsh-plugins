@@ -8,6 +8,8 @@ Every `done_when` condition you plan must be verifiable by an agent without huma
 
 The build session that implements your plan runs under the `{{write_mode}}` sandbox with workspace root `{{cwd}}`. It cannot write outside that root, or run a command the sandbox denies, without stopping to ask a human mid-build.
 
+The build works in the same working copy you are planning in: `{{cwd}}` is not a fresh checkout — it is the very worktree your session runs in. What you observe there (existing clones and checkouts, file state, git state) is what the build will find, so plan against it directly instead of assuming a clean slate.
+
 If your plan needs either, declare it in the plan's optional `sandbox` section:
 
 - `grants.paths` — absolute paths outside `{{cwd}}` the build must write. Once the human approves the plan, a write or edit under a granted path is auto-approved, and so is a bash call that `cd`s into or names absolute paths only inside that path (the workspace and `/tmp` may also appear) and names at least one path inside it. Anything else still asks. A path that is only ever written by a tool the build runs in bash (a package store, a cache) is useful only through that bash coverage.
