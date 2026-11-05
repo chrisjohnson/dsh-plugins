@@ -34,6 +34,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 import { startBuild, moveToColumn } from './build.mjs'
+import { queueSummary } from './wip.mjs'
 import { startPlanning } from './planning.mjs'
 import {
   ORCHESTRATOR_PRESET_ID,
@@ -625,11 +626,18 @@ export class KanbanOrchestrator {
 
       board: () => {
         const view = this.#boardView()
+        // KAN-72: the cap the engine enforces, what is using it, and who is
+        // waiting. `wipCap` is the effective number (the board db's once a
+        // person has set one), not the YAML value, so what the orchestrator
+        // reads is what a move will actually be measured against.
+        const wip = engine?.wip?.state?.() ?? null
         return {
           ...view,
           engine: {
             driving: engine?.active?.size ?? 0,
-            wipCap: this.#config().wipCap,
+            wipCap: wip?.cap ?? this.#config().wipCap,
+            working: wip?.occupancy ?? null,
+            queue: wip === null ? [] : queueSummary(wip.queue),
           },
         }
       },
@@ -758,22 +766,32 @@ export class KanbanOrchestrator {
       },
 
       move: (ticket, to, reason) => {
-        const updated = moveToColumn({
+        const moved = moveToColumn({
           store,
           engine,
           id: ticket.id,
           column: to,
           reason: reason ?? 'orchestrator move',
           actor: 'orchestrator',
+          // KAN-72: the same cap a human drag meets. A refusal is not an error
+          // — the ticket is queued and will start on its own — so it is handed
+          // back as a readable `queued` answer rather than something to force.
+          wip: engine?.wip ?? null,
         })
-        return { moved: true, ticket: this.#ticketLine(updated) }
+        if (moved.queued !== undefined) {
+          return { moved: false, queued: moved.queued, reason: moved.queued.reason, ticket: this.#ticketLine(moved.ticket) }
+        }
+        return { moved: true, ticket: this.#ticketLine(moved.ticket) }
       },
 
       start: (ticket, what, reason) => {
         const result = what === 'planning'
           ? startPlanning({ store, driver: this.driver, engine, ticket })
-          : startBuild({ store, engine, ticket, reason: reason ?? 'orchestrator start' })
+          : startBuild({ store, engine, ticket, reason: reason ?? 'orchestrator start', wip: engine?.wip ?? null })
         if (!result.ok) return { started: false, reason: result.message }
+        if (result.queued !== undefined) {
+          return { started: false, queued: result.queued, reason: result.queued.reason, ticket: this.#ticketLine(result.ticket) }
+        }
         return { started: true, ticket: this.#ticketLine(result.ticket) }
       },
 

@@ -669,3 +669,63 @@ test('a renamed orchestrator keeps its own stem, and junk falls back to the defa
   assert.equal(nextOrchestratorSessionId('', 0), 'kanban-orchestrator-2')
   assert.equal(nextOrchestratorSessionId(undefined, -3), 'kanban-orchestrator-2')
 })
+
+// ---------------------------------------------------------------- KAN-72 ---
+//
+// The Working cap is the engine's, but the orchestrator is the caller most
+// likely to push against it. What it has to get from a tool call is the same
+// sentence a human gets on the card: queued, at this position, starting on its
+// own — not an error that reads like "retry harder".
+
+const specOf = (name) => ORCHESTRATOR_TOOL_SPECS.find((tool) => tool.name === name)
+
+test('kanban_board reports the cap in force, what is using it and who waits', async () => {
+  const engineBlock = {
+    driving: 3,
+    wipCap: 3,
+    working: 3,
+    queue: [{ key: 'KAN-9', title: 'next up', position: 1, phase: 'implement' }],
+  }
+  const { api } = fakeApi({ board: () => ({ tickets: [], engine: engineBlock }) })
+  const answer = await runOrchestratorTool('kanban_board', {}, api)
+  assert.deepEqual(answer.engine, engineBlock, 'the seam is passed through whole, not re-summarised')
+})
+
+test('a move the cap queued comes back as queued, with the reason readable', async () => {
+  const queued = {
+    cap: 3,
+    occupancy: 3,
+    position: 2,
+    reason: 'WIP cap 3/3 — queued at position 2. It starts automatically when a Working slot frees.',
+  }
+  const { api, calls } = fakeApi({ move: () => ({ moved: false, queued, reason: queued.reason, ticket: fakeTicket() }) })
+  const answer = await runOrchestratorTool('kanban_move', { ticket: 'KAN-1', to: 'working', reason: 'start it' }, api)
+  assert.equal(calls[0][0], 'move')
+  assert.equal(answer.moved, false)
+  assert.equal(answer.queued.position, 2)
+  assert.match(answer.reason, /^WIP cap 3\/3 — queued at position 2/)
+})
+
+test('a started build the cap queued says so the same way', async () => {
+  const queued = {
+    cap: 3,
+    occupancy: 3,
+    position: 1,
+    reason: 'WIP cap 3/3 — queued at position 1. It starts automatically when a Working slot frees.',
+  }
+  const { api } = fakeApi({ start: () => ({ started: false, queued, reason: queued.reason, ticket: fakeTicket() }) })
+  const answer = await runOrchestratorTool('kanban_start', { ticket: 'KAN-1', what: 'build', reason: 'go' }, api)
+  assert.equal(answer.started, false)
+  assert.deepEqual(answer.queued, queued)
+})
+
+test('the tool contracts say the engine queues at the cap and must not be forced', () => {
+  assert.match(specOf('kanban_move').description, /cap on Working/i)
+  assert.match(specOf('kanban_move').description, /queued rather than made/i)
+  assert.match(specOf('kanban_move').description, /do not retry the move/i)
+  assert.match(specOf('kanban_start').description, /queued, not forced/i)
+  const board = specOf('kanban_board').description
+  for (const field of ['wipCap', 'working', 'queue']) {
+    assert.ok(board.includes(field), `kanban_board must advertise engine.${field}`)
+  }
+})

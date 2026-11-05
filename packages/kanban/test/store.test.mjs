@@ -339,3 +339,51 @@ test('v9 adds kv to a fresh board and leaves every other table alone', () => {
   assert.equal(store.kvGet('anything'), 'value')
   assert.equal(store.counts().backlog, 0)
 })
+
+// ------------------------------------------------------------------ KAN-72 --
+//
+// The cap lives in the board db (the v8 runtime_state table) and the queue is a
+// query, not a counter kept in memory: a restart has to be able to work out
+// both from the rows alone.
+
+test('a board setting round-trips and records who set it', () => {
+  const { store } = setup()
+  const seen = []
+  store.onEvent = (event) => seen.push(event)
+  assert.equal(store.getSetting('wip_cap'), null, 'unset is not zero')
+
+  assert.equal(store.setSetting('wip_cap', '2', { actor: 'human', reason: 'WIP cap changed' }), '2')
+  assert.equal(store.getSetting('wip_cap'), '2')
+  assert.equal(store.setSetting('wip_cap', '5', { actor: 'human' }), '5', 'set again replaces in place')
+  assert.equal(store.getSetting('wip_cap'), '5')
+
+  const changed = seen.filter((event) => event.kind === 'setting_changed')
+  assert.equal(changed.length, 2)
+  assert.equal(changed[0].ticketId, null, 'a board-wide setting belongs to no ticket')
+  assert.deepEqual(changed[1].payload, { key: 'wip_cap', value: '5', reason: '' })
+})
+
+test('occupancy counts Working minus the parked, and the queue is the parked backlog', () => {
+  const { store } = setup()
+  const running = store.createTicket({ title: 'running', column: 'working' })
+  const held = store.createTicket({ title: 'held', column: 'working' })
+  store.setNeedsAttention(held.id, 'Awaiting human approval')
+  const waiting = store.createTicket({ title: 'waiting' })
+  store.setNeedsAttention(waiting.id, 'WIP cap 2/2 — queued at position 1. It starts automatically when a Working slot frees.')
+  const stuck = store.createTicket({ title: 'stuck' })
+  store.setNeedsAttention(stuck.id, 'review kept failing')
+
+  assert.equal(store.countWorkingOccupancy(), 1, 'only the unparked Working card takes a slot')
+  assert.deepEqual(store.listWorkingOccupancy().map((t) => t.id), [running.id])
+  assert.deepEqual(store.listWipQueue().map((t) => t.id), [waiting.id], 'a park for another reason is not a queue place')
+})
+
+test('the queue read is in board order, not insertion order', () => {
+  const { store } = setup()
+  const notice = (position) => `WIP cap 1/1 — queued at position ${position}. It starts automatically when a Working slot frees.`
+  const first = store.createTicket({ title: 'low' })
+  const second = store.createTicket({ title: 'high', priority: 3 })
+  store.setNeedsAttention(first.id, notice(1))
+  store.setNeedsAttention(second.id, notice(2))
+  assert.deepEqual(store.listWipQueue().map((t) => t.title), ['high', 'low'])
+})

@@ -213,3 +213,19 @@ test('v7 deferred CHECK accepts 0 and 1 and rejects anything else', () => {
   // NOT NULL: a deferred flag that is not there is 0, never missing.
   assert.throws(() => insert(null), /CHECK constraint failed|NOT NULL constraint failed/)
 })
+
+test('v8 runtime_state is where a person-set board switch lives (KAN-72)', () => {
+  // KAN-72 needed a durable place for the WIP cap. It did not add a migration:
+  // v8 already created `runtime_state` for exactly this kind of value — a switch
+  // a person flips from the board, which is not YAML configuration and has to
+  // survive a restart. This pins that the table is there and holds the cap.
+  const dir = mkdtempSync(join(tmpdir(), 'kanban-schema-'))
+  const db = openDatabase(join(dir, 'board.db'))
+  const row = db.prepare('SELECT name FROM sqlite_master WHERE type = ? AND name = ?').get('table', 'runtime_state')
+  assert.ok(row, 'runtime_state must exist at the current schema version')
+  db.prepare('INSERT INTO runtime_state (key, value, updated_at) VALUES (?, ?, ?)').run('wip_cap', '3', '2026-11-05T00:00:00.000Z')
+  db.prepare('INSERT INTO runtime_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run('wip_cap', '2', '2026-11-05T00:01:00.000Z')
+  assert.equal(db.prepare('SELECT value FROM runtime_state WHERE key = ?').get('wip_cap').value, '2')
+  db.close()
+})

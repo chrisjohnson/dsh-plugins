@@ -58,6 +58,7 @@ const ENDPOINTS = [
   'orchestrator',
   'orchestratorSetPaused',
   'orchestratorDetach',
+  'setWipCap',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -245,8 +246,16 @@ export default async function kanban(ctx, config = {}) {
     const derived = (ticket, telemetry, now) => derivedFacts(ticket, telemetry, now, { driver });
 
     // The board is built by one module (src/board-snapshot.mjs) for the RPC and
-    // the push channel alike, so both always say the same thing.
-    const snapshots = createBoardSnapshots({ store, driver, engine, orchestratorPaused: () => store.isOrchestratorPaused() });
+    // the push channel alike, so both always say the same thing. The WIP block
+    // rides with it: the cap is one cheap read, and the occupancy and queue are
+    // worked out from the ticket rows the board already has.
+    const snapshots = createBoardSnapshots({
+      store,
+      driver,
+      engine,
+      orchestratorPaused: () => store.isOrchestratorPaused(),
+      wipCap: () => engine.wip.cap(),
+    });
     const feed = new BoardFeed({ token: snapshots.token, build: snapshots.build });
     boardFeedRef.current = feed;
     ctx.effect(() => () => {
@@ -477,6 +486,16 @@ export default async function kanban(ctx, config = {}) {
             if (result?.ok !== true) return fail('bad_request', result?.error ?? 'the orchestrator session could not be restarted');
             return { ok: true, value: { previousId: result.previousId, sessionId: result.sessionId, state: result.state } };
           }
+          case 'setWipCap': {
+            // KAN-72: the board owner changes the Working cap from the page.
+            // Persisted in the board db and read by every entry point, so it is
+            // in force on the next move with no restart; lowering it below what
+            // is in Working re-queues the overflow, and the answer reports the
+            // new state so the pill can redraw from it.
+            const answer = engineRef.current.setWipCap(p.cap, { actor: 'human' });
+            boardFeedRef.current?.notify();
+            return { ok: true, value: answer };
+          }
           case 'create': {
             const column = p.column ?? 'backlog';
             if (!['backlog', 'working'].includes(column)) return fail('bad_request', 'column must be backlog or working');
@@ -511,10 +530,20 @@ export default async function kanban(ctx, config = {}) {
             if (fields.worktree === undefined || fields.worktree === null) {
               fields.worktree = typeof ctx.get('betterGitWorktree')?.createForPath === 'function';
             }
-            const ticket = store.createTicket({ ...fields, body: prepared.body, column });
+            // KAN-72: filing straight into Working obeys the same cap as a drag
+            // does. At the cap the ticket is created in Backlog wearing the
+            // queue notice instead — the intent is recorded, nothing is lost,
+            // and the engine starts it when a slot frees.
+            const queued = column === 'working' ? engineRef.current.wip.arrivalRefusal() : null;
+            const ticket = store.createTicket({ ...fields, body: prepared.body, column: queued === null ? column : 'backlog' });
             appendConfigFingerprint(store, ticket.id);
+            // The answer carries the parked row, not the row as created: a card
+            // that says it is queued has to show the notice it is queued with.
+            const parked = queued === null
+              ? ticket
+              : store.setNeedsAttention(ticket.id, queued.reason, { queued: true, cap: queued.cap, position: queued.position });
             void engineRef.current.tick();
-            return { ok: true, value: { ticket } };
+            return { ok: true, value: queued === null ? { ticket } : { ticket: parked, queued } };
           }
           case 'update': {
             // The human edit boundary: a ticket any engine has touched is locked
@@ -549,10 +578,20 @@ export default async function kanban(ctx, config = {}) {
             }
             // A column move is an unconditional human statement of intent:
             // into Working starts the engine (any park is cleared by the move),
-            // back into Backlog parks it. No WIP guard — the cap only throttles
-            // concurrency, queued Working tickets wait their turn.
-            const updated = moveToColumn({ store, engine: engineRef.current, id: String(p.id), column, reason: p.reason });
-            return { ok: true, value: { ticket: updated } };
+            // back into Backlog parks it. KAN-72: into Working is also where the
+            // WIP cap is enforced — at the cap the card stays put, wears the
+            // queue notice that names the cap and its position, and the engine
+            // starts it the moment a slot frees. The answer says so plainly
+            // instead of failing, because the move was understood.
+            const moved = moveToColumn({
+              store,
+              engine: engineRef.current,
+              id: String(p.id),
+              column,
+              reason: p.reason,
+              wip: engineRef.current.wip,
+            });
+            return { ok: true, value: moved.queued === undefined ? { ticket: moved.ticket } : { ticket: moved.ticket, queued: moved.queued } };
           }
           case 'resolve': {
             const ticket = requireTicket(String(p.id));
@@ -639,10 +678,15 @@ export default async function kanban(ctx, config = {}) {
             }
             if (action === 'startBuild') {
               // Start the build of a planned Backlog ticket: the same move into
-              // Working that dragging it there makes (src/build.mjs).
-              const result = startBuild({ store, engine: engineRef.current, ticket, reason: p.reason });
+              // Working that dragging it there makes (src/build.mjs), and so the
+              // same WIP cap on it — at the cap the button queues the ticket and
+              // the answer says where it stands.
+              const result = startBuild({ store, engine: engineRef.current, ticket, reason: p.reason, wip: engineRef.current.wip });
               if (!result.ok) return fail(result.code, result.message);
-              return { ok: true, value: { ticket: result.ticket } };
+              return {
+                ok: true,
+                value: result.queued === undefined ? { ticket: result.ticket } : { ticket: result.ticket, queued: result.queued },
+              };
             }
             if (action === 'addAcceptance') {
               if (typeof p.statement !== 'string' || p.statement.trim() === '') return fail('bad_request', 'statement is required');
@@ -779,7 +823,11 @@ export default async function kanban(ctx, config = {}) {
                 maxAttempts: live.maxAttempts,
                 tickIntervalMs: live.tickIntervalMs,
                 stallTimeoutMs: live.stallTimeoutMs,
-                wipCap: live.wipCap,
+                // KAN-72: the cap the engine is enforcing right now, which is
+                // the board db's value once a person has set one — answering the
+                // YAML here would show a number nothing obeys.
+                wipCap: engineRef.current.wip.cap().cap,
+                wipCapSource: engineRef.current.wip.cap().source,
                 escalationLadder: live.escalationLadder,
                 promptsDir,
                 promptHashes: prompts.hashes,

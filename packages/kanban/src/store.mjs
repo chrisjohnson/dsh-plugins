@@ -3,11 +3,15 @@
 // publishing a post-commit event.
 //
 // There are no config tables here on purpose: providers, roles, prompts and
-// limits are YAML (src/config.mjs); this database records what is true.
+// limits are YAML (src/config.mjs); this database records what is true. The one
+// exception is `runtime_state` (v8): a switch a *person* flips from the board —
+// the orchestrator pause, the WIP cap — which is not configuration they should
+// have to edit a file and restart for, and which has to survive a restart.
 
 import { randomUUID } from 'node:crypto';
 
 import { assertTransition, compareQueue, validateTicketModes } from './lifecycle.mjs';
+import { isWipQueuePark, WIP_QUEUE_PREFIX } from './wip.mjs';
 
 export class StoreError extends Error {
   constructor(code, message, details = {}) {
@@ -374,6 +378,78 @@ export class KanbanStore {
       + 'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
     ).run(value, new Date().toISOString());
     return value === '1';
+  }
+
+  /**
+   * A durable switch a person set from the board, read back as text (KAN-72).
+   * `runtime_state` is that table: the orchestrator pause lives there, and so
+   * does the WIP cap, because "the limit is 3 now" is a switch the board owner
+   * flips, not a value they edit in YAML and restart for. `null` means nobody
+   * has ever set it, which is not the same as a stored `'0'`.
+   */
+  getSetting(key) {
+    const row = this.db.prepare('SELECT value FROM runtime_state WHERE key = ?').get(String(key));
+    return row === undefined ? null : row.value;
+  }
+
+  /**
+   * Write a board switch and record that it was written. A setting belongs to no
+   * ticket, so the `setting_changed` event carries a null ticket id; the board
+   * feed wakes on it anyway (the change token moves with the row) and the event
+   * log says who set what.
+   */
+  setSetting(key, value, { actor = 'human', reason = '' } = {}) {
+    return this.transact(() => {
+      this.db.prepare(
+        'INSERT INTO runtime_state (key, value, updated_at) VALUES (?, ?, ?) '
+        + 'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+      ).run(String(key), String(value), nowIso());
+      this.#event(null, 'setting_changed', { actor, payload: { key: String(key), value: String(value), reason } });
+      return String(value);
+    });
+  }
+
+  // ---------------------------------------------------------------------- WIP
+
+  /**
+   * How many Working slots are taken: in Working and not parked. A ticket held
+   * at the approval gate waits on a person, not on a worker, so it is not
+   * occupancy — src/wip.mjs states the definition, this is the same count in
+   * SQL so a tick does not decode every row to get it.
+   */
+  countWorkingOccupancy() {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM tickets WHERE col = 'working' AND (needs_attention_reason IS NULL OR needs_attention_reason = '')")
+      .get();
+    return Number(row?.n ?? 0);
+  }
+
+  /** The occupancy itself, in queue order — the list a lowered cap trims. */
+  listWorkingOccupancy() {
+    return this.db
+      .prepare(
+        `SELECT ${TICKET_SUMMARY_COLUMNS} FROM tickets `
+        + "WHERE col = 'working' AND (needs_attention_reason IS NULL OR needs_attention_reason = '')",
+      )
+      .all()
+      .map(ticketFromRow)
+      .sort(compareQueue);
+  }
+
+  /**
+   * The WIP queue: Backlog tickets parked with a queue notice, head first. The
+   * engine's tick promotes from the front of this list whenever a slot frees.
+   * The prefix holds no LIKE wildcards, so the pattern is the prefix itself;
+   * the filter re-checks the decoded reason so a hand-written lookalike cannot
+   * slip in.
+   */
+  listWipQueue() {
+    return this.db
+      .prepare("SELECT " + TICKET_SUMMARY_COLUMNS + " FROM tickets WHERE col = 'backlog' AND needs_attention_reason LIKE ?")
+      .all(`${WIP_QUEUE_PREFIX}%`)
+      .map(ticketFromRow)
+      .filter((ticket) => isWipQueuePark(ticket.needsAttentionReason))
+      .sort(compareQueue);
   }
 
   updateTicket(idOrKey, patch, { actor = 'human', reason = '' } = {}) {

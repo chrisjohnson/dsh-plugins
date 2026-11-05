@@ -234,7 +234,9 @@ test('create stores images and resolves refs before the ticket exists', async ()
   // The image gate runs before createTicket; a failed save creates nothing.
   assert.ok(create.indexOf('prepareBodyImages') < create.indexOf('store.createTicket'), 'images must resolve before the ticket row is written')
   assert.match(create, /if \(!prepared\.ok\) return fail\('bad_request', prepared\.error\)/)
-  assert.match(create, /store\.createTicket\(\{ \.\.\.fields, body: prepared\.body, column \}\)/)
+  // KAN-72: the column the caller asked for is honoured unless the Working cap
+  // is full, in which case the row is created in Backlog wearing the queue park.
+  assert.match(create, /store\.createTicket\(\{ \.\.\.fields, body: prepared\.body, column: queued === null \? column : 'backlog' \}\)/)
 })
 
 test('readImage is a registered endpoint answering through the store helper', async () => {

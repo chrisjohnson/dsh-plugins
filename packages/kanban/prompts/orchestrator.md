@@ -96,7 +96,12 @@ sessions exist and what state each is in.
   asks or decides autonomously, paid budget. The same validation the create form
   applies; a closed ticket refuses.
 - `kanban_move` — put a ticket in Working to have the engine drive it, or back in
-  Backlog to hold it.
+  Backlog to hold it. Working has a hard cap the engine enforces (`engine.wipCap`
+  on `kanban_board`, with `engine.working` and `engine.queue` beside it): at the
+  cap a move or a started build comes back `queued` with its place in line, and
+  the engine starts it when a slot frees. A queued ticket is the limit working as
+  intended — never retry it to force the board open, and never move out or
+  discard someone else's ticket to make room.
 - `kanban_start` — start planning a Backlog ticket, or start the build of one
   that has a plan.
 - `kanban_retry` — retry a parked ticket with a fresh attempt budget and an

@@ -703,6 +703,55 @@ archived — the board is unaffected: the engine logs one line, the endpoint rep
 the state, and the button says what is missing. A retry is attempted every 30s and
 a click nudges it immediately.
 
+## Work-in-progress cap (0.34.0)
+
+Working holds a limited number of tickets, and the engine — not the caller's
+good manners — enforces it.
+
+**What counts.** Occupancy is the tickets in Working that are *not* parked. A
+card held at the approval gate, on an unanswered question or on a failed round is
+waiting on a person, not on a worker, so it takes no slot. The queue is the
+Backlog cards wearing a WIP-queue notice, listed in the board's own order:
+priority, then the order a human arranged, then creation.
+
+**What a full board does.** Every way into Working goes through one seam
+(`moveToColumn` in `src/build.mjs`): the human drag, the Start build button,
+`kanban_start build`, and a plan approval that starts a build. At the cap the
+ticket does not move. It stays where it was and parks with the reason the card
+shows —
+
+```
+WIP cap 3/3 — queued at position 2. It starts automatically when a Working slot frees.
+```
+
+— and the answer the caller gets carries the same thing as data
+(`{ cap, occupancy, position, reason }`), so a UI can show it and the
+orchestrator can read it. Filing a ticket straight into Working obeys the rule
+too: at the cap it is created in Backlog with that notice. A ticket that was
+already parked for something else keeps the reason it had; the refusal is
+reported without overwriting it.
+
+**How it drains.** The engine's tick (every `tickIntervalMs`, default 5s)
+promotes the head of the queue whenever a slot frees — an approval, a discard, a
+move back to Backlog, or a Working card parking on a human — and launches it in
+the same tick. Nothing needs a nudge from a person or from the orchestrator, and
+the orchestrator's prompt tells it not to try to force a full board open.
+
+**Changing the cap.** The `WIP n/cap` pill in the Work page header opens a dialog
+with the number and the queue; the Working column header reads in the same units.
+Saving writes the value to the board db and it is in force on the next move, with
+no config edit and no service restart, and it survives a restart. Lowering it
+below what is in Working re-queues the overflow back to Backlog, lowest priority
+first, so the work the board most wants stays in flight; raising it lets the next
+tick promote from the queue.
+
+**Precedence.** `wipCap` in the config row is the **seed** (default 3). Once a
+person sets the cap from the page, the board db value wins and the config value
+is ignored until the db one is cleared. The `config` endpoint answers `wipCap` as
+the effective number and adds `wipCapSource: 'db' | 'config'` so a caller can
+tell which it is looking at, and the board payload carries a `wip` block
+(`{ cap, source, occupancy, queue }`) built from the rows it already read.
+
 ## Config
 
 <!-- verify-allow: config-documented -->
@@ -727,7 +776,7 @@ Everything below lives on the `kanban` row.
 | `escalationLadder[]` | attempt-to-route overrides. |
 | `tickIntervalMs` | worker tick (default 5000). |
 | `stallTimeoutMs` | idle turn timeout (default 10 min); suspended while a native question waits. |
-| `wipCap` | maximum workflow turns the engine drives concurrently (a pure throttle — queued Working tickets wait, nothing is rejected). |
+| `wipCap` | seed for the Working-occupancy cap the engine enforces (default 3): at the cap a move into Working is queued, not made, and the same number throttles how many turns the engine drives. A cap set from the board page is stored in the board db and wins over this row until it is cleared — see [Work-in-progress cap](#work-in-progress-cap-0340). |
 | `defaultPlanTiming` | `now` or `at_pickup`. |
 | `defaultPlanQuestions` | `interactive` or `autonomous`. |
 | `defaultBudgetUsd`, `retentionDays`, `promptsDir` | budget, artifact retention, prompt directory. |

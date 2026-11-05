@@ -34,9 +34,12 @@ test('Start build is a host action over the same move the drag makes', async () 
   assert.match(host, /import \{ moveToColumn, startBuild \} from '\.\/build\.mjs'/)
   const action = host.slice(host.indexOf("case 'action':"))
   assert.match(action, /if \(action === 'startBuild'\) \{/)
-  assert.match(action, /const result = startBuild\(\{ store, engine: engineRef\.current, ticket, reason: p\.reason \}\);/)
+  // KAN-72: both entry points carry the WIP gate, so the cap is enforced at the
+  // same seam a human drag goes through — neither path can skip it.
+  assert.match(action, /const result = startBuild\(\{ store, engine: engineRef\.current, ticket, reason: p\.reason, wip: engineRef\.current\.wip \}\);/)
   const move = host.slice(host.indexOf("case 'move':"), host.indexOf("case 'resolve':"))
-  assert.match(move, /moveToColumn\(\{ store, engine: engineRef\.current, id: String\(p\.id\), column, reason: p\.reason \}\)/)
+  assert.match(move, /wip: engineRef\.current\.wip,/)
+  assert.match(move, /moved\.queued === undefined \? \{ ticket: moved\.ticket \} : \{ ticket: moved\.ticket, queued: moved\.queued \}/)
 })
 
 test('the client sends Start build as an action from the card and from the ticket page', async () => {
@@ -109,4 +112,43 @@ test('the cards have no drop handlers of their own: the column owns the drop', a
   const column = src.slice(src.indexOf('function Column(props)'), src.indexOf('function SegmentedControl'))
   assert.match(column, /onDragOver: function \(ev\)/)
   assert.match(column, /onDrop: function \(ev\)/)
+})
+
+// ------------------------------------------------------------------ KAN-72 --
+//
+// The cap is the engine's rule; the page is where a person changes it and where
+// a queued move has to explain itself. These are source contracts over the real
+// browser half and the real host, the same way the Start build wiring is pinned.
+
+test('setWipCap is a registered endpoint the header control calls', async () => {
+  const host = await readFile(HOST, 'utf8')
+  assert.match(host, /'setWipCap',/, 'it must be in ENDPOINTS or the route is never registered')
+  const endpoint = host.slice(host.indexOf("case 'setWipCap'"), host.indexOf("case 'create'"))
+  assert.match(endpoint, /engineRef\.current\.setWipCap\(p\.cap, \{ actor: 'human' \}\)/)
+  assert.match(endpoint, /boardFeedRef\.current\?\.notify\(\)/, 'a cap change wakes the push channel so every open page redraws')
+})
+
+test('the header carries a WIP pill that opens the cap dialog', async () => {
+  const src = await clientSource()
+  assert.match(src, /function WipControl\(props\) \{/)
+  assert.match(src, /children: "WIP " \+ occupancy \+ "\/" \+ \(cap === null \? "\?" : cap\)/)
+  assert.match(src, /h\(WipControl, \{ wip: board \? board\.wip : null, onSave: function \(cap\) \{ return act\("setWipCap", \{ cap: cap \}\); \} \}\)/)
+  // The dialog edits a whole number of at least one and refuses anything else.
+  assert.match(src, /type: "number", min: "1", step: "1"/)
+  assert.match(src, /The cap has to be a whole number of at least 1\./)
+})
+
+test('the Working column header speaks in the cap units the pill uses', async () => {
+  const src = await clientSource()
+  assert.match(src, /var wipLabel = wipInfo && typeof wipInfo\.occupancy === "number" \? wipInfo\.occupancy \+ "\/" \+ wipInfo\.cap : null;/)
+  assert.match(src, /column: "working", label: "Working", items: columns\.working, countLabel: wipLabel, countTitle: wipTitle/)
+  assert.match(src, /children: props\.countLabel === undefined \|\| props\.countLabel === null \? items\.length : props\.countLabel/)
+})
+
+test('a queued move reads as a queue place, not a failure, in both paths', async () => {
+  const src = await clientSource()
+  // The action path (Start build, the ticket page) and the drag path both show
+  // the engine's own sentence when the board was full.
+  assert.match(src, /var queued = res\.value && res\.value\.queued;\s*\n\s*setNotice\(queued \? queued\.reason : null\);/)
+  assert.match(src, /else if \(res && res\.value && res\.value\.queued\) setNotice\(res\.value\.queued\.reason\);/)
 })

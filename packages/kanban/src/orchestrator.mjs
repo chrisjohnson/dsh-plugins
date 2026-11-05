@@ -673,7 +673,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_board',
     description:
-      'Read the whole board as the orchestrator sees it: every open ticket with its column, phase, park reason, attempt count, whether a session is running on it, the question it is waiting on when one is open (`pendingQuestion`), and the settings `kanban_configure` can change. No gate — read freely, as often as you like.',
+      'Read the whole board as the orchestrator sees it: every open ticket with its column, phase, park reason, attempt count, whether a session is running on it, the question it is waiting on when one is open (`pendingQuestion`), and the settings `kanban_configure` can change. `engine` carries the Working cap the board enforces: `wipCap` (the number in force, which a person can change from the page at any time), `working` (how many slots are taken), `driving` (how many turns are running) and `queue` (the tickets waiting for a slot, head first). No gate — read freely, as often as you like.',
     parameters: {},
     guard: () => ({ ok: true }),
     run: async (_args, api) => api.board(),
@@ -800,7 +800,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_move',
     description:
-      'Move an open ticket between Backlog and Working. Into Working is a statement that the engine should drive it now; back into Backlog parks it. Done and Discarded are a human’s calls and this tool will not make them.',
+      'Move an open ticket between Backlog and Working. Into Working is a statement that the engine should drive it now; back into Backlog parks it. Done and Discarded are a human’s calls and this tool will not make them. The engine enforces a cap on Working: at the cap the move is queued rather than made, and the answer says `moved: false` with a `queued` block naming the cap, the occupancy and the position the ticket took in line — it starts on its own when a slot frees. That is the limit working, not a refusal to work around: do not retry the move or push a second ticket to force a full board open.',
     parameters: {
       ticket: TICKET_ARG,
       to: { type: 'string', required: true, description: 'Where to put it: "backlog" or "working".' },
@@ -819,7 +819,7 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   {
     name: 'kanban_start',
     description:
-      'Start work the engine is not yet driving: "planning" plans a Backlog ticket in place, "build" moves a planned ticket into Working and launches the build. A ticket already moving says so — do not push it twice.',
+      'Start work the engine is not yet driving: "planning" plans a Backlog ticket in place, "build" moves a planned ticket into Working and launches the build. A ticket already moving says so — do not push it twice. A build started onto a full board is queued, not forced: the answer says `started: false` with the `queued` position, and the engine starts it when a slot frees.',
     parameters: {
       ticket: TICKET_ARG,
       what: { type: 'string', required: true, description: '"planning" or "build".' },
