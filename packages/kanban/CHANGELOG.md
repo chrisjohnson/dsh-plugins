@@ -31,6 +31,8 @@
 
 ## 0.32.0
 
+### Added
+
 - **The orchestrator can discard a ticket (KAN-65).** `kanban_discard` ends an open
   ticket with a required non-empty reason, and refuses one that is already Done or
   Discarded. It runs the engine's own discard path — sessions closed, run ended,
