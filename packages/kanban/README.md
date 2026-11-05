@@ -282,7 +282,11 @@ reported unmet). A rework prompt adds the review that sent the round back, and
 the no-progress rule. The review prompt carries the same ticket and plan plus the
 implementer's result. Build and rework prompts also tell the agent not to create
 handoff, runbook, deploy-notes, smoke-results or summary documents, and to keep run
-evidence under an ignored directory. Tool-call argument schemas are unchanged.
+evidence under an ignored directory. Both planning prompts also say that the build
+runs in the same working copy the planning session runs in — the clones, files and
+git state the planner can see are what the build will find — so a plan stops opening
+with redundant "set up the source clone" steps (0.34.1). Tool-call argument schemas
+are unchanged.
 
 ## Checkout isolation (0.19.0)
 
