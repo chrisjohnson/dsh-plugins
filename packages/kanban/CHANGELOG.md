@@ -5,6 +5,20 @@
 
 ## Unreleased
 
+## 0.35.0
+
+### Changed
+
+- **The Work page header now draws the ticket flow instead of describing it
+  (KAN-68).** The line "Ticket flow from plan to approval · sequential workflow
+  sessions" is gone. In its place sits a compact full-width ribbon: one thin
+  coloured bar per lifecycle stage — Plan, Build, Review, Approval, Done — with
+  the stage name floating underneath, in the same segment language a completed
+  ticket's step strip uses and in the same five phase colors. The ribbon spans
+  the width the board columns do and is static, so it renders before the board
+  payload arrives. On a phone (≤768px) the labels are hidden and the bars shrink
+  to 3px, leaving a colour cue that costs almost no vertical space.
+
 ## 0.34.1
 
 ### Fixed

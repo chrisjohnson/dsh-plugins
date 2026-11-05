@@ -224,6 +224,16 @@ var CSS =
 		+ ".kb-title{margin:0;font:500 20px/28px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
 		+ ".kb-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary,#888);font-size:12px;line-height:18px}"
 		+ ".kb-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}"
+		// KAN-68: the Work page flow ribbon. One row per stage, the same 4px
+		// segment language as a ticket's kb-steps strip, with the stage name
+		// floating under it. `flex:1 1 100%` puts it on its own line of the
+		// wrapping page header, so it spans exactly the width of the columns.
+		+ ".kb-flow{display:flex;align-items:flex-start;gap:4px;flex:1 1 100%;min-width:0;margin:11px 0 13px}"
+		+ ".kb-flow-seg{--kb-flow-color:#64748b;flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:4px}"
+		+ ".kb-flow-bar{height:4px;border-radius:999px;background:linear-gradient(90deg,color-mix(in srgb,var(--kb-flow-color) 35%,transparent),var(--kb-flow-color) 42%,color-mix(in srgb,var(--kb-flow-color) 62%,transparent));box-shadow:0 2px 7px -2px color-mix(in srgb,var(--kb-flow-color) 60%,transparent)}"
+		+ ".kb-flow-label{font:600 10px/13px var(--dsw-font-family,sans-serif);letter-spacing:.09em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+		+ ".kb-flow-label::before{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--kb-flow-color);margin-right:5px;vertical-align:middle}"
+		+ ".kb-flow-seg-plan{--kb-flow-color:#2563eb}.kb-flow-seg-implement{--kb-flow-color:#0d9488}.kb-flow-seg-review{--kb-flow-color:#db2777}.kb-flow-seg-verify{--kb-flow-color:#7c3aed}.kb-flow-seg-closed{--kb-flow-color:#15803d}"
 		+ ".kb-kpi{position:relative;overflow:hidden;padding:10px 12px;border:1px solid color-mix(in srgb,var(--kb-accent) 22%,var(--dsw-alias-border-l2,#e5e7eb));border-radius:var(--dsw-radius-md,12px);background:linear-gradient(135deg,color-mix(in srgb,var(--kb-accent) 8%,var(--dsw-alias-bg-layer-1,#fff)),var(--dsw-alias-bg-layer-1,#fff))}"
 		+ ".kb-kpi::after{content:'';position:absolute;right:-16px;top:-22px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--kb-accent) 16%,transparent),transparent 70%)}"
 		+ ".kb-kpi-value{font:600 22px/26px var(--dsw-font-family,sans-serif);font-variant-numeric:tabular-nums;color:var(--kb-accent)}"
@@ -450,6 +460,9 @@ var CSS =
 		+ ".kb-cols{grid-template-columns:1fr;min-width:0;gap:10px}.kb-col{max-height:none}"
 		+ ".kb-col-pinned{position:static;height:auto}.kb-col-pinned .kb-list{flex:none;max-height:300px;overflow-y:auto}"
 		+ ".kb-created{display:none}"
+		// KAN-68: on a phone the ribbon keeps its colour cue and loses the words,
+		// so it costs a few pixels of height instead of a wrapped row of labels.
+		+ ".kb-flow{margin:8px 0 10px;gap:3px}.kb-flow-label{display:none}.kb-flow-bar{height:3px}"
 		+ ".kb-mobcolbar{display:flex;gap:8px;margin:0 0 10px}.kb-col-toggle{flex:1 1 0}.kb-col-toggle.on{border-color:var(--dsw-alias-border-l3,#cbd2da);background:var(--dsw-alias-bg-layer-2,#eee)}"
 		+ ".kb-col-backlog,.kb-col-done{display:none}.kb-cols.show-backlog .kb-col-backlog,.kb-cols.show-done .kb-col-done{display:flex}"
 		+ "}";
@@ -3022,7 +3035,6 @@ var CSS =
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
 						h("h1", { className: "kb-title", children: "Work" }),
-						h("div", { className: "kb-sub", children: board ? "Ticket flow from plan to approval · sequential workflow sessions" : "Loading the board…" })
 					),
 					h("div", { className: "kb-actions" },
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
@@ -3045,6 +3057,19 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
 						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
+					),
+					// KAN-68: the lifecycle every ticket walks, drawn as a ribbon the
+					// full width of the columns. Static on purpose — the five stages
+					// do not depend on the board payload, so they render before it
+					// arrives. Labels float under each stage on a wide screen and drop
+					// out on a phone, where the bar is only a colour cue.
+					h("div", { className: "kb-flow", title: "Every ticket runs these five stages, one sequential workflow session each" },
+						PHASES.map(function (phase) {
+							return h("div", { key: phase, className: "kb-flow-seg kb-flow-seg-" + phase },
+								h("span", { className: "kb-flow-bar" }),
+								h("span", { className: "kb-flow-label", children: phaseLabel(phase) })
+							);
+						})
 					)
 				),
 				h("div", { className: "kb-body", ref: bodyRef },
