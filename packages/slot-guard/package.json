@@ -1,0 +1,50 @@
+{
+  "name": "dsh-slot-guard",
+  "version": "0.1.0",
+  "description": "Makes a plugin's render crash impossible to miss in the Web GUI: decodes minified React hook-order errors (#300/#310/#311) into a readable, timestamped console line naming the slot, styles the renderer's invisible crash face into a visible red banner, and paints a reload overlay when the whole React root goes empty instead of leaving a white page.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "diagnostics",
+    "debugging",
+    "react",
+    "error-boundary",
+    "web-gui"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/slot-guard"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/slot-guard#readme",
+  "bugs": "https://github.com/chrisjohnson/dsh-plugins/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
