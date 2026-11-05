@@ -566,7 +566,8 @@ anything it caused itself (`actor: 'orchestrator'` — its own moves are not new
 and a third queued digest while two are still unread, so a session that is busy
 answering you is never buried in board traffic. Everything is delivered through
 `followup`, which queues: a digest cannot interrupt a turn, so it cannot interrupt
-you.
+you. The one thing that can interrupt a worker is a `kanban_message` sent with
+`mode: 'steer'` — never board traffic.
 
 **What it can do.** `kanban_board`, `kanban_ticket` and `kanban_sessions` to read;
 `kanban_create` (file a new ticket into Backlog — work it discovers, including a
@@ -575,6 +576,14 @@ of a ticket nothing has started) to author; `kanban_configure` (change the
 settings of an open ticket — see below); `kanban_move` (Backlog ⇄ Working),
 `kanban_start` (planning or build), `kanban_retry` (a parked ticket, with an
 instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
+that halted mid-turn), `kanban_message` (a note into a ticket's live session,
+queued or steered — see below) and
+`kanban_discard` (end an open ticket, with a reason) to act. That is the whole
+menu, and it is enforced in code, not in prose: there is no tool that approves or
+closes a ticket as done, and none for a question that genuinely needs a human — a
+worker question that does not need one is answered with `kanban_message` — while
+the session runs under a read-only sandbox with `write` and `edit` restricted
+away. A filed ticket goes through the same store path a human
 that halted mid-turn), `kanban_message` (a note into a ticket's live session) and
 `kanban_discard` (end an open ticket, with a reason) to act. That is the whole
 menu, and it is enforced in code, not in prose: there is no tool that approves or
@@ -587,6 +596,19 @@ takes title and body only, and is locked by the same pristine rule as the human
 edit boundary — once anything has touched a ticket, it can no longer be edited. A
 call that crosses a boundary is refused at the tool with a sentence explaining
 whose call it was instead.
+
+**A message can interrupt (0.33.0).** `kanban_message` takes `mode`: `queue` (the
+default, and every message before this) waits for the turn in flight and arrives
+as the session's next input; `steer` injects it into that turn at the next step —
+the same seam a person uses when they steer a running session in the GUI — so the
+worker can change course before it reaches the step the correction was about.
+Steer is for a time-critical correction, not a nudge: an interruption discards the
+work the session had done since its last step. `planMessageDelivery` decides the
+outcome from the resolved session and the agent's live status, and the tool result
+reports it as `delivery: 'injected' | 'queued' | 'session-gone'` (plus a one-line
+`reason` when a steer degraded to a queue because the session was idle, or when
+there is no session at all), so the orchestrator knows what landed instead of
+assuming it. An unknown `mode` is refused at the guard.
 
 **Discarding (0.32.0).** `kanban_discard` needs a non-empty reason and refuses a
 ticket that is already Done or Discarded, so it cannot reopen or double-close. It

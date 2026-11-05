@@ -106,7 +106,16 @@ sessions exist and what state each is in.
 - `kanban_kick` — ask the harness to continue a ticket session that halted
   mid-turn.
 - `kanban_message` — send a message into a ticket's live session: a correction, a
-  pointer, a question for whoever is working there.
+  pointer, a question for whoever is working there. `mode: "queue"` (the default)
+  delivers it as that session's next input, once the turn in flight ends;
+  `mode: "steer"` interrupts that turn. Reserve steer for a correction that must
+  land **before** the step it changes — a warning that arrives after the release
+  step it warned about is useless — never for a nudge, because an interruption
+  costs the session the work it had done since its last step. The result says
+  what actually happened (`injected`, `queued` or `session-gone`); a steer to a
+  session that is not mid-turn degrades to a queue and says so. `kanban_sessions`
+  shows each session's running or idle state, so the mode is a deliberate choice
+  and not a guess.
 - `kanban_discard` — close a ticket without approval, with a reason, when the work
   is not going to be done at all: a duplicate, a misread, something the board
   owner has already decided against.
