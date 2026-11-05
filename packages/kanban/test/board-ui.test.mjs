@@ -152,3 +152,52 @@ test('the Work header can restart the orchestrator session', async () => {
   assert.equal(/function restartOrchestrator\(\)[\s\S]{0,600}?React\.use(State|Effect|Ref|Memo)/.test(page), false, 'the restart handler must not call a hook')
 })
 
+
+// KAN-68: the Work page said "Ticket flow from plan to approval · sequential
+// workflow sessions" in a line nobody read. The five stages are now drawn as a
+// ribbon the full width of the columns — a thin coloured bar per stage with the
+// stage name floating under it, the same segment language a completed ticket's
+// kb-steps strip uses. On a phone the words go and the bar stays.
+test('the Work header draws the five-stage flow as a full-width ribbon', async () => {
+  const src = await clientSource()
+  const page = sliceFunction(src, 'KanbanPage')
+
+  // The sentence is gone, and so is the board-dependent branch: the flow is
+  // static, so the header no longer has a "Loading the board…" state.
+  assert.equal(src.includes('Ticket flow from plan to approval'), false, 'the old subtitle line was replaced')
+  assert.equal(src.includes('Loading the board…'), false, 'the ribbon does not wait on the board payload')
+
+  // One segment per lifecycle phase, taken from PHASES so the ribbon cannot
+  // drift from the engine's own lifecycle, bar above label.
+  const flowAt = page.indexOf('className: "kb-flow"')
+  assert.ok(flowAt >= 0, 'the ribbon renders in the page header')
+  const flow = page.slice(flowAt, page.indexOf('h("div", { className: "kb-body"', flowAt))
+  assert.match(flow, /PHASES\.map\(function \(phase\) \{/, 'segments come from PHASES in lifecycle order')
+  assert.match(flow, /"kb-flow-seg kb-flow-seg-" \+ phase/, 'each segment is tagged with its phase')
+  assert.match(flow, /className: "kb-flow-label", children: phaseLabel\(phase\)/, 'labels use the ticket lifecycle names: Plan, Build, Review, Approval, Done')
+  assert.ok(flow.indexOf('kb-flow-bar') < flow.indexOf('kb-flow-label'), 'the bar sits above the label')
+  // No hook is added for a static element, so the slot keeps its hook count.
+  assert.equal(/React\.use/.test(flow), false, 'the ribbon adds no hook')
+
+  // The five stage colors, in the ribbon's own rules, matching the phase tones
+  // used by the card badges and the ticket lifecycle strip.
+  const HEXES = { plan: '#2563eb', implement: '#0d9488', review: '#db2777', verify: '#7c3aed', closed: '#15803d' }
+  Object.keys(HEXES).forEach((phase) => {
+    assert.ok(
+      src.includes(`.kb-flow-seg-${phase}{--kb-flow-color:${HEXES[phase]}}`),
+      `the ${phase} segment carries its phase color`
+    )
+  })
+  // Full width like the columns: it is its own row of the wrapping page header,
+  // and it shares the header's horizontal inset, which is the body's too.
+  assert.match(src, /\.kb-flow\{[^}]*flex:1 1 100%/, 'the ribbon takes a full-width row of the header')
+  // Compact: a 4px bar, a 4px gap and a 13px label line.
+  assert.match(src, /\.kb-flow-bar\{height:4px/, 'the bar stays thin')
+  assert.match(src, /\.kb-flow-label\{font:600 10px\/13px/, 'the label line stays short')
+
+  // Mobile: the labels are gone, the thin bar remains as the colour cue.
+  const mobile = src.slice(src.indexOf('@media (max-width:768px){'))
+  assert.ok(mobile.length > 0, 'the phone media query still exists')
+  assert.match(mobile, /\.kb-flow-label\{display:none\}/, 'the labels are hidden on a phone')
+  assert.match(mobile, /\.kb-flow-bar\{height:3px\}/, 'the bar survives on a phone')
+})
