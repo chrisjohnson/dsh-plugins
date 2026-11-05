@@ -159,3 +159,15 @@ test('window error and unhandledrejection listeners are installed', () => {
   rejection.handler({ reason: new Error('Minified React error #311') })
   assert.ok(logged.some((l) => /unhandledrejection/.test(l)), 'the rejection was not decoded')
 })
+
+test('the stored crash carries the advice the overlay renders', () => {
+  const { exports, fakeConsole, stubWindow } = loadClient()
+  exports.apply()
+  fakeConsole.error("slot entry crashed in 'a.slot':", new Error('Minified React error #311'))
+  const state = stubWindow.__dshSlotGuard
+  assert.equal(state.version, '0.1.1')
+  assert.equal(state.lastCrash.slotKey, 'a.slot')
+  assert.equal(state.lastCrash.code, 311)
+  assert.match(state.lastCrash.advice, /stable module-scope fallback/)
+  assert.equal(state.overlayShown, false, 'no overlay has been painted on this page')
+})

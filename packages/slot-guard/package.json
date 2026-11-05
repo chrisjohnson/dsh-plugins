@@ -1,6 +1,6 @@
 {
   "name": "dsh-slot-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Makes a plugin's render crash impossible to miss in the Web GUI: decodes minified React hook-order errors (#300/#310/#311) into a readable, timestamped console line naming the slot, styles the renderer's invisible crash face into a visible red banner, and paints a reload overlay when the whole React root goes empty instead of leaving a white page.",
   "type": "module",
   "license": "MIT",

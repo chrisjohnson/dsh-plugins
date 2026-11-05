@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
 		var module = { exports: {} };
 		var exports = module.exports;
 
-		var VERSION = "0.1.0";
+		var VERSION = "0.1.1";
 		var STYLE_ID = "dsh-slot-guard-style";
 		var OVERLAY_ID = "dsh-slot-guard-overlay";
 		var ROOT_ID = "root";
@@ -164,7 +164,7 @@ window.__ModuleLoader__.load({
 			var decoded = decode(text);
 			var slotKey = slotKeyIn(text) || (lastCrash && lastCrash.slotKey) || null;
 			if (decoded.code === null && !slotKey) return;
-			lastCrash = { code: decoded.code, slotKey: slotKey, at: Date.now(), headline: headline(decoded, slotKey, where) };
+			lastCrash = { code: decoded.code, slotKey: slotKey, at: Date.now(), headline: headline(decoded, slotKey, where), advice: decoded.advice };
 			if (typeof window !== "undefined") window.__dshSlotGuard = guardState();
 			if (decoded.code === null) {
 				report("slot-crash", headline(decoded, slotKey, where), "the region rendered its crash face; the original line is above");
@@ -174,7 +174,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function guardState() {
-			return { version: VERSION, lastCrash: lastCrash, overlayShown: overlay !== null };
+			return { version: VERSION, lastCrash: lastCrash, overlayShown: !!overlay };
 		}
 
 		function installConsoleWatch() {
@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
 		function showOverlay() {
 			if (overlay || typeof document === "undefined" || !document.body) return;
 			var reason = lastCrash ? lastCrash.headline : "the React root went empty without a slot boundary catching it";
-			var advice = lastCrash && lastCrash.code ? decode("").advice : "";
+			var advice = (lastCrash && lastCrash.code && lastCrash.advice) || "";
 			var box = document.createElement("div");
 			box.id = OVERLAY_ID;
 			box.setAttribute("role", "alert");
