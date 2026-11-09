@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.36.0
+
 ### Changed
 
 - **The New-ticket workspace field is now a filter, not a fixed list (KAN-77).**
