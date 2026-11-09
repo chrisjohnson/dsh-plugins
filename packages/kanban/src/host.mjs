@@ -124,6 +124,14 @@ export default async function kanban(ctx, config = {}) {
   const engineRef = { current: engine };
   const reloadState = { lastJson: null, timer: null };
 
+  // KAN-77: the last workspace a ticket was created with, remembered for the life
+  // of the process and handed to the New-ticket form through `capabilities` so the
+  // next one opens pointed at the same place. Deliberately not persisted and not
+  // configurable: it is a convenience, and a restart starts it blank again. Only a
+  // create with a non-empty workspace updates it — an edit never does, and neither
+  // does a create that left the field empty (that one means "engine default").
+  let lastWorkspace = null;
+
   // KAN-60: the permanent orchestrator session. It rides the engine's lifetime
   // because it is the engine's counterpart — it watches what the engine does and
   // pushes the tickets the engine left stuck.
@@ -517,6 +525,10 @@ export default async function kanban(ctx, config = {}) {
             // Images first: every pending ref must resolve to a stored attachment
             // before a ticket exists. A failed save creates nothing.
             const { images: uploads, ...fields } = p;
+            // KAN-77: remember it for the next New-ticket form (see `lastWorkspace`).
+            if (typeof fields.workspaceCwd === 'string' && fields.workspaceCwd !== '') {
+              lastWorkspace = fields.workspaceCwd;
+            }
             const prepared = await prepareBodyImages({
               body: typeof fields.body === 'string' ? fields.body : '',
               images: uploads,
@@ -771,6 +783,9 @@ export default async function kanban(ctx, config = {}) {
                 // broken one can be labelled instead of silently failing.
                 presets: await presetsCapability(ctx, log),
                 writeModes: WRITE_MODES,
+                // KAN-77: what the New-ticket workspace box defaults to — the last
+                // workspace a ticket was created with in this process, or null.
+                lastWorkspace,
               },
             };
           case 'worktree': {
