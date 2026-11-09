@@ -373,3 +373,41 @@ test('setWipCap changes the cap live, re-queues the overflow, and persists', { s
   assert.match(bad.error.message, /whole number of at least 1/)
   assert.equal(store.getSetting('wip_cap'), '2', 'a refused cap changed nothing')
 })
+
+// KAN-77: the New-ticket form opens its workspace box on the last workspace a
+// ticket was created with. The Host remembers that in process memory only — no
+// config key, no board-db row — and hands it out with `capabilities`, so a restart
+// starts blank and nothing about the board changes.
+
+test('capabilities.lastWorkspace follows the creates that name a workspace', { skip }, async () => {
+  const { rpc } = await boot()
+
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, null, 'a fresh host remembers nothing')
+
+  const first = await rpc('create', { title: 'one', body: '', column: 'backlog', workspaceCwd: '/work/first' })
+  assert.equal(first.ok, true, JSON.stringify(first))
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, '/work/first')
+
+  // A create that leaves the field empty means "engine default"; it says nothing
+  // about where the last ticket went, so the remembered path survives it.
+  const second = await rpc('create', { title: 'two', body: '', column: 'backlog' })
+  assert.equal(second.ok, true, JSON.stringify(second))
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, '/work/first')
+
+  const blank = await rpc('create', { title: 'three', body: '', column: 'backlog', workspaceCwd: '' })
+  assert.equal(blank.ok, true, JSON.stringify(blank))
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, '/work/first')
+
+  const third = await rpc('create', { title: 'four', body: '', column: 'backlog', workspaceCwd: '/work/second' })
+  assert.equal(third.ok, true, JSON.stringify(third))
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, '/work/second')
+
+  // Editing a ticket is not creating one: the box keeps the last create's answer.
+  const edited = await rpc('update', { id: third.value.ticket.id, patch: { workspaceCwd: '/work/edited' } })
+  assert.equal(edited.ok, true, JSON.stringify(edited))
+  assert.equal((await rpc('capabilities')).value.lastWorkspace, '/work/second')
+
+  // A second host — what a service restart is — starts blank again.
+  const fresh = await boot()
+  assert.equal((await fresh.rpc('capabilities')).value.lastWorkspace, null)
+})

@@ -195,6 +195,16 @@ var CSS =
 		+ ".kb-label{font:500 11px/16px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-secondary,#555)}"
 		+ ".kb-hint{font:400 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-tertiary,#888)}"
 		+ ".kb-err{font:400 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-error,#9b1c1c)}"
+		// KAN-77: the New-ticket workspace combobox — a text field with the filtered
+		// registry list floating under it. The list is absolutely positioned inside
+		// the wrapper so it never reflows the form, and it sits above the rows below
+		// it (the modal backdrop is z-index 1000, so anything here stays well under
+		// it; 20 only has to beat the sibling form blocks).
+		+ ".kb-combo-wrap{position:relative;display:block}"
+		+ ".kb-combo-input{width:100%}"
+		+ ".kb-combo-list{position:absolute;left:0;top:calc(100% + 4px);z-index:20;box-sizing:border-box;width:100%;max-height:216px;overflow-y:auto;padding:4px;border:.5px solid var(--dsw-alias-border-l3,#d0d0d0);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 10px 26px rgba(15,23,42,.16)}"
+		+ ".kb-combo-item{padding:5px 8px;border-radius:var(--dsw-radius-sm,8px);font:400 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-primary,#111);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}"
+		+ ".kb-combo-item.on{background:var(--dsw-alias-bg-layer-2,#f1f4f8)}"
 		+ ".kb-table{width:100%;border-collapse:collapse;font-size:12px;line-height:18px}"
 		+ ".kb-table th{text-align:left;font:600 10px/14px var(--dsw-font-family,sans-serif);text-transform:uppercase;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary,#888);padding:4px 8px;border-bottom:.5px solid var(--dsw-alias-border-l1,#e4e4e4)}"
 		+ ".kb-table td{padding:4px 8px;border-bottom:.5px solid var(--dsw-alias-border-l1,#f0f0f0);vertical-align:top}"
@@ -1611,13 +1621,61 @@ var CSS =
 			return out;
 		}
 
+		// KAN-77: the matching rule behind the New-ticket workspace box, which works
+		// like an address bar — type any part of a workspace's name or path and the
+		// dropdown offers the ones that fit. A case-insensitive subsequence test
+		// (so "dshpl" finds "dsh-plugins") over the title and the path, best kind of
+		// hit first: a path prefix, then a title prefix, then a title subsequence,
+		// then a path subsequence, and within a kind the registry's own order.
+		// Eight rows is the cap; an empty query is not a filter, it is the whole
+		// list. Pure — no DOM, no React, no RPC — so the test file runs exactly this
+		// code (test/workspace-combo.test.mjs).
+		function fuzzyWorkspaces(query, items) {
+			var list = Array.isArray(items) ? items.filter(function (item) { return item !== null && item !== undefined; }) : [];
+			var q = String(query === null || query === undefined ? "" : query).trim().toLowerCase();
+			if (q === "") return list.slice();
+			var chars = q.split("");
+			// Every character of `q` in order somewhere in `text`, not necessarily
+			// adjacent: "kan7" matches "kanban-77-lab".
+			function subsequence(text) {
+				var at = 0;
+				for (var i = 0; i < text.length && at < chars.length; i += 1) {
+					if (text.charAt(i) === chars[at]) at += 1;
+				}
+				return at === chars.length;
+			}
+			var hits = [];
+			list.forEach(function (item, index) {
+				var title = String(item.title === null || item.title === undefined ? "" : item.title).toLowerCase();
+				var path = String(item.path === null || item.path === undefined ? "" : item.path).toLowerCase();
+				var rank = -1;
+				if (path.indexOf(q) === 0) rank = 0;
+				else if (title.indexOf(q) === 0) rank = 1;
+				else if (subsequence(title)) rank = 2;
+				else if (subsequence(path)) rank = 3;
+				if (rank === -1) return;
+				hits.push({ item: item, rank: rank, index: index });
+			});
+			hits.sort(function (a, b) { return a.rank - b.rank || a.index - b.index; });
+			return hits.slice(0, 8).map(function (hit) { return hit.item; });
+		}
+
 		function CreateForm(props) {
-			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
+			var s = React.useState({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: props.defaultWorkspace || "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
 			var form = s[0], setForm = s[1];
 			var e = React.useState(null);
 			var err = e[0], setErr = e[1];
 			var b = React.useState(false);
 			var busy = b[0], setBusy = b[1];
+			// KAN-77: the workspace combobox's own two pieces of state — whether its
+			// dropdown is showing, and which row the arrow keys are on. Both are
+			// declared here, unconditionally, like every other hook in this form: the
+			// Rules-of-Hooks gate (scripts/check-plugin-hooks.mjs) fails a component
+			// whose hook count varies between renders.
+			var co = React.useState(false);
+			var comboOpen = co[0], setComboOpen = co[1];
+			var ai = React.useState(-1);
+			var activeIndex = ai[0], setActiveIndex = ai[1];
 			var br = React.useRef(null);
 			var bodyRef = br;
 			var fr = React.useRef(null);
@@ -1636,6 +1694,44 @@ var CSS =
 				var next = Object.assign({}, form);
 				next[key] = value;
 				setForm(next);
+			}
+
+			// KAN-77: the workspace box is free text with a filter under it. Typing
+			// narrows the registry list; clicking or Enter on a row writes that
+			// workspace's path into the field, exactly like picking an address
+			// suggestion. Anything else the person types is kept as typed — a path the
+			// registry does not know is a legitimate answer — and an empty field still
+			// means "Engine default".
+			var wsMatches = fuzzyWorkspaces(form.workspace, props.workspaces || []);
+			var showCombo = comboOpen && wsMatches.length > 0;
+			function pickWorkspace(item) {
+				field("workspace", String(item && item.path !== undefined && item.path !== null ? item.path : ""));
+				setComboOpen(false);
+				setActiveIndex(-1);
+			}
+			function workspaceKeyDown(ev) {
+				if (!showCombo) {
+					if (ev.key === "ArrowDown") { setComboOpen(true); ev.preventDefault(); }
+					return;
+				}
+				if (ev.key === "ArrowDown") {
+					setActiveIndex(function (i) { return (i + 1) % wsMatches.length; });
+					ev.preventDefault();
+				} else if (ev.key === "ArrowUp") {
+					setActiveIndex(function (i) { return i <= 0 ? wsMatches.length - 1 : i - 1; });
+					ev.preventDefault();
+				} else if (ev.key === "Enter") {
+					// Enter on a highlighted row picks it; otherwise it closes the list
+					// and lets the dialog's own submit happen.
+					if (activeIndex >= 0 && activeIndex < wsMatches.length) pickWorkspace(wsMatches[activeIndex]);
+					else setComboOpen(false);
+					ev.preventDefault();
+				} else if (ev.key === "Escape") {
+					// Swallowed here so the first Escape closes the list, not the form.
+					setComboOpen(false);
+					ev.preventDefault();
+					ev.stopPropagation();
+				}
 			}
 
 			function submit() {
@@ -1667,8 +1763,12 @@ var CSS =
 					}).then(function (res) {
 						setBusy(false);
 						if (res && res.ok) {
-							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
-							props.onCreated(res.value.ticket);
+							setForm({ title: "", body: "", acceptance: "", timing: "at_pickup", questions: "interactive", priority: 0, allowPaid: false, budget: 0, workspace: props.defaultWorkspace || "", status: "backlog", worktree: null, preset: "", writeMode: "workspace-write" });
+							setComboOpen(false);
+							setActiveIndex(-1);
+							// KAN-77: the workspace just used travels back up to the page so
+							// the next ticket opens pointed at the same place.
+							props.onCreated(res.value.ticket, form.workspace || "");
 						} else {
 							setErr(res && res.error ? res.error.message : "Could not create the ticket.");
 						}
@@ -1686,11 +1786,49 @@ var CSS =
 				h("div", { className: "kb-row" },
 					h("div", { style: { flex: 1, minWidth: 220 } },
 						h("div", { className: "kb-label", children: "Workspace" }),
-						h("select", { className: "kb-select", style: { width: "100%" }, value: form.workspace, onChange: function (ev) { field("workspace", ev.target.value); } },
-							h("option", { value: "", children: "Engine default" }),
-							(props.workspaces || []).map(function (workspace) { return h("option", { key: workspace.id || workspace.path, value: workspace.path, children: workspace.title + " — " + workspace.path }); })
+						h("div", { className: "kb-combo-wrap" },
+							h("input", {
+								className: "kb-input kb-combo-input",
+								type: "text",
+								role: "combobox",
+								"aria-autocomplete": "list",
+								"aria-label": "Workspace",
+								"aria-expanded": showCombo,
+								autoComplete: "off",
+								value: form.workspace,
+								placeholder: "Filter workspaces — empty uses the engine default",
+								onChange: function (ev) { field("workspace", ev.target.value); setComboOpen(true); setActiveIndex(-1); },
+								onFocus: function () { setComboOpen(true); setActiveIndex(-1); },
+								onBlur: function () { setComboOpen(false); setActiveIndex(-1); },
+								onKeyDown: workspaceKeyDown
+							}),
+							showCombo ? h("div", { className: "kb-combo-list", role: "listbox", "aria-label": "Matching workspaces" },
+								wsMatches.map(function (item, index) {
+									return h("div", {
+										key: item.id || item.path || index,
+										role: "option",
+										"aria-selected": index === activeIndex,
+										className: "kb-combo-item" + (index === activeIndex ? " on" : ""),
+										// onMouseDown, not onClick: blur fires first on a click
+										// and would close the list before the click ever lands.
+										onMouseDown: function (ev) { ev.preventDefault(); pickWorkspace(item); },
+										onMouseEnter: function () { setActiveIndex(index); },
+										title: (item.title || "") + " — " + (item.path || ""),
+										children: (item.title || "") + " — " + (item.path || "")
+									});
+								})
+							) : null
 						)
 					),
+					// KAN-77: the worktree switch moved up here, beside the workspace
+					// it applies to, instead of sitting alone at the bottom of the form.
+					props.worktreeAvailable ? h("div", { className: "kb-switchrow" },
+						h(Switch, {
+							ariaLabel: "Worktree for this ticket",
+							checked: wantWorktree,
+							onToggle: function (value) { field("worktree", value); }
+						}),
+						h("span", { className: "kb-label", children: "Worktree" })) : null,
 					h("div", null,
 						h("div", { className: "kb-label", children: "Initial status" }),
 						h(SegmentedControl, {
@@ -1704,6 +1842,7 @@ var CSS =
 						})
 					)
 				),
+				props.worktreeAvailable ? h("div", { className: "kb-hint", children: "On by default: a worktree from the latest main is created when planning starts. Turn it off to run in the workspace itself." }) : null,
 				h("div", { className: "kb-row" },
 					h("div", null, h("div", { className: "kb-label", children: "Planning" }),
 						h(SegmentedControl, {
@@ -1754,15 +1893,6 @@ var CSS =
 						h("div", { className: "kb-hint", children: "File policy of the build session." })
 					)
 				),
-				props.worktreeAvailable ? h("div", { className: "kb-row" },
-					h("div", { className: "kb-switchrow" },
-						h(Switch, {
-							ariaLabel: "Worktree for this ticket",
-							checked: wantWorktree,
-							onToggle: function (value) { field("worktree", value); }
-						}),
-						h("span", { className: "kb-label", children: "Worktree" })),
-					h("span", { className: "kb-hint", children: "On by default: a worktree from the latest main is created when planning starts. Turn it off to run in the workspace itself." })) : null,
 				err ? h("div", { className: "kb-err", children: err }) : null,
 				h("div", { className: "kb-row" },
 					h("button", { className: "kb-btn primary", disabled: busy || invalid || form.title.trim() === "", onClick: submit, children: busy ? "Creating…" : "Create ticket" }),
@@ -2832,6 +2962,13 @@ var CSS =
 			var workspaces = ws[0], setWorkspaces = ws[1];
 			var cap = React.useState({ worktree: false });
 			var capabilities = cap[0], setCapabilities = cap[1];
+			// KAN-77: the workspace the last ticket was created in. The Host keeps it
+			// for the life of the process and hands it over with `capabilities`; this
+			// state only overrides that for the session at the keyboard, so the box
+			// is right even before the next capabilities refetch.
+			var lw = React.useState(null);
+			var lastWorkspace = lw[0], setLastWorkspace = lw[1];
+			var defaultWorkspace = lastWorkspace || (capabilities && capabilities.lastWorkspace) || "";
 			var rc = React.useState(null);
 			var routing = rc[0], setRouting = rc[1];
 			var ro = React.useState(false);
@@ -3074,7 +3211,7 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 				),
 				h("div", { className: "kb-body", ref: bodyRef },
 					notice || live.error || detailProblem ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem) : null,
-					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, onClose: function () { setCreating(false); }, onCreated: function (ticket) { setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
+					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, defaultWorkspace: defaultWorkspace, onClose: function () { setCreating(false); }, onCreated: function (ticket, workspace) { if (workspace) setLastWorkspace(workspace); setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						liveToken: liveToken,

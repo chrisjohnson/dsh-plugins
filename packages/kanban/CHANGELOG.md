@@ -5,6 +5,27 @@
 
 ## Unreleased
 
+### Changed
+
+- **The New-ticket workspace field is now a filter, not a fixed list (KAN-77).**
+  It behaves like an address bar: type any part of a registered workspace's title
+  or path and the matches drop down underneath, ranked path prefix → title prefix →
+  title subsequence → path subsequence, capped at eight rows. Clicking a row — or
+  arrowing to it and pressing Enter — writes that workspace's path into the field;
+  Escape closes the list without closing the dialog. Free text is still accepted
+  (a path the registry does not know is a legitimate answer) and an empty field
+  still means the engine default. The matching rule is one pure client function,
+  `fuzzyWorkspaces`, covered by `test/workspace-combo.test.mjs`.
+- **The form opens on the last workspace you used (KAN-77).** The host remembers
+  the workspace of the most recent `create` that named one, for the life of the
+  process, and returns it as `capabilities.lastWorkspace`; the Work page seeds the
+  field from it and updates it after each successful create. Nothing is persisted
+  and there is no config key — a restart starts blank, and a create that left the
+  field empty does not overwrite the remembered path.
+- **The Worktree switch moved up into the workspace row (KAN-77)**, beside the
+  workspace it applies to, instead of sitting alone at the bottom of the form. Its
+  default and its hint are unchanged.
+
 ## 0.35.0
 
 ### Changed

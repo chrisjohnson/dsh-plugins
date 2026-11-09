@@ -911,6 +911,25 @@ red card whose session is paused mid-turn on a person says so in its badge —
 **Awaiting approval** for an unanswered approval prompt, **Waiting on you** for
 an unanswered question — in any phase, not only in approval.
 
+### The new-ticket workspace box (0.36.0)
+
+The **Workspace** field on the New-ticket form is a filter, not a dropdown of
+fixed choices: type any part of a registered workspace's title or path and the
+matching ones appear underneath, best hit first — a path prefix, then a title
+prefix, then a title subsequence, then a path subsequence, capped at eight rows.
+Clicking a row (or arrowing to it and pressing Enter) writes that workspace's
+path into the field. Free text stays allowed: a path the registry does not know
+is a legitimate answer, and an empty field still means *engine default*.
+
+The box opens on the **last workspace a ticket was created with**, remembered in
+the host process and handed to the page through `capabilities.lastWorkspace`. It
+is a convenience, not state: nothing is written to the board db or to config, a
+create that leaves the field empty does not update it, and a service restart
+clears it.
+
+The **Worktree** switch sits in this same row, beside the workspace it applies
+to, instead of on a row of its own at the bottom of the form.
+
 ### How the board stays current
 
 A visible board holds one long-lived `POST /api/kanban/stream` response of
