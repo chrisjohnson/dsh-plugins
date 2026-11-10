@@ -5,6 +5,15 @@
 
 ## Unreleased
 
+### Removed
+
+- **The sidebar session rows no longer show worktree status.** The coloured row badge
+  (`sidebar.session.row.leading`) and the status line on a row's hover card
+  (`sidebar.session.row.hover`) are gone, with their CSS. Status belongs to the
+  session you are in, not to every row in the list: the header pill and its menu, the
+  composer Worktree switch, the right-sidebar *Branch* tab, the session "..." menu
+  items and the archive prompt are all unchanged.
+
 ## 0.3.0
 
 ### Added

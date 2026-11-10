@@ -2,20 +2,19 @@
 
 Git worktree **sessions** for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a session can live in its own self-contained git working copy permanently, instead of the harness's review/acceptance lifecycle.
 
-It borrows the UX of [`dsh-git-worktree`](https://github.com/wloops/dsh-git-worktree) (the composer switch, the session-list status indicator, the session-header menu) and drops everything else: there is no review checkpoint, no preview/apply, no delivery handoff. A working copy here is simply where the session works.
+It borrows the UX of [`dsh-git-worktree`](https://github.com/wloops/dsh-git-worktree) (the composer switch, the session-header menu) and drops everything else: there is no review checkpoint, no preview/apply, no delivery handoff, and nothing on the sidebar rows. A working copy here is simply where the session works.
 
 **Usage guide:** [`docs/USAGE.md`](docs/USAGE.md): surfaces, statuses, workflows, and a screenshot gallery.
 
 ![Session list statuses](docs/screenshots/02-session-list-statuses.png)
 
-> The screenshots were taken on dsh 0.1.5 with the earlier, inlined version of this plugin. The session-row badge is now an icon in the row's leading cell instead of a text pill, so they are out of date until they are retaken on a 0.2.0 UI.
+> The screenshots were taken on dsh 0.1.5 with the earlier, inlined version of this plugin, and they still show the sidebar status badge and hover line, which have since been removed: worktree status is shown once you are in the session. They are out of date until they are retaken on a current UI.
 
 ## What it does
 
 - **Composer switch (blank sessions).** A `Worktree` toggle sits in the composer tool row. Turning it on opens one confirmation dialog; confirming creates the branch and working copy immediately and continues **that** session inside it. The toggle then reads ON and disabled.
 - **`worktree_convert` tool.** Takes a session running in a checkout, creates a working copy, moves its uncommitted work into it (kept recoverable as a `git stash` entry), and continues the conversation in a session rooted there. The continuation carries the conversation **through the last completed turn**; see *Known limits* for what that means when the tool is called in a session's first turn. Once a session is in a working copy the tool is denied for that agent's scope, so it leaves the tool list.
-- **Session-list status badge**, on the session row: **blue** Progressing, **green** Up To Date / In Sync, **amber** Behind, **grey** Unknown/Missing, plus a **yellow glow** when the branch needs rebasing. The row's hover card spells out the full status.
-- **Header pill and menu, for every session.** The pill reads `<name> - <status>` (`brave-otter - Progressing`, `main - In Sync`). Its menu offers *Git Changes*, *Review branch vs `<default>`*, *git fetch*, *Copy worktree path* / *Open worktree folder* for working-copy sessions, and *Move this session into a worktree* for the rest.
+- **Header pill and menu, for every session.** The pill reads `<name> - <status>` (`brave-otter - Progressing`, `main - In Sync`) in the status colour: **blue** Progressing, **green** Up To Date / In Sync, **amber** Behind, **grey** Unknown/Missing, plus a **yellow glow** when the branch needs rebasing; its tooltip spells out the full status. The pill is where this plugin shows worktree status: nothing is added to the sidebar's session rows or their hover cards. Its menu offers *Git Changes*, *Review branch vs `<default>`*, *git fetch*, *Copy worktree path* / *Open worktree folder* for working-copy sessions, and *Move this session into a worktree* for the rest.
 - **Session "..." menu**: *Copy worktree path* and *Open worktree folder* on a session that has a working copy.
 - **Archiving a worktree session asks about the working copy.** The official *Archive* actions (the row's hover button and the "..." menu row) are shadowed: a session with a working copy opens one dialog (*Remove*, *Keep*, *Cancel*) that names the path and branch and warns about uncommitted paths and unpushed commits. *Remove* also retires the dead workspace registration. Every other session archives exactly as before.
 - **Background git with a cache.** TTL cache (single-flight, stale-while-revalidate), a 15 s background refresher that runs only while a page has talked to the host in the last two minutes, and a 90 s-throttled `git fetch` of the source checkout that never blocks a read (a copy's own refs update when the copy fetches; see Working copies).
@@ -73,7 +72,7 @@ The checkout's own `git status` stays clean because creating a copy writes `.dsh
 
 ## Status semantics
 
-| Badge | Meaning |
+| Status | Meaning |
 | --- | --- |
 | blue `Progressing` | work is not published yet: no upstream, or commits ahead of it |
 | amber `Behind` | the upstream moved on and the branch has nothing of its own |
@@ -81,7 +80,7 @@ The checkout's own `git status` stays clean because creating a copy writes `.dsh
 | green `In Sync` | in step with its upstream **and** identical to `origin/<default>` |
 | grey `Missing` | the recorded working-copy directory is gone |
 
-A **yellow glow** is a separate overlay: the branch has its own commits and `origin/<default>` has moved on, so it needs rebasing. Working-tree detail (staged / modified / untracked) is in the hover text, not the colour.
+A **yellow glow** is a separate overlay on the pill: the branch has its own commits and `origin/<default>` has moved on, so it needs rebasing. Working-tree detail (staged / modified / untracked) is in the pill's tooltip, not the colour.
 
 ## The registry
 
@@ -93,8 +92,6 @@ Verified against `@deepseek-ai/dsh-client-ui-workspace` 0.2.0-rc.2 (`lib/types/c
 
 | Seat | Used for |
 | --- | --- |
-| `sidebar.session.row.leading` | the status badge (rendered only by an idle row; a busy or pending row shows its own state dot instead) |
-| `sidebar.session.row.hover` | the status text on the row's hover card |
 | `sidebar.workspaces.session.menu.item` | *Copy worktree path*, *Open worktree folder*; and a same-id `archive` entry at priority -1 that shadows the official one |
 | `sidebar.workspaces.session.row.action` | the same shadow for the hover archive button |
 | `shell.overlay` | the archive dialog |
@@ -124,7 +121,6 @@ answer is a reason, not a mutation.
 ## Known limits
 
 - The keyboard shortcut for *Archive session* calls the official archive directly and is not intercepted: it archives without the dialog and leaves the working copy on disk (the *Keep* outcome).
-- The status badge is drawn only in a row's leading seat, which the official UI renders only for an idle row. There is none on a busy row, a row with a pending interaction, a completed-unread row (its dot), a row with running subagents, an archived row or a blank session, and none in search results. The hover card still shows the status text where the row's hover seat is mounted.
 - A working-copy session is a workspace of its own in the sidebar (named after the copy) and is listed in the new-session workspace dropdown; the official UI offers no seat to regroup it under the project it was branched from. The sidebar's "Group by: Workspace Tree" view option nests a copy under a registered repository workspace by path, but that is a per-browser setting the plugin cannot set.
 - *Remove* in the archive dialog archives the session first and deletes the copy only if that succeeded, so it does nothing while the session is running (the harness refuses to archive running work): stop the session, then archive it again. The dialog's warnings count uncommitted paths, unpublished commits (on HEAD, any branch or any tag, minus anything on a remote-tracking ref, in the source repository or at the commit the copy started from, so a fresh copy's local commits count before it has ever fetched) and stash entries. If any of that could not be read (git failed or timed out, or the source repository moved), the dialog says it could not verify the copy and **Remove is disabled**; Keep still works. Remove is also unavailable while another session still works in the copy (the source row of a conversion).
 - The host re-checks before deleting: the `remove` endpoint forces a fresh read and refuses a copy that cannot be verified (including one that is not a repository of its own, whose `git` would otherwise resolve to the source checkout), and refuses one with uncommitted paths, unpushed commits or stash entries unless the request confirms exactly the plan the host just computed. Ignored files and folders (`.env`, `node_modules/`) are summarized in the dialog but never block it.

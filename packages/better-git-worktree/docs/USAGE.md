@@ -6,9 +6,10 @@ the statuses mean. The design rationale (self-contained working copies, and why
 the sandbox needs no escalation) lives in the plugin `README.md`.
 
 > The screenshots below were captured on dsh 0.1.5 with the earlier, inlined
-> version of this plugin. Pending retake on a 0.2.0 UI: the session-row badge is
-> now an icon in the row's leading cell rather than a text pill, and
-> worktree sessions are their own workspace in the sidebar.
+> version of this plugin. Pending retake on a current UI: the sidebar row badge
+> and the row hover status line shown in these shots have since been **removed**
+> (status now lives only inside the session), and worktree sessions are their own
+> workspace in the sidebar.
 
 ## Gallery
 
@@ -19,9 +20,8 @@ and without a managed worktree.
 
 ![Composer holding a draft, sidebar showing every status](screenshots/01a-composer-with-draft.png)
 
-*The new-session composer holding a draft message, with sidebar status badges
-Progressing, Up To Date, In Sync, Behind, and a yellow REBASE tag on the
-rebase-needing branch.*
+*The new-session composer holding a draft message. (The sidebar in this shot still
+shows the old status badges and REBASE tag; those have been removed.)*
 
 ![Worktree confirmation dialog](screenshots/01-composer-worktree-switch.png)
 
@@ -30,16 +30,16 @@ worktree.*
 
 ### The session list
 
-![Session list with status badges](screenshots/02-session-list-statuses.png)
+![Session list](screenshots/02-session-list-statuses.png)
 
 *Composer in a worktree workspace (chips `rebase-sunny-crane` and
-`Standard mode`) with each session group showing its status badge in the
-sidebar.*
+`Standard mode`). Each session group's row in this shot still carries the old
+status badge; the plugin no longer decorates sidebar rows.*
 
 ![Worktree session pill](screenshots/03-worktree-pill.png)
 
-*Worktree session view with the amber `lively-sparrow - Behind` header pill and
-a hover tooltip over a sidebar session row.*
+*Worktree session view with the amber `lively-sparrow - Behind` header pill; its
+tooltip is the full status.*
 
 ### The header menu
 
@@ -77,11 +77,10 @@ workspace directory            managed working copy
    (main checkout)                     branch: dsh/brave-otter
 ```
 
-Everything this plugin shows — the header pill, the sidebar badge, the menu — is
-about *that checkout*, and it works the same whether the session is in a managed
-worktree or in the workspace directory itself. Only two things are
-worktree-specific: the sidebar badge, and the actions that manage the working
-copy (copy path / open folder / remove on archive).
+Everything this plugin shows — the header pill, the menu — is about *that
+checkout*, and it works the same whether the session is in a managed worktree or
+in the workspace directory itself. Only the actions that manage the working copy
+(copy path / open folder / remove on archive) are worktree-specific.
 
 ## Surfaces
 
@@ -106,7 +105,7 @@ The session header shows a pill:
 brave-otter - Progressing        main - In Sync
 ```
 
-`<name> - <status>`, coloured to match the sidebar badge:
+`<name> - <status>`, coloured by status:
 
 | part | what it is |
 | --- | --- |
@@ -124,21 +123,20 @@ Clicking it opens the actions:
 | **Open worktree folder** | hands the working-copy folder to the desktop file manager (`xdg-open`/`gio`/`nautilus`/…, `open` on macOS, `explorer` on Windows). If the host has no opener installed the menu says so instead of pretending |
 | **Move this session into a worktree** | creates a worktree for a session that does not have one, moves its uncommitted work in, and continues the conversation in a session rooted there (workspace sessions only) |
 
-### 3. Sidebar badge (worktree sessions only)
+### 3. Session "..." menu (worktree sessions only)
 
-Idle rows for worktree sessions carry a small icon in the cell before the title,
-coloured by status; hovering shows the full detail in the session hover card.
-A busy or pending row shows its own state dot instead and no badge. A worktree
-session is its own workspace in the sidebar (named after the working copy), and
-the working copy is also listed in the new-session workspace dropdown; it is
-created by the composer switch, not meant to be picked there.
-
-The session's "..." menu also offers **Copy worktree path** and **Open worktree
+The session's "..." menu offers **Copy worktree path** and **Open worktree
 folder** for these sessions.
+
+A worktree session is its own workspace in the sidebar (named after the working
+copy), and the working copy is also listed in the new-session workspace dropdown;
+it is created by the composer switch, not meant to be picked there. The sidebar
+rows themselves carry no worktree decoration — status is what the header pill
+shows once you are in the session.
 
 ## Statuses
 
-| Badge | Colour | Meaning | What to do |
+| Status | Colour | Meaning | What to do |
 | --- | --- | --- | --- |
 | **Progressing** | blue | work is not published yet: no upstream, or commits ahead of the upstream | keep working, then `git push -u origin <branch>` |
 | **Behind** | amber | the upstream has commits this branch lacks and the branch has nothing of its own | `git pull --ff-only` |
@@ -146,7 +144,7 @@ folder** for these sessions.
 | **In Sync** | green | in step with its upstream *and* identical to `origin/<default>` | nothing — fully integrated |
 | **Missing** | grey | the recorded working-copy directory is gone | archive the session and remove the worktree, or recreate it |
 
-A **yellow glow** on the badge is a separate overlay: the branch has its own commits *and*
+A **yellow glow** on the pill is a separate overlay: the branch has its own commits *and*
 `origin/<default>` has moved on, so it needs rebasing. It appears on top of any
 status, and the tooltip spells out how many commits behind the default branch is.
 
