@@ -3,7 +3,27 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.1 - 2026-11-10
+
+### Fixed
+
+- **The dock was wider than the composer card.** The panel filled its slot, while
+  the card is narrowed by the composer's own max-width and side clearance, so the
+  bar stuck out past the card on both sides. The dock now uses the same geometry and
+  the same menu skin as the core queue dock in that slot: the composer width calc,
+  the top-rounded panel that sits flush on the card, 36px header and rows.
+- **The schedule dialog was not a dialog.** It was `position:fixed` inside the
+  composer seat, which is a containing block (`position:sticky` with
+  `will-change:transform`), so the "overlay" was clipped to the strip above the
+  composer instead of covering the page, and it was a hand-painted white box with
+  black buttons. It is now the core `Modal` with `Button`, `Input` and `Checkbox`:
+  portaled to the document body, centred over a blurred full-viewport mask, themed,
+  with Escape, mask-click and focus return handled by the primitives.
+- **Scheduling gave no feedback.** The draft stayed in the composer and the dock only
+  refreshed on its 10-second poll, so for several seconds it looked like nothing had
+  happened. Scheduling now clears the composer draft and shows the item in the dock
+  immediately, from the queue the schedule call already returns; the poll stays as
+  the fallback for changes made on the host.
 
 ## 0.1.0 - 2026-10-13
 

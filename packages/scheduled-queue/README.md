@@ -6,8 +6,8 @@ A composer feature for [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 
 | What | Where | What it does |
 | --- | --- | --- |
-| Clock button | composer, before the Send action | Enabled while the draft has text. Opens a small dialog: send in N minutes, optionally as **force steer**. |
-| Scheduled-messages dock | above the composer card | Lists **this session's** scheduled messages with a live countdown. Each row can be edited (text, minutes, force steer — editing restarts the countdown), removed, or sent now. Hidden when the session has none. |
+| Clock button | composer, before the Send action | Enabled while the draft has text. Opens the standard dialog: send in N minutes, optionally as **force steer**. |
+| Scheduled-messages dock | above the composer card, as wide as the card | Lists **this session's** scheduled messages with a live countdown. Each row can be edited (text, minutes, force steer — editing restarts the countdown), removed, or sent now. Hidden when the session has none. |
 | Delivery | host | A scanner checks for due items; each is sent exactly like a normal composer send. |
 
 A scheduled message is the user's own text. It arrives in the transcript as an ordinary user message (source kind `user`), not as a plugin notice.
@@ -118,7 +118,7 @@ Every endpoint requires `sessionId`; a call without one gets `bad-request`. `rem
 - **Archived sessions** accept the message and park it until the session is unarchived, exactly as a normal composer send does.
 - **Overdue items** (due while the harness was down) wake and resume their sessions on the first scan after start-up. Several overdue items are delivered oldest-due first, one after another.
 - **Send now** reports what happened: sent, "stays queued and is retried automatically", or "could not be delivered and was removed" (its text is in the host log). The notice appears even when the dock has no rows left.
-- Scheduling does not clear the composer draft.
+- Scheduling clears the composer draft and lists the item in the dock at once, from the queue the schedule call returns. A dock in a **different** window still appears on its next poll (10 s), since the announcement is same-window only.
 - The dock lists scheduled messages only for the session window it is in; there is no cross-session view.
 
 ## Checks
@@ -127,7 +127,7 @@ Every endpoint requires `sessionId`; a call without one gets `bad-request`. `rem
 node --test packages/scheduled-queue/test/*.test.mjs
 ```
 
-Covers the per-session filter (host and browser copies), scheduling and edit rules, back-off, the delivery request, reading earlier versions' queue files, and the host wiring against a stand-in harness. The browser rendering and a real delivery into a running session need a live harness and are checked by hand.
+Covers the per-session filter (host and browser copies), the queue a host response carries and how a same-window schedule event is read by the dock, scheduling and edit rules, back-off, the delivery request, reading earlier versions' queue files, and the host wiring against a stand-in harness. The browser rendering and a real delivery into a running session need a live harness and are checked by hand.
 
 ## Compatibility
 
