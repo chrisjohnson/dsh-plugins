@@ -8,7 +8,18 @@
 //     session's scheduled messages, with countdown / edit / remove / send-now.
 //
 // Both slots are session-scoped, so each entry receives the `sessionId` of the
-// session window it is mounted in. The dock shows only that session's items.
+// session window it is mounted in, plus the composer's `inputActions`. The dock
+// shows only that session's items, and scheduling clears the draft it just took.
+//
+// The dialog is the core `Modal` primitive, which portals itself to
+// `document.body`. A `position:fixed` element rendered inside the composer seat
+// is NOT viewport-fixed: the seat is `position:sticky` with `will-change:transform`
+// while docked, which makes it the containing block, so the dialog would be
+// confined to the strip above the composer card. The slot contract for
+// `conversation.input.dock` / `.right` says the same thing in one line: "fixed
+// overlays must portal to the document body because the docked composer contains
+// them". Same for the buttons and fields: the core primitives carry the theme,
+// the focus ring and the Escape/focus management, so the dialog looks native.
 //
 // Talks to the Host half over the authenticated /api fence:
 // connection.rpc.call("/api", "scheduledQueue/<endpoint>", payload).
@@ -24,6 +35,11 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 
 		var React = require("react");
+		// Shared with core through the module loader's externals, so this is the
+		// one React and the one set of primitives. Not declared as a dependency: the
+		// host supplies the singleton instance (same pattern as
+		// dsh-better-git-worktree).
+		var primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 
 		var connection = null;
 
@@ -38,6 +54,10 @@ window.__ModuleLoader__.load({
 		var NO_SEAT = function () { return null; };
 		var IDENTITY = function (s) { return s; };
 
+		// Dispatched by the clock button after a successful schedule so the dock in the
+		// same window can show the item at once instead of waiting for its next poll.
+		var CHANGED_EVENT = "dsh-scheduled-queue:changed";
+
 		// The items of one session. Strict: with no session id, nothing.
 		function sessionItems(items, sessionId) {
 			if (!Array.isArray(items) || typeof sessionId !== "string" || sessionId === "") return [];
@@ -46,44 +66,69 @@ window.__ModuleLoader__.load({
 			});
 		}
 
+		/**
+		 * The queue one host response carries for the asking session, or null when it
+		 * carries none. Every endpoint that changes the queue answers with it, so the
+		 * browser never has to re-list after its own write.
+		 */
+		function queueFromResult(res) {
+			if (!res || res.ok !== true) return null;
+			var value = res.value;
+			if (!value || typeof value !== "object" || !Array.isArray(value.queue)) return null;
+			return { queue: value.queue, warning: value.warning || null };
+		}
+
+		/**
+		 * What one `dsh-scheduled-queue:changed` event means for the dock of `sessionId`:
+		 * `apply` (the event carried this session's queue), `refresh` (an event with no
+		 * usable detail — ask the host), or `ignore` (another session scheduled
+		 * something; this dock must not change).
+		 */
+		function dockUpdateFor(event, sessionId) {
+			var detail = event && event.detail;
+			if (!detail || typeof detail !== "object") return { action: "refresh" };
+			if (typeof detail.sessionId === "string" && detail.sessionId !== sessionId) return { action: "ignore" };
+			if (!Array.isArray(detail.queue)) return { action: "refresh" };
+			return { action: "apply", queue: detail.queue, warning: detail.warning || null };
+		}
+
 		var CSS =
+			// The clock button, in the composer's own tool row.
 			".sq-root{display:inline-flex;align-items:center}"
 			+ ".sq-clockBtn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:none;border-radius:999px;background:0 0;color:var(--dsw-alias-label-primary, #444);cursor:pointer;flex:none;transition:background .15s,color .15s;padding:0}"
 			+ ".sq-clockBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover, #f0f0f0);color:var(--dsw-interactive-text-on-base, #111)}"
 			+ ".sq-clockBtn:focus-visible{outline:2px solid var(--dsw-alias-label-tertiary, #999);outline-offset:2px}"
 			+ ".sq-clockBtn:disabled{opacity:.35;cursor:default}"
 			+ ".sq-clockIcon{width:16px;height:16px;fill:currentColor}"
-			+ ".sq-panel{border:.5px solid var(--dsw-alias-border-l1, #e0e0e0);border-radius:12px;background:var(--dsw-specific-tip, #f7f8fa);overflow:hidden;width:100%}"
-			+ ".sq-header{display:flex;align-items:center;gap:8px;width:100%;padding:6px 12px;color:var(--dsw-alias-label-primary, #333);font:500 13px/20px Inter, sans-serif}"
-			+ ".sq-list{list-style:none;margin:0;padding:0 8px 6px}"
-			+ ".sq-row{display:flex;align-items:center;gap:8px;padding:4px 4px;border-radius:8px;min-height:34px}"
-			+ ".sq-row+.sq-row{border-top:.5px solid var(--dsw-alias-border-l1, #e0e0e0)}"
-			+ ".sq-preview{min-width:0;flex:1;color:var(--dsw-alias-label-primary-dimmed, #666);font:13px/18px Inter, sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
-			+ ".sq-editor{flex:1;min-width:0;border:.5px solid var(--dsw-alias-border-l4, #ccc);background:var(--dsw-alias-bg-base, #fff);border-radius:6px;padding:3px 8px;font:13px/18px Inter, sans-serif;color:var(--dsw-alias-label-primary, #333);outline:none}"
-			+ ".sq-editor:focus{border-color:var(--dsw-interactive-text-on-base, #111)}"
-			+ ".sq-actions{display:flex;gap:4px;flex:none;align-items:center}"
-			+ ".sq-act{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:999px;background:0 0;color:var(--dsw-alias-label-tertiary, #888);cursor:pointer;flex:none;padding:0}"
-			+ ".sq-act:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover, #f0f0f0);color:var(--dsw-interactive-text-on-base, #111)}"
-			+ ".sq-act:focus-visible{outline:2px solid var(--dsw-alias-label-tertiary, #999);outline-offset:2px}"
-			+ ".sq-act:disabled{opacity:.4;cursor:default}"
-			+ ".sq-act svg{width:14px;height:14px}"
-			+ ".sq-countdown{font:500 11px/14px ui-monospace, monospace;color:var(--dsw-alias-label-tertiary, #888);flex:none}"
-			+ ".sq-steer{font:600 9px/12px Inter, sans-serif;color:var(--dsw-alias-label-tertiary, #888);border:.5px solid var(--dsw-alias-border-l2, #d5d5d5);border-radius:4px;padding:1px 4px;flex:none}"
-			+ ".sq-modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:1000;background:rgba(0,0,0,.35)}"
-			+ ".sq-modal-box{background:var(--dsw-alias-bg-elevated, #fff);border-radius:14px;padding:20px 24px 16px;min-width:300px;box-shadow:0 8px 32px rgba(0,0,0,.18)}"
-			+ ".sq-modal-title{font:600 15px/22px Inter, sans-serif;color:var(--dsw-alias-label-primary, #222);margin:0 0 14px}"
-			+ ".sq-field{margin-bottom:12px}"
-			+ ".sq-label{display:block;font:500 12px/16px Inter, sans-serif;color:var(--dsw-alias-label-secondary, #555);margin-bottom:4px}"
-			+ ".sq-input{width:100%;box-sizing:border-box;height:34px;border:.5px solid var(--dsw-alias-border-l3, #d0d0d0);border-radius:8px;padding:0 10px;font:13px/20px Inter, sans-serif;color:var(--dsw-alias-label-primary, #333);outline:none}"
-			+ ".sq-input:focus{border-color:var(--dsw-interactive-text-on-base, #111)}"
-			+ ".sq-check{display:flex;align-items:center;gap:8px;font:13px/18px Inter, sans-serif;color:var(--dsw-alias-label-primary, #333);cursor:pointer}"
-			+ ".sq-check input{width:16px;height:16px;accent-color:var(--dsw-interactive-text-on-base, #111)}"
-			+ ".sq-modal-row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}"
-			+ ".sq-btn{height:32px;padding:0 14px;border:none;border-radius:8px;font:500 13px/18px Inter, sans-serif;cursor:pointer}"
-			+ ".sq-btn.primary{background:var(--dsw-interactive-text-on-base, #111);color:#fff}"
-			+ ".sq-btn.primary:hover:not(:disabled){opacity:.85}"
-			+ ".sq-btn.ghost{background:0 0;color:var(--dsw-alias-label-secondary, #555)}"
-			+ ".sq-btn:disabled{opacity:.4;cursor:default}";
+			// The dock. Geometry and skin are the core queue dock's, in the same slot:
+			// the composer card is narrowed by --dsh-composer-card-max-width and the
+			// seat's side clearance, so a plain width:100% panel overshoots it.
+			+ ".sq-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);padding:0 var(--dsh-composer-dock-inset);flex:none}"
+			+ ".sq-panel{isolation:isolate;border-radius:var(--dsw-radius-lg) var(--dsw-radius-lg) 0 0;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);width:100%;padding:2px 0;position:relative;overflow:hidden}"
+			+ ".sq-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);content:\"\";pointer-events:none;position:absolute;inset:0}"
+			+ ".sq-panel:after{border:.5px solid var(--dsw-alias-border-l1);border-radius:inherit;content:\"\";pointer-events:none;border-bottom:none;position:absolute;inset:0}"
+			+ ".sq-header{box-sizing:border-box;border-radius:var(--dsw-radius-md);width:100%;min-height:36px;color:var(--dsw-alias-label-primary);align-items:center;gap:10px;padding:4px 12px;display:flex}"
+			+ ".sq-count{min-width:0;font-family:Inter, var(--dsw-font-family);flex:auto;font-size:13px;font-weight:500;line-height:24px}"
+			+ ".sq-status{flex:none;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;white-space:nowrap;font-variant-numeric:tabular-nums}"
+			+ ".sq-notice{box-sizing:border-box;width:100%;padding:4px 12px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}"
+			+ ".sq-list{max-height:180px;margin:0;padding:0 0 2px;list-style:none;overflow-y:auto}"
+			+ ".sq-row{box-sizing:border-box;border-radius:var(--dsw-radius-md);align-items:center;gap:10px;width:100%;min-height:36px;padding:4px 5px 4px 12px;display:flex}"
+			+ ".sq-row+.sq-row{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}"
+			+ ".sq-preview{min-width:0;flex:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Inter, var(--dsw-font-family);font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed)}"
+			+ ".sq-editor{flex:auto;min-width:0;box-sizing:border-box;height:28px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-base);padding:0 8px;font:13px/20px Inter, sans-serif;color:var(--dsw-alias-label-primary);outline:none}"
+			+ ".sq-editor:focus{border-color:var(--dsw-alias-state-business-primary)}"
+			+ ".sq-minutes{flex:none;width:64px}"
+			+ ".sq-actions{flex:none;align-items:center;gap:10px;display:flex}"
+			+ ".sq-act{corner-shape:round;width:28px;height:28px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;flex:none;place-items:center;padding:0;display:grid}"
+			+ "@media (hover:hover){.sq-act:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}}"
+			+ ".sq-act:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));outline-offset:-2px}"
+			+ ".sq-act:disabled{cursor:default;opacity:.45}"
+			+ ".sq-act svg{width:16px;height:16px}"
+			+ ".sq-steer{font:600 9px/12px Inter, sans-serif;color:var(--dsw-alias-label-tertiary);border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-xs);padding:1px 4px;flex:none}"
+			// The dialog: only what the core primitives do not already own.
+			+ ".sq-field{display:flex;flex-direction:column;gap:6px;min-width:0}"
+			+ ".sq-label{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}"
+			+ ".sq-minput{width:100%}";
 
 		function rpcCall(endpoint, payload) {
 			if (!connection) return Promise.reject(new Error("dsh-scheduled-queue: connection service unavailable"));
@@ -153,19 +198,35 @@ window.__ModuleLoader__.load({
 				function refresh() {
 					if (typeof sessionId !== "string" || sessionId === "") return Promise.resolve();
 					return rpcCall("list", { sessionId: sessionId }).then(function (res) {
-						if (!stopped && res && res.ok && res.value && Array.isArray(res.value.queue)) {
-						itemsState[1](res.value.queue);
-						warningState[1](res.value.warning || null);
-					}
+						var update = queueFromResult(res);
+						if (!stopped && update) {
+							itemsState[1](update.queue);
+							warningState[1](update.warning);
+						}
 					}).catch(function () {});
+				}
+				// The clock button announces a successful schedule on this window; the
+				// dock applies it immediately rather than waiting for the next poll.
+				function onChanged(event) {
+					var update = dockUpdateFor(event, sessionId);
+					if (update.action === "ignore") return;
+					if (update.action === "refresh") { refresh(); return; }
+					itemsState[1](update.queue);
+					warningState[1](update.warning);
 				}
 				refresh();
 				var pollId = setInterval(function () { refresh(); }, 10000);
 				var clockId = setInterval(function () { tickState[1](function (n) { return n + 1; }); }, 1000);
+				if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+					window.addEventListener(CHANGED_EVENT, onChanged);
+				}
 				return function () {
 					stopped = true;
 					clearInterval(pollId);
 					clearInterval(clockId);
+					if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+						window.removeEventListener(CHANGED_EVENT, onChanged);
+					}
 				};
 			}, [sessionId]);
 			return { items: itemsState[0], setItems: itemsState[1], warning: warningState[0], setWarning: warningState[1], tick: tickState[0] };
@@ -181,44 +242,65 @@ window.__ModuleLoader__.load({
 			var onCancel = props.onCancel;
 			var minutesOk = parseInt(minutesText, 10) >= 1;
 
-			return React.createElement("div", {
-				className: "sq-modal",
-				onMouseDown: function (e) { if (e.target === e.currentTarget) onCancel(); }
-			},
-				React.createElement("div", { className: "sq-modal-box" },
-					React.createElement("h3", { className: "sq-modal-title" }, "Schedule message"),
-					React.createElement("div", { className: "sq-field" },
-						React.createElement("label", { className: "sq-label", htmlFor: "sq-minutes" }, "Send in (minutes)"),
-						React.createElement("input", {
-							id: "sq-minutes",
-							className: "sq-input",
-							type: "number",
-							min: "1",
-							value: minutesText,
-							autoFocus: true,
-							onChange: function (e) { setMinutesText(e.target.value); },
-							onKeyDown: function (e) {
-								if (e.key === "Enter" && !e.nativeEvent.isComposing) onSave();
-								if (e.key === "Escape") onCancel();
-							}
-						})
-					),
-					React.createElement("div", { className: "sq-field" },
-						React.createElement("label", { className: "sq-check" },
-							React.createElement("input", {
-								type: "checkbox",
-								checked: forceSteer,
-								onChange: function (e) { setForceSteer(e.target.checked); }
-							}),
-							"Force steer (interrupt the current turn when due)"
-						)
-					),
-					React.createElement("div", { className: "sq-modal-row" },
-						React.createElement("button", { type: "button", className: "sq-btn ghost", disabled: saving, onClick: onCancel }, "Cancel"),
-						React.createElement("button", { type: "button", className: "sq-btn primary", disabled: saving || !minutesOk, onClick: onSave }, saving ? "Saving…" : "Schedule")
-					)
+			// The core Modal: portaled to the body, full-viewport blurred mask, themed
+			// card, Escape and focus management included. `data-modal-autofocus` (not
+			// React's autoFocus) is how a dialog control asks for initial focus so the
+			// close restores it to the clock button.
+			return React.createElement(primitives.Modal, {
+				open: true,
+				onClose: onCancel,
+				title: "Schedule message",
+				closeLabel: "Close",
+				footer: React.createElement(React.Fragment, null,
+					React.createElement(primitives.Button, {
+						type: "button", variant: "ghost", disabled: saving, onClick: onCancel
+					}, "Cancel"),
+					React.createElement(primitives.Button, {
+						type: "button", variant: "primary", disabled: saving || !minutesOk, onClick: onSave
+					}, saving ? "Saving…" : "Schedule")
 				)
+			},
+				React.createElement("div", { className: "sq-field" },
+					React.createElement("label", { className: "sq-label", htmlFor: "sq-minutes" }, "Send in (minutes)"),
+					React.createElement(primitives.Input, {
+						id: "sq-minutes",
+						className: "sq-minput",
+						type: "number",
+						min: "1",
+						value: minutesText,
+						disabled: saving,
+						"data-modal-autofocus": true,
+						onChange: function (e) { setMinutesText(e.target.value); },
+						onKeyDown: function (e) {
+							if (e.key === "Enter" && !e.nativeEvent.isComposing) onSave();
+						}
+					})
+				),
+				React.createElement(primitives.Checkbox, {
+					checked: forceSteer,
+					disabled: saving,
+					onChange: setForceSteer,
+					label: "Force steer (interrupt the current turn when due)"
+				})
 			);
+		}
+
+		/** Clear the composer draft through the seat's actions, if this scope has them. */
+		function clearDraft(actions) {
+			var source = actions || {};
+			if (typeof source.setDraft === "function") source.setDraft("");
+		}
+
+		/** Tell every dock in this window what a successful schedule returned. */
+		function announceSchedule(sessionId, res) {
+			if (typeof window === "undefined" || typeof CustomEvent !== "function") return;
+			var update = queueFromResult(res);
+			var detail = { sessionId: sessionId, queue: null, warning: null };
+			if (update) {
+				detail.queue = update.queue;
+				detail.warning = update.warning;
+			}
+			window.dispatchEvent(new CustomEvent(CHANGED_EVENT, { detail: detail }));
 		}
 
 		function ClockButton(props) {
@@ -249,7 +331,13 @@ window.__ModuleLoader__.load({
 					timeZone: browserTimeZone()
 				}).then(function (res) {
 					savingState[1](false);
-					if (res && res.ok) close();
+					if (!res || res.ok !== true) return;
+					// Three things the user needs to see that the schedule happened: the
+					// dialog closes, the draft it came from is gone, and the dock already
+					// lists the item — no 10 s wait, no mystery empty composer.
+					clearDraft(props.inputActions);
+					announceSchedule(sessionId, res);
+					close();
 				}).catch(function () { savingState[1](false); });
 			}
 
@@ -314,8 +402,7 @@ window.__ModuleLoader__.load({
 					}
 				}) : React.createElement("span", { className: "sq-preview", title: item.text }, item.text),
 				editingState[0] ? React.createElement("input", {
-					className: "sq-input",
-					style: { width: "52px", height: "26px", padding: "0 6px" },
+					className: "sq-editor sq-minutes",
 					type: "number",
 					min: "1",
 					value: minutesState[0],
@@ -323,7 +410,7 @@ window.__ModuleLoader__.load({
 					onChange: function (e) { minutesState[1](e.target.value); },
 					onKeyDown: function (e) { if (e.key === "Enter") saveEdit(); }
 				}) : null,
-				React.createElement("span", { className: "sq-countdown" }, fmtCountdown(item.dueAt)),
+				React.createElement("span", { className: "sq-status" }, fmtCountdown(item.dueAt)),
 				React.createElement("span", { className: "sq-actions" },
 					editingState[0] ? React.createElement("button", { type: "button", className: "sq-act", title: "Save", disabled: busy || textState[0].trim().length === 0, onClick: saveEdit }, CheckIcon()) : null,
 					editingState[0] ? React.createElement("button", { type: "button", className: "sq-act", title: "Cancel", disabled: busy, onClick: function () { editingState[1](false); } }, CloseIcon()) : null,
@@ -346,10 +433,10 @@ window.__ModuleLoader__.load({
 			}, [noticeState[0]]);
 
 			function applyQueue(res) {
-				if (res && res.ok && res.value && Array.isArray(res.value.queue)) {
-					q.setItems(res.value.queue);
-					q.setWarning(res.value.warning || null);
-				}
+				var update = queueFromResult(res);
+				if (!update) return;
+				q.setItems(update.queue);
+				q.setWarning(update.warning);
 			}
 			function call(method, id, extra) {
 				busyState[1](id);
@@ -375,23 +462,25 @@ window.__ModuleLoader__.load({
 			if (!items.length && !notice) return null;
 			var next = items.length ? items.slice().sort(function (a, b) { return a.dueAt - b.dueAt; })[0] : null;
 
-			return React.createElement("div", { className: "sq-panel" },
-				items.length ? React.createElement("div", { className: "sq-header" },
-					React.createElement("span", null, items.length === 1 ? "1 scheduled message" : items.length + " scheduled messages"),
-					React.createElement("span", { className: "sq-countdown" }, "next in " + fmtCountdown(next.dueAt))
-				) : null,
-				notice ? React.createElement("div", { className: "sq-header", role: "alert" }, notice) : null,
-				React.createElement("ul", { className: "sq-list" },
-					items.map(function (item) {
-						return React.createElement(QueueRow, {
-							key: item.id,
-							item: item,
-							busy: busyState[0] === item.id,
-							onRemove: function (id) { call("remove", id); },
-							onSendNow: function (id) { call("sendNow", id); },
-							onEdit: function (id, patch) { call("edit", id, patch); }
-						});
-					})
+			return React.createElement("div", { className: "sq-dock", "data-sq-dock": "" },
+				React.createElement("div", { className: "sq-panel" },
+					items.length ? React.createElement("div", { className: "sq-header" },
+						React.createElement("span", { className: "sq-count" }, items.length === 1 ? "1 scheduled message" : items.length + " scheduled messages"),
+						React.createElement("span", { className: "sq-status" }, "next in " + fmtCountdown(next.dueAt))
+					) : null,
+					notice ? React.createElement("div", { className: "sq-notice", role: "alert" }, notice) : null,
+					React.createElement("ul", { className: "sq-list" },
+						items.map(function (item) {
+							return React.createElement(QueueRow, {
+								key: item.id,
+								item: item,
+								busy: busyState[0] === item.id,
+								onRemove: function (id) { call("remove", id); },
+								onSendNow: function (id) { call("sendNow", id); },
+								onEdit: function (id, patch) { call("edit", id, patch); }
+							});
+						})
+					)
 				)
 			);
 		}
@@ -436,6 +525,8 @@ window.__ModuleLoader__.load({
 		exports.inject = ["connection", "slots"];
 		// Tests only: the loader reads `apply`/`inject` and ignores the rest.
 		exports.sessionItems = sessionItems;
+		exports.queueFromResult = queueFromResult;
+		exports.dockUpdateFor = dockUpdateFor;
 		return module.exports;
 	}
 });

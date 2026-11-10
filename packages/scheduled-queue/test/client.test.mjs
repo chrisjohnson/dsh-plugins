@@ -27,6 +27,37 @@ test('client exposes the slots service it needs', () => {
   assert.equal(typeof client.sessionItems, 'function')
 })
 
+test('the queue a host response carries is the one the dock shows', () => {
+  const queue = [{ id: 'a1', sessionId: 'A' }]
+  assert.deepEqual(client.queueFromResult({ ok: true, value: { queue } }), { queue, warning: null })
+  assert.deepEqual(client.queueFromResult({ ok: true, value: { queue, warning: 'not saved yet' } }), { queue, warning: 'not saved yet' })
+})
+
+test('a response that carries no queue is not applied', () => {
+  for (const res of [undefined, null, { ok: false, error: { message: 'no' } }, { ok: true }, { ok: true, value: {} }, { ok: true, value: { queue: 'x' } }]) {
+    assert.equal(client.queueFromResult(res), null, JSON.stringify(res))
+  }
+})
+
+test('a schedule event for this session updates the dock without a poll', () => {
+  const queue = [{ id: 'a1', sessionId: 'A' }]
+  const event = { detail: { sessionId: 'A', queue, warning: 'w' } }
+  assert.deepEqual(client.dockUpdateFor(event, 'A'), { action: 'apply', queue, warning: 'w' })
+  // No warning field is not a warning.
+  assert.deepEqual(client.dockUpdateFor({ detail: { sessionId: 'A', queue } }, 'A'), { action: 'apply', queue, warning: null })
+})
+
+test('a schedule event for another session leaves this dock alone', () => {
+  const queue = [{ id: 'b1', sessionId: 'B' }]
+  assert.deepEqual(client.dockUpdateFor({ detail: { sessionId: 'B', queue } }, 'A'), { action: 'ignore' })
+})
+
+test('an event with no usable detail asks the host instead', () => {
+  for (const event of [undefined, null, {}, { detail: null }, { detail: {} }, { detail: { sessionId: 'A' } }, { detail: { sessionId: 'A', queue: 'no' } }]) {
+    assert.deepEqual(client.dockUpdateFor(event, 'A'), { action: 'refresh' }, JSON.stringify(event))
+  }
+})
+
 test('dock filter: an item scheduled in session A is not visible in session B', () => {
   const queue = [
     { id: 'a1', sessionId: 'A', text: 'for a' },
