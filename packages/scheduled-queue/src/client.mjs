@@ -242,7 +242,8 @@ window.__ModuleLoader__.load({
 			var onCancel = props.onCancel;
 			var minutesOk = parseInt(minutesText, 10) >= 1;
 
-			// The core Modal: portaled to the body, full-viewport blurred mask, themed
+			// The core Modal: portaled to the body, centred over the full-viewport page
+			// mask, themed
 			// card, Escape and focus management included. `data-modal-autofocus` (not
 			// React's autoFocus) is how a dialog control asks for initial focus so the
 			// close restores it to the clock button.

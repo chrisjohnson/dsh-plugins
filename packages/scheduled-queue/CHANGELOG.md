@@ -10,14 +10,15 @@
 - **The dock was wider than the composer card.** The panel filled its slot, while
   the card is narrowed by the composer's own max-width and side clearance, so the
   bar stuck out past the card on both sides. The dock now uses the same geometry and
-  the same menu skin as the core queue dock in that slot: the composer width calc,
-  the top-rounded panel that sits flush on the card, 36px header and rows.
+  the same menu skin as the core queue dock in that slot: the composer width calc (the
+  panel is inset from the card by the dock inset, exactly as the native queue dock is),
+  the top-rounded panel that overlaps the card's top edge, 36px header and rows.
 - **The schedule dialog was not a dialog.** It was `position:fixed` inside the
   composer seat, which is a containing block (`position:sticky` with
   `will-change:transform`), so the "overlay" was clipped to the strip above the
   composer instead of covering the page, and it was a hand-painted white box with
   black buttons. It is now the core `Modal` with `Button`, `Input` and `Checkbox`:
-  portaled to the document body, centred over a blurred full-viewport mask, themed,
+  portaled to the document body, centred over the full-viewport page mask, themed,
   with Escape, mask-click and focus return handled by the primitives.
 - **Scheduling gave no feedback.** The draft stayed in the composer and the dock only
   refreshed on its 10-second poll, so for several seconds it looked like nothing had

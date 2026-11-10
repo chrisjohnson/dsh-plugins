@@ -7,7 +7,7 @@ A composer feature for [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 | What | Where | What it does |
 | --- | --- | --- |
 | Clock button | composer, before the Send action | Enabled while the draft has text. Opens the standard dialog: send in N minutes, optionally as **force steer**. |
-| Scheduled-messages dock | above the composer card, as wide as the card | Lists **this session's** scheduled messages with a live countdown. Each row can be edited (text, minutes, force steer — editing restarts the countdown), removed, or sent now. Hidden when the session has none. |
+| Scheduled-messages dock | above the composer card, aligned to it the way the core queue dock is | Lists **this session's** scheduled messages with a live countdown. Each row can be edited (text, minutes, force steer — editing restarts the countdown), removed, or sent now. Hidden when the session has none. |
 | Delivery | host | A scanner checks for due items; each is sent exactly like a normal composer send. |
 
 A scheduled message is the user's own text. It arrives in the transcript as an ordinary user message (source kind `user`), not as a plugin notice.
