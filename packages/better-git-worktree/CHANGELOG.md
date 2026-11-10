@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.3.1
+
 ### Removed
 
 - **The sidebar session rows no longer show worktree status.** The coloured row badge
