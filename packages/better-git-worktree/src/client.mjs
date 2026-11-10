@@ -3,8 +3,6 @@
 // The official Workspace UI stays in charge of the sidebar. This half adds to it
 // only through the seats that UI declares (dsh 0.2.0, @deepseek-ai/dsh-client-ui-workspace):
 //
-//   sidebar.session.row.leading           the status badge in a session row
-//   sidebar.session.row.hover             the full status line on the row's hover card
 //   sidebar.workspaces.session.menu.item  "Copy worktree path" / "Open worktree folder"
 //   sidebar.workspaces.session.menu.item  (id `archive`) and
 //   sidebar.workspaces.session.row.action (id `archive`)
@@ -47,22 +45,13 @@ window.__ModuleLoader__.load({
 			":root{--bgw-progressing:#1d4ed8;--bgw-progressing-bg:rgba(59,130,246,.12);--bgw-progressing-line:rgba(59,130,246,.35);"
 			+ "--bgw-done:#15803d;--bgw-done-bg:rgba(34,160,74,.12);--bgw-done-line:rgba(34,160,74,.35);"
 			+ "--bgw-behind:#b45309;--bgw-behind-bg:rgba(180,83,9,.12);--bgw-behind-line:rgba(180,83,9,.35)}"
-			// The row badge fills the row's 16px leading cell: an icon in the status colour.
-			+ ".bgw-badge{display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;height:16px;border-radius:5px;box-sizing:border-box;border:1px solid transparent}"
-			+ ".bgw-badge[data-bgw-state=progressing]{color:var(--bgw-progressing);background:var(--bgw-progressing-bg);border-color:var(--bgw-progressing-line)}"
-			+ ".bgw-badge[data-bgw-state=up_to_date],.bgw-badge[data-bgw-state=in_sync]{color:var(--bgw-done);background:var(--bgw-done-bg);border-color:var(--bgw-done-line)}"
-			+ ".bgw-badge[data-bgw-state=behind]{color:var(--bgw-behind);background:var(--bgw-behind-bg);border-color:var(--bgw-behind-line)}"
-			+ ".bgw-badge[data-bgw-state=unknown]{color:var(--dsw-alias-label-secondary,#666);background:rgba(120,120,120,.12);border-color:rgba(120,120,120,.3)}"
-			+ ".bgw-badge[data-bgw-rebase=true]{box-shadow:0 0 0 2px rgba(234,179,8,.55),0 0 9px 2px rgba(234,179,8,.45);animation:bgw-rebase-pulse 2.2s ease-in-out infinite}"
-			+ "@keyframes bgw-rebase-pulse{0%,100%{box-shadow:0 0 0 2px rgba(234,179,8,.5),0 0 5px 1px rgba(234,179,8,.35)}50%{box-shadow:0 0 0 3px rgba(234,179,8,.7),0 0 12px 3px rgba(234,179,8,.55)}}"
-			+ "@media (prefers-color-scheme:dark){.bgw-badge[data-bgw-state=progressing]{color:#93c5fd}.bgw-badge[data-bgw-state=up_to_date],.bgw-badge[data-bgw-state=in_sync]{color:#86efac}.bgw-badge[data-bgw-state=behind]{color:#fcd34d}}"
 			// Hide the git worktree status on narrow (mobile) viewports: the header
-			// pill crowds the session toolbar (and gets clipped) while the row badge
-			// eats horizontal room in the sidebar; both are decorative at this width.
+			// pill crowds the session toolbar (and gets clipped), and it is
+			// decorative at this width.
 			// Breakpoint pairs with dsh-better-sidebar's NARROW_MAX_WIDTH (768).
-			+ "@media (max-width: 767px){.bgw-badge,.bgw-header-action{display:none}}"
-			// The header pill carries the same fill, border and text colour as the row
-			// badge, including on hover (the harness button's grey hover would
+			+ "@media (max-width: 767px){.bgw-header-action{display:none}}"
+			// The header pill carries the status as its fill, border and text
+			// colour, including on hover (the harness button's grey hover would
 			// otherwise wash the status colour out).
 			+ ".bgw-header-action{border:1px solid transparent}"
 			+ ".bgw-header-action:hover:not(:disabled){filter:brightness(.96)}"
@@ -83,12 +72,6 @@ window.__ModuleLoader__.load({
 			+ ".bgw-menu-error{color:var(--dsw-alias-state-error-primary,#c00)}"
 			+ ".bgw-menu-notice{color:var(--bgw-done)}"
 			+ ".bgw-menu-warn{color:var(--bgw-behind)}"
-			// The hover-card line is a sentence, not a label: keep the line breaks the
-			// Host writes, and give the card more width when it can be found.
-			+ ".bgw-hover{display:flex;align-items:flex-start;gap:8px;color:#adb2b8;font-size:12px;line-height:18px}"
-			+ ".bgw-hover svg{flex:none;margin-top:2px}"
-			+ ".bgw-hover-status{white-space:pre-line}"
-			+ "[class*='_card']:has(.bgw-hover-status){width:366px;max-width:366px}"
 			+ "button[role=menuitem]:disabled:has(.bgw-menu-summary){opacity:1;cursor:default}"
 			+ ".bgw-panel{display:flex;flex-direction:column;gap:10px;padding:10px 12px;height:100%;overflow:auto;font:400 12px/18px Inter,sans-serif;color:var(--dsw-alias-label-primary,#333)}"
 			+ ".bgw-panel h4{margin:0;font:600 12px/18px Inter,sans-serif;color:var(--dsw-alias-label-primary,#222)}"
@@ -133,7 +116,7 @@ window.__ModuleLoader__.load({
 		 * working copies; `current` holds a status read for the session on screen,
 		 * which need not be a worktree session at all (the header pill describes any
 		 * checkout). Decorations keep their identity while their content does not,
-		 * so a row re-renders only when its own badge changes.
+		 * so a component reading one re-renders only when its own status changes.
 		 */
 		function createStatusStore() {
 			var listeners = new Set();
@@ -309,13 +292,6 @@ window.__ModuleLoader__.load({
 				});
 			}, []);
 			return pair[0];
-		}
-
-		/** One session's decoration; the component re-renders only when it changes. */
-		function useDecoration(sessionId) {
-			return React.useSyncExternalStore(statusStore.subscribe, function () {
-				return statusStore.decorationFor(sessionId);
-			});
 		}
 
 		// ================================================================
@@ -888,33 +864,11 @@ window.__ModuleLoader__.load({
 		}
 
 		// ================================================================
-		// sidebar row seats
+		// sidebar session menu items
 		// ================================================================
 		function icon(name, size) {
 			var Icon = primitives[name];
 			return typeof Icon === "function" ? h(Icon, { size: size }) : null;
-		}
-
-		/** `sidebar.session.row.leading`: the status badge, in the cell before the row title. */
-		function RowBadge(props) {
-			var decoration = useDecoration(props.sessionId);
-			if (decoration === undefined) return null;
-			return h("span", {
-				className: "bgw-badge",
-				role: "img",
-				"data-bgw-state": decoration.state,
-				"data-bgw-rebase": decoration.needsRebase === true ? "true" : "false",
-				"aria-label": "Worktree " + decoration.label + (decoration.needsRebase === true ? ", needs rebasing" : ""),
-			}, icon("IconBranchOutlineRegular", 12));
-		}
-
-		/** `sidebar.session.row.hover`: the full status text on the row's hover card. */
-		function RowHover(props) {
-			var decoration = useDecoration(props.sessionId);
-			if (decoration === undefined) return null;
-			return h("div", { className: "bgw-hover" },
-				icon("IconBranchOutlineRegular", 14),
-				h("span", { className: "bgw-hover-status" }, decoration.tooltip));
 		}
 
 		/** A "..." menu row that exists only for a session with a managed working copy. */
@@ -1382,7 +1336,7 @@ window.__ModuleLoader__.load({
 			var services = servicesOf(ctx);
 			ctx.effect(function () { return installStyles(); }, "dsh-better-git-worktree: styles");
 
-			// A refresh every 10 s keeps the badges honest against changes made outside
+			// A refresh every 10 s keeps the header pill honest against changes made outside
 			// the page, but only while the page can be seen: a hidden tab stops asking,
 			// and asks again the moment it is shown.
 			var POLL_MS = 10000;
@@ -1433,8 +1387,6 @@ window.__ModuleLoader__.load({
 				}, "dsh-better-git-worktree: " + label);
 			}
 
-			seat("sidebar.session.row.leading", "better-git-worktree.status", 40, RowBadge, "row badge");
-			seat("sidebar.session.row.hover", "better-git-worktree.hover", 40, RowHover, "row hover");
 			seat("sidebar.workspaces.session.menu.item", "better-git-worktree.copy-path", 450, CopyPathMenuItem, "copy path menu item");
 			seat("sidebar.workspaces.session.menu.item", "better-git-worktree.open-folder", 460, OpenFolderMenuItem, "open folder menu item");
 			seat("conversation.input.left", "better-git-worktree.switch", 40, function WorktreeSwitchSlot(props) {

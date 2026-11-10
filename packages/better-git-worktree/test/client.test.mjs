@@ -70,6 +70,13 @@ const button = (tree, variant) => find(tree, (n) => n.type?.displayName === 'But
 /** The overlay seat's rendered tree. */
 const overlay = (t) => expand(t.slots.winners('shell.overlay')[0].component({}))
 
+/** The header pill's status attribute for `sessionId`, or undefined when it renders no pill. */
+function pillState(t, sessionId) {
+  const actions = t.slots.winners('conversation.session.header.actions')[0].component
+  const pill = find(expand(actions({ sessionId, services: {} })), (n) => n.props?.className === 'bgw-header-action')
+  return pill?.props['data-bgw-state']
+}
+
 /** A slot ledger with the real shadowing rule: per id, the lowest priority wins. */
 function fakeSlots() {
   const ledger = new Map()
@@ -175,6 +182,8 @@ function load({ snapshot, current, betterSidebar, services = {}, timeouts, clipb
 }
 
 const DECLARED = [
+  // Declared so the test can prove the plugin leaves them empty: worktree status
+  // is shown inside a session, not on a sidebar row.
   'sidebar.session.row.leading',
   'sidebar.session.row.hover',
   'sidebar.workspaces.session.menu.item',
@@ -253,8 +262,8 @@ test('the module declares itself under the package name and needs only the servi
 
 test('it fills the 0.2.0 seats and nothing else: no workspace browser, no election', () => {
   const t = mountClient()
-  assert.deepEqual(t.slots.winners('sidebar.session.row.leading').map((e) => e.options.id), ['better-git-worktree.status'])
-  assert.deepEqual(t.slots.winners('sidebar.session.row.hover').map((e) => e.options.id), ['better-git-worktree.hover'])
+  assert.deepEqual(t.slots.entries('sidebar.session.row.leading'), [], 'no status badge on a sidebar row')
+  assert.deepEqual(t.slots.entries('sidebar.session.row.hover'), [], 'no status line on a row hover card')
   assert.deepEqual(
     t.slots.winners('sidebar.workspaces.session.menu.item').map((e) => e.options.id).sort(),
     ['better-git-worktree.copy-path', 'better-git-worktree.open-folder'],
@@ -416,22 +425,6 @@ test('if the copy cannot be removed after the archive, the dialog says the sessi
   await flush()
   assert.ok(realFetch.some((f) => f.url.endsWith('/remove')))
   assert.match(t.react.stateLog.at(-1).error, /The session was archived but its worktree could not be removed/)
-})
-
-test('row seats: the badge and the hover line render only for a session with a decoration', async () => {
-  const t = mountClient({ snapshot: SNAPSHOT })
-  await flush()
-  await flush()
-  const badge = t.slots.winners('sidebar.session.row.leading')[0].component
-  const hover = t.slots.winners('sidebar.session.row.hover')[0].component
-  assert.equal(badge({ sessionId: 'session-plain' }), null)
-  assert.equal(hover({ sessionId: 'session-plain' }), null)
-  const element = badge({ sessionId: 'session-wt' })
-  assert.equal(element.props['data-bgw-state'], 'behind')
-  assert.equal(element.props['data-bgw-rebase'], 'true')
-  assert.equal(element.props['aria-label'], 'Worktree Behind, needs rebasing')
-  const line = hover({ sessionId: 'session-wt' })
-  assert.equal(line.children.at(-1).children[0], 'line one\nline two')
 })
 
 test('row menu items are for sessions with a live managed copy only', async () => {
@@ -722,12 +715,11 @@ test('a slow older poll cannot overwrite a fresher forced snapshot', async () =>
   t.poll()
   await flush()
   await flush()
-  const badge = t.slots.winners('sidebar.session.row.leading')[0].component
-  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the forced answer is in')
+  assert.equal(pillState(t, 'session-wt'), 'behind', 'the forced answer is in')
   releaseOld()
   await flush()
   await flush()
-  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the older answer arrived later and was dropped')
+  assert.equal(pillState(t, 'session-wt'), 'behind', 'the older answer arrived later and was dropped')
 })
 
 test('the dialog tells about ignored files and half-done operations without blocking Remove', async () => {
@@ -895,20 +887,18 @@ test('an unchanged answer does not re-render anything; a changed one does', asyn
   let current = SNAPSHOT
   const t = mountClient({ snapshot: () => current })
   await flush()
-  // Rendering a badge subscribes it to the store, the way React would.
-  t.slots.winners('sidebar.session.row.leading')[0].component({ sessionId: 'session-wt' })
-  const subscribe = t.react.subscribed.at(-1)
-  let renders = 0
-  subscribe(() => { renders += 1 })
+  // Rendering the pill with its effects live subscribes it to the store, the way React would.
+  trackSession(t, 'session-wt')
+  await flush()
+  const renders = () => t.react.stateLog.length
+  const before = renders()
   t.poll()
   await flush()
-  t.poll()
-  await flush()
-  assert.equal(renders, 0, 'two identical answers, no re-render')
+  assert.equal(renders(), before, 'two identical answers, no re-render')
   current = { ...SNAPSHOT, worktrees: [{ ...SNAPSHOT.worktrees[0], decoration: { ...SNAPSHOT.worktrees[0].decoration, state: 'clean', label: 'Clean' } }, SNAPSHOT.worktrees[1]] }
   t.poll()
   await flush()
-  assert.equal(renders, 1, 'a changed badge re-renders once')
+  assert.equal(renders(), before + 1, 'a changed pill re-renders once')
 })
 
 test('a host that does not send the session on screen is asked for it with status', async () => {
@@ -924,18 +914,17 @@ test('a failed poll keeps the previous answer, reports the error once, and recov
   let mode = 'ok'
   const t = mountClient({ snapshot: () => (mode === 'ok' ? SNAPSHOT : { __fail: 'host busy' }) })
   await flush()
-  t.slots.winners('sidebar.session.row.leading')[0].component({ sessionId: 'session-wt' })
-  const subscribe = t.react.subscribed.at(-1)
-  let renders = 0
-  subscribe(() => { renders += 1 })
+  trackSession(t, 'session-wt')
+  await flush()
+  const renders = () => t.react.stateLog.length
+  const before = renders()
   mode = 'bad'
   t.poll()
   await flush()
-  const badge = t.slots.winners('sidebar.session.row.leading')[0].component
-  assert.equal(badge({ sessionId: 'session-wt' }).props['data-bgw-state'], 'behind', 'the last good answer is still shown')
-  assert.equal(renders, 1)
+  assert.equal(pillState(t, 'session-wt'), 'behind', 'the last good answer is still shown')
+  assert.equal(renders(), before + 1, 'the error is reported once')
   mode = 'ok'
   t.poll()
   await flush()
-  assert.equal(renders, 2, 'recovery re-renders')
+  assert.equal(renders(), before + 2, 'recovery re-renders')
 })
