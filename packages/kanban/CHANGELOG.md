@@ -5,6 +5,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A board read that fails cannot take a session's tools away (KAN-81).** The
+  step-time `when` condition added in 0.42.0 asked the board database whether the
+  calling session owns a ticket. A `when` that throws does not merely hide its own
+  tool — the harness aborts the whole step's tool selection, so one failed read
+  (a closed database mid-disposal, a statement that will not compile) would have
+  left *every* session on the host with no tools for that step. The lookup is now
+  answered defensively: an unprovable exclusion leaves the tool visible, which is
+  the only failure this switch can afford.
+
 ## 0.42.0
 
 ### Added
