@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.43.0
+
 ### Added
 
 - **Dragging a ticket onto Done / Discarded discards it, after a prompt (KAN-85).**
