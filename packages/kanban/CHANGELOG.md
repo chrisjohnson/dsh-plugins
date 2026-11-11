@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.41.2
+
 ### Fixed
 
 - **The panel card survives a profile-tree install (KAN-82).** Writing the Forge
