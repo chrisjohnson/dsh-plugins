@@ -15,8 +15,8 @@
 //   `git pull --ff-only`, `pnpm install` and `pnpm run check`, run from the
 //   checkout root or its `.dsh/profiles/web` directory, from a ticket in the
 //   approval phase. Read-only commands pass through untouched. Managed working
-//   copies under a live checkout's `.dsh-worktrees` directory are clones, not the
-//   live checkout, and are not protected by this rule.
+//   copies under a live checkout's `.agents/worktrees` directory are clones, not
+//   the live checkout, and are not protected by this rule.
 //
 // "Deny" means the ask resolves `rejected` without a human being asked. A pass
 // means `next()`: the grant approver and then the human decide exactly as

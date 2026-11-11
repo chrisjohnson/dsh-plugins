@@ -221,7 +221,7 @@ test('the host update path is the guarded edit boundary, not a raw store write',
   assert.equal(/store\.updateTicket\(/.test(update), false, 'the update endpoint must not bypass the guard')
   // Engine-internal writes stay direct: reorder, worktree creation, the retry patch.
   assert.match(host, /store\.updateTicket\(ticket\.id, patch, \{ actor: 'human', reason: 'reorder' \}\)/)
-  assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.managedRoot \}/)
+  assert.match(host, /store\.updateTicket\(ticket\.id, \{ workspaceCwd: created\.path \}/)
   // KAN-60: the retry patch names whoever asked, so the actor is a variable here
   // and not a literal — the guard this test keeps is that the write is one call
   // inside retry(), not a raw store write on the endpoint.
@@ -533,19 +533,39 @@ test('the new-ticket worktree switch records intent and creates nothing', async 
   assert.equal(/rpc\("worktree"/.test(client), false, 'the create form must not create a working copy any more')
   assert.equal(/worktreeCreated|worktreePath|createWorktree\b/.test(client), false, 'the eager-create form state is gone')
   assert.match(client, /worktree: wantWorktree/, 'the create payload carries the intent flag')
-  assert.match(client, /form\.worktree === null \? Boolean\(props\.worktreeAvailable\)/, 'the switch defaults to on when the service is mounted')
-  assert.match(client, /On by default: a worktree from the latest main is created when planning starts\./)
+  assert.match(client, /form\.worktree === null \? Boolean\(props\.worktreeAvailable\)/, 'the switch defaults to on when the workspace is a git checkout')
+  assert.match(client, /On by default in a git workspace: planning starts in a worktree cut from the latest default branch on origin\./)
   // The host endpoint stays as the manual escape hatch; the form just no longer calls it.
   assert.match(files['host.mjs'], /case 'worktree':/)
 })
 
-test('planning settles the working copy through the betterGitWorktree seam', async () => {
+test('planning settles the working copy in kanban, with no worktree plugin in the loop', async () => {
   const files = await sources()
-  assert.match(files['dispatch.mjs'], /async preparePlanWorktree\(ticket\)/)
-  assert.match(files['dispatch.mjs'], /refreshManagedCopy\(\{ path: ticket\.workspaceCwd, fetchFirst: true \}\)/)
-  assert.match(files['dispatch.mjs'], /fetchFirst: true,/)
-  assert.match(files['dispatch.mjs'], /baseOnRemote: true,/)
-  assert.match(files['dispatch.mjs'], /worktree created at plan start/)
+  const dispatch = files['dispatch.mjs']
+  assert.match(dispatch, /async preparePlanWorktree\(ticket\)/)
+  assert.match(dispatch, /import \* as ticketWorktrees from '\.\/worktrees\.mjs'/, 'the lifecycle lives here now')
+  assert.match(dispatch, /this\.worktrees\.refreshWorktree\(\{ path: ticket\.workspaceCwd \}\)/)
+  assert.match(dispatch, /this\.worktrees\.createWorktree\(\{ path: config\.defaultWorkspaceCwd/)
+  assert.match(dispatch, /worktree created at plan start/)
+  assert.equal(/betterGitWorktree/.test(dispatch), false, 'the seam is gone')
+  // The panel announcement: the request and the creation, in that order, before
+  // the first turn — and it sits between agents.create and the first message.
+  assert.match(dispatch, /WORKTREE_RECORD = 'plugin:client-ui-forge\/worktree'/)
+  assert.match(dispatch, /\{ action: 'request', from: worktree\.from \}/)
+  assert.match(dispatch, /action: 'created',/)
+  const ensure = dispatch.slice(dispatch.indexOf('async ensureTicketSession('))
+  assert.ok(
+    ensure.indexOf('await this.agents.create(') < ensure.indexOf('await this.#announceWorktree(handle, cwd)'),
+    'the records are written after the session exists',
+  )
+  assert.ok(
+    ensure.indexOf('await this.#announceWorktree(handle, cwd)') < ensure.indexOf('return { sessionId, handle'),
+    'and before the session is handed back for its first turn',
+  )
+  // git is the only thing that owns a worktree: no service lookup anywhere in the package.
+  assert.equal(/betterGitWorktree/.test(files['engine.mjs']), false, 'the archive step removes the copy itself')
+  assert.equal(/betterGitWorktree/.test(files['host.mjs']), false, 'the host asks git, not a plugin')
+  assert.equal(/betterGitWorktree/.test(files['orchestrator-host.mjs']), false, 'and so does the orchestrator seam')
   // The engine asks before it renders the prompt, and passes the answer down.
   const plan = files['engine.mjs'].slice(files['engine.mjs'].indexOf('async plan(ticket)'))
   assert.ok(plan.indexOf('preparePlanWorktree') < plan.indexOf('render('), 'the copy is settled before the prompt is rendered')
@@ -815,9 +835,9 @@ test('the orchestrator seam files tickets with their settings and discards as it
     assert.ok(create.includes(`...(${field} === undefined`), `create must pass ${field} through only when it was given`)
   }
   // worktree is the one setting that is never simply omitted: like the human
-  // form, an omitted one means "on if the worktree service is mounted".
+  // form, an omitted one means "on if the workspace is a git checkout".
   assert.match(create, /worktree: worktree === undefined/)
-  assert.match(create, /betterGitWorktree'\)\?\.createForPath === 'function'/)
+  assert.match(create, /await isGitCheckout\(/)
   assert.match(create, /presets\.resolve\(String\(preset\)\)/, 'a preset id is checked against the live registry, as on the human path')
   assert.match(create, /actor: 'orchestrator'/)
   // discard: the engine's own path, credited to the orchestrator.

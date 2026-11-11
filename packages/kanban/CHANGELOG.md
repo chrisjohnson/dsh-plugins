@@ -5,6 +5,45 @@
 
 ## Unreleased
 
+### Changed
+
+- **Kanban cuts and clears its own worktrees (KAN-82).** The working copy a ticket
+  plans and builds in is now this plugin's own business: it shells out to plain
+  `git` and makes a **linked** worktree in the harness's native pool —
+  `<repo>/.agents/worktrees/<pet-name>` on branch `dsh/<pet-name>` — cut from
+  `origin/<default>` after a fresh `git fetch`. The `dsh-better-git-worktree`
+  service seam is gone: a deployment that never installed that plugin gets the same
+  worktrees as one that did, and the invariant carried over intact — a `git fetch`
+  that fails throws, so the ticket parks in needs-attention carrying git's own
+  reason rather than planning against yesterday's code. A copy with uncommitted
+  work is still refused, never removed, and its branch is deleted with `-d`, so
+  work that never landed survives its checkout. Copies an older release left under
+  `.dsh-worktrees` are left exactly where they are.
+- **The New-ticket Worktree switch defaults on in any git workspace (KAN-82).** It
+  used to follow whether a particular plugin happened to be mounted; it now follows
+  the one fact that matters — is the workspace a git checkout. A ticket filed into a
+  checkout starts in its own copy by default, a plain directory still plans where it
+  always did, and the hint says which is which. Orchestrator-filed tickets follow the
+  same rule.
+- **A ticket worktree shows up in the native "Change requests & worktrees" panel
+  (KAN-82).** Before a ticket session's first turn, kanban writes that panel's own
+  two worktree records — the open request and the creation that settles it — into
+  the session's log, so a copy the board cut reads in the panel exactly like one the
+  panel made, including its restore path when someone deletes the directory out from
+  under a live session. The records are plain session-log entries: with the bundle
+  unmounted nobody parses them, and a harness old enough to lack the record API loses
+  the card and nothing else.
+- **The checkout guard and close-time archive recognise the native pool
+  (KAN-82).** "This path is a managed copy, not the live checkout" is now decided on
+  the two-segment `.agents/worktrees` suffix, so a ticket's copy inside a live
+  deployment checkout is writable by its own session while the checkout above it
+  stays protected.
+
+### Dependencies
+
+- `@deepseek-ai/dsh-session` joins the peer list (the session-log record API the panel
+  announcement uses). It stays a peer, resolved from the host's own copy.
+
 ## 0.40.0
 
 ### Fixed

@@ -25,6 +25,7 @@ try {
   await import('@deepseek-ai/dsh-llm')
   await import('@deepseek-ai/dsh-tools')
   await import('@deepseek-ai/dsh-sandbox-policy')
+  await import('@deepseek-ai/dsh-session')
   driverModule = await import('../src/dispatch.mjs')
 } catch {
   driverModule = undefined
@@ -58,7 +59,7 @@ function makeConfig() {
  * subscribes to. `failMount` lists preset ids whose mount throws — the shape
  * of a preset that was unregistered or no longer activates (KAN-15).
  */
-function makeCtx({ archived = [], store, failMount = [], worktreeService = undefined } = {}) {
+function makeCtx({ archived = [], store, failMount = [], worktrees = undefined, appendRecord = undefined } = {}) {
   const listeners = {}
   const agentsById = new Map()
   const created = []
@@ -151,7 +152,6 @@ function makeCtx({ archived = [], store, failMount = [], worktreeService = undef
           },
         }
       }
-      if (name === 'betterGitWorktree') return worktreeService
       return undefined
     },
     on(name, fn) {
@@ -159,14 +159,21 @@ function makeCtx({ archived = [], store, failMount = [], worktreeService = undef
       return () => { delete listeners[name] }
     },
   }
-  return { ctx, agents, agentsById, archived, created, attached, listeners, store, makeAgent, mounts, workspacesCreated }
+  return { ctx, agents, agentsById, archived, created, attached, listeners, store, makeAgent, mounts, workspacesCreated, worktrees, appendRecord }
 }
 
 function makeDriver(options = {}) {
   const db = options.db
   const store = options.store
   const log = { info() {}, warn() {}, error() {}, debug() {} }
-  const driver = new SessionDriver({ ctx: options.ctx, log, getConfig: makeConfig, store })
+  const driver = new SessionDriver({
+    ctx: options.ctx,
+    log,
+    getConfig: makeConfig,
+    store,
+    worktrees: options.worktrees,
+    appendRecord: options.appendRecord,
+  })
   driver.start()
   return driver
 }
@@ -670,26 +677,33 @@ test('a reattached build session re-applies the ticket write mode and preset', {
   assert.equal(driver.live.get(id).preset, 'ptc')
 })
 
-// ---------------------------------------------------- KAN-18 lazy worktree seam
+// ---------------------------------------------------- KAN-18 lazy worktree
 //
 // The working copy is settled when planning starts, not when the ticket is made.
 // The driver is the only place that knows both halves: the ticket's stored
-// workspace and the `betterGitWorktree` service that owns working copies.
+// workspace and the working-copy lifecycle (src/worktrees.mjs) that cuts,
+// refreshes and clears it. The lifecycle is injected, so these tests watch the
+// driver's decisions without a repository of their own — the module's own
+// behaviour against real git is test/worktrees.test.mjs.
 
-/** A stand-in for the `betterGitWorktree` seam, recording every call. */
-function fakeWorktree({ created, refreshed, onCreateError, onRefreshError } = {}) {
-  const calls = { createForPath: [], refreshManagedCopy: [] }
+/** A stand-in for the working-copy lifecycle, recording every call. */
+function fakeWorktrees({ created, refreshed, described, onCreateError, onRefreshError } = {}) {
+  const calls = { createWorktree: [], refreshWorktree: [], describeWorktree: [] }
   return {
     calls,
-    createForPath: async (options) => {
-      calls.createForPath.push(options)
+    createWorktree: async (options) => {
+      calls.createWorktree.push(options)
       if (onCreateError !== undefined) throw onCreateError
-      return created ?? { managedRoot: '/managed/fresh-copy', baseOid: 'cafebabe0000', branch: 'dsh/fresh-copy' }
+      return created ?? { path: '/managed/fresh-copy', branch: 'dsh/fresh-copy', baseCommit: 'cafebabe0000', from: 'main', repositoryRoot: '/managed' }
     },
-    refreshManagedCopy: async (options) => {
-      calls.refreshManagedCopy.push(options)
+    refreshWorktree: async (options) => {
+      calls.refreshWorktree.push(options)
       if (onRefreshError !== undefined) throw onRefreshError
       return refreshed ?? { managed: false, path: options.path }
+    },
+    describeWorktree: async (path) => {
+      calls.describeWorktree.push(path)
+      return described ?? null
     },
   }
 }
@@ -697,23 +711,23 @@ function fakeWorktree({ created, refreshed, onCreateError, onRefreshError } = {}
 test('a ticket pointed at a pristine managed copy is refreshed in place and plans there', { skip }, async () => {
   const store = newStore()
   const ticket = ticketFor(store)
-  const service = fakeWorktree({ refreshed: { managed: true, updated: true, alreadyCurrent: false, baseOid: 'newhead000', branch: 'dsh/x', managedRoot: CWD } })
-  const harness = makeCtx({ store, worktreeService: service })
+  const worktrees = fakeWorktrees({ refreshed: { managed: true, updated: true, alreadyCurrent: false, baseOid: 'newhead000', branch: 'dsh/x', managedRoot: CWD } })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   const prep = await driver.preparePlanWorktree(ticket)
   assert.equal(prep.cwd, CWD)
   assert.equal(prep.note, undefined, 'an updated copy has nothing to warn about')
-  assert.deepEqual(service.calls.refreshManagedCopy, [{ path: CWD, fetchFirst: true }])
-  assert.equal(service.calls.createForPath.length, 0, 'a copy that exists is never duplicated')
+  assert.deepEqual(worktrees.calls.refreshWorktree, [{ path: CWD }])
+  assert.equal(worktrees.calls.createWorktree.length, 0, 'a copy that exists is never duplicated')
 })
 
 test('a copy that was left as-is produces a note naming the path, branch, reason and base', { skip }, async () => {
   const store = newStore()
   const ticket = ticketFor(store)
-  const service = fakeWorktree({
+  const worktrees = fakeWorktrees({
     refreshed: { managed: true, updated: false, reason: 'has-own-commits', ownCommits: 3, dirty: 0, baseOid: 'deadbeef12345678', branch: 'dsh/steady', managedRoot: CWD },
   })
-  const harness = makeCtx({ store, worktreeService: service })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   const prep = await driver.preparePlanWorktree(ticket)
   assert.equal(prep.cwd, CWD, 'the copy is still where the work happens')
@@ -726,8 +740,8 @@ test('a copy that was left as-is produces a note naming the path, branch, reason
 test('a workspace that is not one of ours is planned in as-is, with no note', { skip }, async () => {
   const store = newStore()
   const ticket = ticketFor(store)
-  const service = fakeWorktree({ refreshed: { managed: false, path: CWD } })
-  const harness = makeCtx({ store, worktreeService: service })
+  const worktrees = fakeWorktrees({ refreshed: { managed: false, path: CWD } })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   const prep = await driver.preparePlanWorktree(ticket)
   assert.deepEqual(prep, { cwd: CWD })
@@ -737,13 +751,13 @@ test('a ticket that only recorded the intent gets its copy at plan start, from t
   const store = newStore()
   const ticket = store.createTicket({ title: 'lazy', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous' })
   assert.equal(ticket.workspaceCwd, null, 'creating the ticket created no working copy')
-  const service = fakeWorktree({ created: { managedRoot: '/managed/lazy-copy', baseOid: 'remotehead00', branch: 'dsh/lazy' } })
-  const harness = makeCtx({ store, worktreeService: service })
+  const worktrees = fakeWorktrees({ created: { path: '/managed/lazy-copy', baseCommit: 'remotehead00', branch: 'dsh/lazy' } })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   const prep = await driver.preparePlanWorktree(store.getTicket(ticket.id))
   assert.equal(prep.cwd, '/managed/lazy-copy')
   assert.equal(prep.note, undefined)
-  assert.deepEqual(service.calls.createForPath, [{ path: CWD, title: 'lazy', fetchFirst: true, baseOnRemote: true }])
+  assert.deepEqual(worktrees.calls.createWorktree, [{ path: CWD }])
   assert.deepEqual(harness.workspacesCreated, [{ path: '/managed/lazy-copy', title: 'lazy' }])
   // The ticket is re-pointed, so a later phase (and a re-plan) refreshes it instead of making another.
   const after = store.getTicket(ticket.id)
@@ -754,33 +768,74 @@ test('a ticket that only recorded the intent gets its copy at plan start, from t
 test('a plain ticket with no intent and no workspace plans in the default workspace', { skip }, async () => {
   const store = newStore()
   const ticket = store.createTicket({ title: 'plain', planTiming: 'at_pickup', planQuestions: 'autonomous' })
-  const service = fakeWorktree()
-  const harness = makeCtx({ store, worktreeService: service })
+  const worktrees = fakeWorktrees()
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   const prep = await driver.preparePlanWorktree(ticket)
   assert.equal(prep.cwd, CWD)
-  assert.equal(service.calls.refreshManagedCopy.length, 0)
-  assert.equal(service.calls.createForPath.length, 0)
+  assert.equal(worktrees.calls.refreshWorktree.length, 0)
+  assert.equal(worktrees.calls.createWorktree.length, 0)
 })
 
-test('with no worktree plugin mounted the ticket plans where it always did', { skip }, async () => {
+test('a worktree asked for where git cannot cut one fails the dispatch, not the ticket silently', { skip }, async () => {
   const store = newStore()
-  const ticket = store.createTicket({ title: 'no plugin', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous' })
-  const harness = makeCtx({ store, worktreeService: undefined })
+  const ticket = store.createTicket({ title: 'no repo', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous' })
+  const worktrees = fakeWorktrees({ onCreateError: new Error('/tmp/plain-dir is not inside a git repository') })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
-  const prep = await driver.preparePlanWorktree(ticket)
-  assert.equal(prep.cwd, CWD)
-  assert.equal(prep.note, undefined)
+  await assert.rejects(() => driver.preparePlanWorktree(ticket), /not inside a git repository/)
+  assert.equal(store.getTicket(ticket.id).workspaceCwd, null, 'nothing was created on the way out')
 })
 
 test('a failed fetch propagates out of the preparation instead of planning on a stale base', { skip }, async () => {
   const store = newStore()
   const ticket = store.createTicket({ title: 'offline', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous' })
-  const service = fakeWorktree({ onCreateError: new Error('git fetch failed for /repo: could not read from remote repository') })
-  const harness = makeCtx({ store, worktreeService: service })
+  const worktrees = fakeWorktrees({ onCreateError: new Error('git fetch origin failed in /repo: could not read from remote repository') })
+  const harness = makeCtx({ store, worktrees })
   const driver = makeDriver({ ...harness, store })
   await assert.rejects(() => driver.preparePlanWorktree(ticket), /could not read from remote repository/)
   assert.equal(store.getTicket(ticket.id).workspaceCwd, null, 'nothing was created on the way out')
+})
+
+test('a session started in a ticket worktree announces it to the panel before its first turn', { skip }, async () => {
+  const store = newStore()
+  const ticket = store.createTicket({ title: 'panel', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous' })
+  const worktree = {
+    path: '/managed/brave-otter',
+    branch: 'dsh/brave-otter',
+    from: 'main',
+    baseCommit: 'cafebabe00000000',
+    repositoryRoot: '/managed',
+  }
+  const records = []
+  const harness = makeCtx({
+    store,
+    worktrees: fakeWorktrees({ described: worktree }),
+    appendRecord: async () => (session, type, data) => records.push({ sessionId: session.id, type, data }),
+  })
+  const driver = makeDriver({ ...harness, store })
+  const session = await driver.ensureTicketSession({
+    ticket, role: 'planner', route: ROUTE, purpose: 'plan', preparedCwd: worktree.path,
+  })
+  assert.equal(records.length, 2, 'one request and one created, in that order')
+  assert.equal(records[0].type, 'plugin:client-ui-forge/worktree')
+  assert.equal(records[0].sessionId, session.sessionId, 'into this session log')
+  assert.deepEqual(records[0].data, { action: 'request', from: 'main' })
+  assert.deepEqual(records[1].data, { action: 'created', worktree })
+})
+
+test('a session that is not in a worktree announces nothing', { skip }, async () => {
+  const store = newStore()
+  const ticket = ticketFor(store)
+  const records = []
+  const harness = makeCtx({
+    store,
+    worktrees: fakeWorktrees({ described: null }),
+    appendRecord: async () => (session, type, data) => records.push({ type, data }),
+  })
+  const driver = makeDriver({ ...harness, store })
+  await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
+  assert.equal(records.length, 0)
 })
 
 test('ensureTicketSession starts in the prepared cwd, not the stored one', { skip }, async () => {

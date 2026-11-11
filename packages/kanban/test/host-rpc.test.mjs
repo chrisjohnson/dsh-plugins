@@ -8,7 +8,8 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -30,7 +31,25 @@ const skip = kanban === undefined ? 'dsh peer packages are not installed' : fals
 
 const LOG = { info() {}, warn() {}, error() {}, debug() {} }
 
-async function boot({ worktreeService = false } = {}) {
+/**
+ * A default workspace to file tickets into: a real one-commit git checkout, or a
+ * plain directory. The New-ticket worktree switch now follows this fact and
+ * nothing else, so the test has to own it.
+ */
+function workspace({ git = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'kanban-host-ws-'))
+  if (!git) return dir
+  const run = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore' })
+  run('init', '-q', '-b', 'main')
+  run('config', 'user.email', 'test@example.com')
+  run('config', 'user.name', 'test')
+  writeFileSync(join(dir, 'README.md'), 'seed\n')
+  run('add', 'README.md')
+  run('commit', '-q', '-m', 'seed')
+  return dir
+}
+
+async function boot({ workspaceCwd = workspace() } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-host-rpc-'))
   const dbPath = join(dir, 'kanban.db')
   const routes = new Map()
@@ -40,7 +59,6 @@ async function boot({ worktreeService = false } = {}) {
       if (name === 'llm') {
         return { listProviders: () => [{ id: 'local' }], listModels: async () => [], resolveModelInfo: async () => null }
       }
-      if (name === 'betterGitWorktree' && worktreeService) return { createForPath: async () => ({ managedRoot: '/managed/copy' }) }
       return undefined
     },
     effect() {},
@@ -50,6 +68,7 @@ async function boot({ worktreeService = false } = {}) {
   }
   await kanban(ctx, {
     dbPath,
+    defaultWorkspaceCwd: workspaceCwd,
     providers: [{ name: 'local' }],
     roles: {
       planner: { provider: 'local', model: 'm' },
@@ -256,19 +275,21 @@ test('a retry over RPC resets the budget and records the instruction for the nex
   assert.ok(store.listEvents(id, { limit: 100 }).some((e) => e.kind === 'budget_reset'))
 })
 
-test('a new ticket defaults to its own worktree when the worktree service is mounted, unless told otherwise', { skip }, async () => {
-  const { rpc, store } = await boot({ worktreeService: true })
+test('a new ticket defaults to its own worktree when the workspace is a git checkout, unless told otherwise', { skip }, async () => {
+  const { rpc, store } = await boot({ workspaceCwd: workspace({ git: true }) })
   const made = async (fields) => (await rpc('create', { title: 'demo', body: '', column: 'backlog', ...fields })).value.ticket.id
   assert.equal(store.getTicket(await made({})).worktree, true, 'omitted means on')
   assert.equal(store.getTicket(await made({ worktree: null })).worktree, true, 'null means the default too')
   assert.equal(store.getTicket(await made({ worktree: false })).worktree, false, 'an explicit off is honoured')
   assert.equal(store.getTicket(await made({ worktree: true })).worktree, true)
+  assert.equal((await rpc('capabilities')).value.worktree, true, 'the board shows the switch for a git workspace')
 })
 
-test('a new ticket has no worktree intent when the worktree service is not mounted', { skip }, async () => {
+test('a new ticket has no worktree intent in a plain directory, and the switch stays hidden', { skip }, async () => {
   const { rpc, store } = await boot()
   const id = (await rpc('create', { title: 'demo', body: '', column: 'backlog' })).value.ticket.id
   assert.equal(store.getTicket(id).worktree, false)
+  assert.equal((await rpc('capabilities')).value.worktree, false)
 })
 
 test('orchestratorSetPaused toggles the pause, validates its input, and the board and status report it', { skip }, async () => {

@@ -23,6 +23,7 @@ import { countGrants, grantAdvisory, isPlanReady, planReadyReason } from './gran
 import { estimateTurnCost, priceUsage } from './usage.mjs';
 import { endedOnQuestion, questionParkReason, recoverySummary, restartResumeAllowed } from './recovery.mjs';
 import { createWipGate, overflowForLoweredCap, queueSummary, validCap, wipQueueReason } from './wip.mjs';
+import * as ticketWorktrees from './worktrees.mjs';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_BYTES = 60_000;
@@ -217,8 +218,10 @@ function cloneNamesLine(ticket) {
 }
 
 export class Engine {
-  constructor({ ctx, store, driver, getConfig, getPrompts, log }) {
+  constructor({ ctx, store, driver, getConfig, getPrompts, log, worktrees = ticketWorktrees }) {
     this.ctx = ctx;
+    /** The ticket working-copy lifecycle (src/worktrees.mjs), or a test's stand-in. */
+    this.worktrees = worktrees;
     this.store = store;
     this.driver = driver;
     this.getConfig = getConfig;
@@ -1319,19 +1322,10 @@ export class Engine {
     if (alreadyDone) return;
     const path = ticket.workspaceCwd;
 
-    // The worktree service is looked up now: plugin mount order is not fixed, and
-    // a deployment without it (or on an older release) simply keeps its copies.
-    let service;
-    try {
-      service = this.ctx.get('betterGitWorktree');
-    } catch {
-      service = undefined;
-    }
-    if (typeof service?.removeForPath !== 'function') {
-      this.recordArchive(ticket, 'workspace_archive_skipped', { reason: 'worktree_service_unavailable', path });
-      return;
-    }
-    const result = await service.removeForPath({ path });
+    // The copy is removed by this plugin's own lifecycle: git takes the linked
+    // worktree away, and a copy holding uncommitted work refuses rather than
+    // losing anybody's edits.
+    const result = await this.worktrees.removeWorktree({ path });
     if (!copyIsGone(result, existsSync(path))) {
       this.recordArchive(ticket, 'workspace_archive_skipped', {
         reason: result?.refused === true ? 'removal_refused' : 'not_removed',

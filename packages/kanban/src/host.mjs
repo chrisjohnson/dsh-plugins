@@ -30,6 +30,7 @@ import { phaseSessions } from './board-view.mjs';
 import { compactBoard, createBoardSnapshots, derivedFacts, digest, stableJson } from './board-snapshot.mjs';
 import { BoardFeed } from './feed.mjs';
 import { ALLOWED_MEDIA_TYPES, describeBodyImages, listTokens, prepareBodyImages, readImageFromStore, resolveAttachments } from './images.mjs';
+import { createWorktree, isGitCheckout } from './worktrees.mjs';
 
 const PLUGIN_NAME = 'dsh-kanban';
 const API_BASE = '/api/kanban';
@@ -536,11 +537,16 @@ export default async function kanban(ctx, config = {}) {
             });
             if (!prepared.ok) return fail('bad_request', prepared.error);
             // A ticket without its own worktree runs its sessions inside the workspace
-            // itself, which for a live checkout is unusable for builds. So the intent
-            // defaults to ON when the worktree service is mounted; an explicit
-            // `worktree: false` still turns it off.
+            // itself, which for a live checkout is unusable for builds. Kanban cuts the
+            // copy itself now, so the intent defaults to ON whenever there is a git
+            // checkout to cut one from; an explicit `worktree: false` still turns it
+            // off, and a plain directory keeps planning where it always planned.
             if (fields.worktree === undefined || fields.worktree === null) {
-              fields.worktree = typeof ctx.get('betterGitWorktree')?.createForPath === 'function';
+              fields.worktree = await isGitCheckout(
+                typeof fields.workspaceCwd === 'string' && fields.workspaceCwd !== ''
+                  ? fields.workspaceCwd
+                  : live.defaultWorkspaceCwd ?? process.cwd(),
+              );
             }
             // KAN-72: filing straight into Working obeys the same cap as a drag
             // does. At the cap the ticket is created in Backlog wearing the
@@ -775,7 +781,10 @@ export default async function kanban(ctx, config = {}) {
             return {
               ok: true,
               value: {
-                worktree: typeof ctx.get('betterGitWorktree')?.createForPath === 'function',
+                // Whether the New-ticket Worktree switch has anything to do: the
+                // workspace kanban would cut from is a git checkout. Same fact
+                // the create-case default above uses.
+                worktree: await isGitCheckout(live.defaultWorkspaceCwd ?? process.cwd()),
                 continueKicker: typeof ctx.get('continueKicker')?.kick === 'function',
                 // KAN-15: the New-ticket preset picker reads this. `default` is
                 // the harness default id (what a null preset tracks), `items`
@@ -789,22 +798,28 @@ export default async function kanban(ctx, config = {}) {
               },
             };
           case 'worktree': {
-            const service = ctx.get('betterGitWorktree');
-            if (typeof service?.createForPath !== 'function') return fail('unavailable', 'dsh-better-git-worktree is not mounted');
             const ticket = p.id === undefined ? undefined : requireTicket(String(p.id));
             const base = typeof p.workspaceCwd === 'string' && p.workspaceCwd !== ''
               ? p.workspaceCwd
               : ticket?.workspaceCwd ?? live.defaultWorkspaceCwd ?? process.cwd();
             const title = typeof p.title === 'string' && p.title.trim() !== '' ? p.title.trim() : (ticket?.title ?? 'Kanban worktree');
-            const created = await service.createForPath({ path: base, title });
+            // Kanban owns the lifecycle now, so this is the same call the planning
+            // round makes — a human asking early instead of at plan start. git's
+            // own reason (not a repository, a failed fetch) is the answer.
+            let created;
             try {
-              await ctx.get('workspaceRegistry')?.create?.(created.managedRoot, title);
+              created = await createWorktree({ path: base });
+            } catch (error) {
+              return fail('unavailable', message(error));
+            }
+            try {
+              await ctx.get('workspaceRegistry')?.create?.(created.path, title);
             } catch (error) {
               log.warn('worktree workspace registration failed: %s', message(error));
             }
             const updated = ticket === undefined
               ? undefined
-              : store.updateTicket(ticket.id, { workspaceCwd: created.managedRoot }, { actor: 'human', reason: 'worktree created' });
+              : store.updateTicket(ticket.id, { workspaceCwd: created.path }, { actor: 'human', reason: 'worktree created' });
             return { ok: true, value: { worktree: created, ticket: updated ?? null } };
           }
           case 'config': {

@@ -1,14 +1,15 @@
 // Archiving a closed ticket's workspace: the decisions, with no dsh imports.
 //
-// When a ticket closes, its managed working copy (a git worktree the better-git-
-// worktree plugin cut for it) and its sessions are clutter. Whether it is safe
-// to clear them away is a pure question over the ticket, the other tickets and
-// the configuration; the engine does the effects.
+// When a ticket closes, its managed working copy (the linked git worktree this
+// plugin cut for it) and its sessions are clutter. Whether it is safe to clear
+// them away is a pure question over the ticket, the other tickets and the
+// configuration; the engine does the effects.
 
 import { isAbsolute, normalize } from 'node:path';
 
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
-import { MANAGED_WORKTREES_DIR, isInsideLiveCheckout } from './live-checkout.mjs';
+import { isInsideLiveCheckout } from './live-checkout.mjs';
+import { isPoolPath } from './worktrees.mjs';
 
 export const ARCHIVE_MODES = ['off', 'done', 'done_and_discarded'];
 
@@ -25,13 +26,13 @@ export function archivesColumn(mode, column) {
   return false;
 }
 
-/** Whether a path sits strictly inside a `.dsh-worktrees` directory. */
+/**
+ * Whether a path sits inside a managed-worktree pool. The pool is two segments
+ * deep (`<repo>/.agents/worktrees/<name>`), so the suffix test has to match both
+ * segments and something after them.
+ */
 export function isManagedWorktreePath(path) {
-  const canonical = canonicalPath(path);
-  if (canonical === null) return false;
-  const parts = canonical.split('/');
-  const at = parts.indexOf(MANAGED_WORKTREES_DIR);
-  return at !== -1 && at < parts.length - 1;
+  return isPoolPath(path);
 }
 
 /**
@@ -66,9 +67,9 @@ export function archiveSkipReason({ ticket, tickets, openSessions, liveCheckouts
 }
 
 /**
- * Whether the worktree service's answer means the copy is gone, so the
- * sessions may be archived. A refusal never does; "nothing to remove" does only
- * when the directory really is absent (an earlier attempt removed it).
+ * Whether the removal's answer means the copy is gone, so the sessions may be
+ * archived. A refusal never does; "nothing to remove" does only when the
+ * directory really is absent (an earlier attempt removed it).
  */
 export function copyIsGone(result, pathExists) {
   if (result === null || typeof result !== 'object') return false;

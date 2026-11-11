@@ -34,6 +34,32 @@ import { sessionTitle } from './board-view.mjs';
 import { makeGrantApprover } from './grants.mjs';
 import { makeGuardApprover, resolveLiveCheckouts, resolveReadOnlyCommands } from './guard.mjs';
 import { askUserToolDefinition, makeQuestionAnswerer, questionsFromCallArgs } from './questions.mjs';
+import * as ticketWorktrees from './worktrees.mjs';
+
+/**
+ * The Forge panel's worktree record name. Declared here rather than imported:
+ * the panel ships in a client-side bundle that may or may not be mounted, and a
+ * record is only a log entry until something that understands it is.
+ */
+const WORKTREE_RECORD = 'plugin:client-ui-forge/worktree';
+
+/**
+ * `appendPluginRecord` from `@deepseek-ai/dsh-session`, resolved lazily and
+ * only once. A static import would be a hard requirement on a core export that
+ * older harnesses do not have, and a plugin that fails to load over a cosmetic
+ * record is a worse outcome than a ticket whose panel shows no worktree card.
+ */
+let appendPluginRecord = undefined;
+async function loadAppendPluginRecord() {
+  if (appendPluginRecord !== undefined) return appendPluginRecord;
+  try {
+    const session = await import('@deepseek-ai/dsh-session');
+    appendPluginRecord = typeof session.appendPluginRecord === 'function' ? session.appendPluginRecord : null;
+  } catch {
+    appendPluginRecord = null;
+  }
+  return appendPluginRecord;
+}
 
 export class DispatchError extends Error {
   constructor(message, { code = 'DISPATCH_FAILED' } = {}) {
@@ -118,8 +144,17 @@ class WaitLedger extends Map {
 
 /** Existing sessions can be reused within a purpose, never across purposes. */
 export class SessionDriver {
-  constructor({ ctx, log, getConfig, store }) {
+  constructor({
+    ctx, log, getConfig, store,
+    worktrees = ticketWorktrees,
+    // The core export behind the panel announcement, injectable so a test can
+    // watch the records without a real session log.
+    appendRecord = loadAppendPluginRecord,
+  }) {
     this.ctx = ctx;
+    /** The ticket working-copy lifecycle: the real one, or a test's stand-in. */
+    this.worktrees = worktrees;
+    this.appendRecord = appendRecord;
     this.agents = ctx.get('agents');
     this.sessionController = ctx.get('sessionController');
     this.log = log;
@@ -476,29 +511,18 @@ export class SessionDriver {
   }
 
   /**
-   * The `betterGitWorktree` seam, looked up per call: plugin mount order is not
-   * fixed, and a plugin that is simply not installed must not stop a ticket.
-   */
-  #worktreeService() {
-    try {
-      return this.ctx.get('betterGitWorktree');
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
    * Decide — and now, not at ticket-creation time — which directory a plan
    * session starts in (KAN-18).
    *
    * Three shapes, in the order the board can present them:
    *
-   *   (B) The ticket already names a checkout. That is every eager-era ticket,
-   *       and any ticket a human pointed at a workspace. When that path is a
-   *       managed working copy it is fetched and brought to the latest default
-   *       branch *if it holds nothing of its own*; a copy with work in it, or a
-   *       path this plugin does not own, is left exactly as it is and the caller
-   *       gets a note to say so, which lands in the plan prompt.
+   *   (B) The ticket already names a checkout. That is every ticket a human
+   *       pointed at a workspace, and every ticket whose copy was cut on an
+   *       earlier planning round. When that path is a managed working copy it is
+   *       fetched and brought to the latest default branch *if it holds nothing
+   *       of its own*; a copy with work in it, or a path outside the pool, is
+   *       left exactly as it is and the caller gets a note to say so, which
+   *       lands in the plan prompt.
    *
    *   (A) The ticket only recorded the intent — the new-ticket switch. The copy
    *       is cut here, from the just-fetched default branch, registered as a
@@ -517,50 +541,76 @@ export class SessionDriver {
   async preparePlanWorktree(ticket) {
     const config = this.getConfig();
     const plain = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
-    const service = this.#worktreeService();
-    if (service === undefined || service === null) {
-      if (ticket.worktree === true) {
-        this.log.warn('kanban: %s asked for a worktree but dsh-better-git-worktree is not mounted; planning in %s', ticket.key, plain);
-      }
-      return { cwd: plain };
-    }
     // (B) a checkout the ticket already points at.
     if (typeof ticket.workspaceCwd === 'string' && ticket.workspaceCwd !== '') {
-      if (typeof service.refreshManagedCopy !== 'function') return { cwd: ticket.workspaceCwd };
-      const refreshed = await service.refreshManagedCopy({ path: ticket.workspaceCwd, fetchFirst: true });
+      const refreshed = await this.worktrees.refreshWorktree({ path: ticket.workspaceCwd });
       // Not one of ours (a plain checkout, a hand-picked folder): nothing to
       // refresh, nothing to say.
       if (refreshed?.managed !== true) return { cwd: ticket.workspaceCwd };
       if (refreshed.updated === true) return { cwd: ticket.workspaceCwd };
       return { cwd: ticket.workspaceCwd, note: worktreeStaleNote(refreshed) };
     }
-    // (A) intent only: create the copy now, from the current upstream.
+    // (A) intent only: cut the copy now, from the current upstream.
     if (ticket.worktree === true) {
-      if (typeof service.createForPath !== 'function') {
-        this.log.warn('kanban: %s asked for a worktree but the mounted worktree service cannot create one; planning in %s', ticket.key, plain);
-        return { cwd: plain };
-      }
-      const created = await service.createForPath({
-        path: config.defaultWorkspaceCwd ?? process.cwd(),
-        title: ticket.title,
-        fetchFirst: true,
-        baseOnRemote: true,
-      });
+      const created = await this.worktrees.createWorktree({ path: config.defaultWorkspaceCwd ?? process.cwd() });
       try {
-        await this.ctx.get('workspaceRegistry')?.create?.(created.managedRoot, ticket.title);
+        await this.ctx.get('workspaceRegistry')?.create?.(created.path, ticket.title);
       } catch (error) {
-        this.log.warn('kanban: worktree workspace registration failed for %s: %s', created.managedRoot, String(error?.message ?? error));
+        this.log.warn('kanban: worktree workspace registration failed for %s: %s', created.path, String(error?.message ?? error));
       }
       this.store.updateTicket(
         ticket.id,
-        { workspaceCwd: created.managedRoot },
+        { workspaceCwd: created.path },
         { actor: 'engine', reason: 'worktree created at plan start' },
       );
-      this.log.info('kanban: %s worktree created at %s based on %s', ticket.key, created.managedRoot, created.baseOid);
-      return { cwd: created.managedRoot };
+      this.log.info('kanban: %s worktree created at %s based on %s', ticket.key, created.path, created.baseCommit);
+      return { cwd: created.path };
     }
     // (C) nothing was ever asked for.
     return { cwd: plain };
+  }
+
+  /**
+   * Tell the native "Change requests & worktrees" panel that this session works
+   * in a ticket worktree (KAN-82).
+   *
+   * The panel keeps its worktree card off two plugin records on the session's
+   * own log: an open `request` and the `created` that settles it (a `created`
+   * with no open request is ignored, so the order is the whole contract). Both
+   * have to be in the log before the first turn starts — a request recorded
+   * after `turn/start` is dropped — which is exactly the window this method
+   * sits in, between `agents.create` and the turn's first message.
+   *
+   * Kanban cuts the copy itself, so it writes the pair itself: a ticket
+   * worktree then reads in the panel the same as one the panel made, including
+   * its restore-and-retry behaviour if someone deletes the directory. With the
+   * bundle unmounted the records are inert entries in a log nobody parses.
+   */
+  async #announceWorktree(handle, cwd) {
+    try {
+      const worktree = await this.worktrees.describeWorktree(cwd);
+      if (worktree === null) return;
+      const append = await this.appendRecord();
+      if (append === null) return;
+      const session = handle?.agent?.session;
+      append(session, WORKTREE_RECORD, { action: 'request', from: worktree.from });
+      // Spelled out field by field: the panel's schema is strict, so a field
+      // added here for kanban's own use would silently drop the whole record.
+      append(session, WORKTREE_RECORD, {
+        action: 'created',
+        worktree: {
+          path: worktree.path,
+          branch: worktree.branch,
+          from: worktree.from,
+          baseCommit: worktree.baseCommit,
+          repositoryRoot: worktree.repositoryRoot,
+        },
+      });
+    } catch (error) {
+      // Cosmetic, always: a ticket whose panel shows no card is still a ticket
+      // running in its own checkout, so nothing here may fail the dispatch.
+      this.log.warn('kanban: worktree panel record failed: %s', String(error?.message ?? error));
+    }
   }
 
   /** Return the live session for one ticket purpose, creating it on first use. */
@@ -636,6 +686,7 @@ export class SessionDriver {
     liveRef.handle = handle;
     liveRef.routeKey = routeKey(route);
     this.#applySandboxMode(liveRef);
+    await this.#announceWorktree(handle, cwd);
     void this.#attachWorkspace(sessionId, cwd, 0);
     try {
       const titles = this.ctx.get('sessionTitle');

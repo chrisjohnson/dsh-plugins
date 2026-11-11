@@ -2557,7 +2557,7 @@ var CSS =
 						})
 					)
 				),
-				props.worktreeAvailable ? h("div", { className: "kb-hint", children: "On by default: a worktree from the latest main is created when planning starts. Turn it off to run in the workspace itself." }) : null,
+				props.worktreeAvailable ? h("div", { className: "kb-hint", children: "On by default in a git workspace: planning starts in a worktree cut from the latest default branch on origin. Turn it off to run in the workspace itself." }) : null,
 				h("div", { className: "kb-row" },
 					h("div", null, h("div", { className: "kb-label", children: "Planning" }),
 						h(SegmentedControl, {
