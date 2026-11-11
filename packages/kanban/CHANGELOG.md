@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.41.0
+
 ### Changed
 
 - **Kanban cuts and clears its own worktrees (KAN-82).** The working copy a ticket
