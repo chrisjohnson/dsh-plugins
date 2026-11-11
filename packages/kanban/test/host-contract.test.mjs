@@ -544,8 +544,13 @@ test('planning settles the working copy in kanban, with no worktree plugin in th
   const dispatch = files['dispatch.mjs']
   assert.match(dispatch, /async preparePlanWorktree\(ticket\)/)
   assert.match(dispatch, /import \* as ticketWorktrees from '\.\/worktrees\.mjs'/, 'the lifecycle lives here now')
-  assert.match(dispatch, /this\.worktrees\.refreshWorktree\(\{ path: ticket\.workspaceCwd \}\)/)
-  assert.match(dispatch, /this\.worktrees\.createWorktree\(\{ path: config\.defaultWorkspaceCwd/)
+  assert.match(dispatch, /this\.worktrees\.refreshWorktree\(\{ path: named \}\)/)
+  assert.match(dispatch, /this\.worktrees\.createWorktree\(\{ path: plain \}\)/)
+  assert.match(
+    dispatch,
+    /if \(ticket\.worktree !== true\) return \{ cwd: named \}/,
+    'a named workspace without the intent plans where it points',
+  )
   assert.match(dispatch, /worktree created at plan start/)
   assert.equal(/betterGitWorktree/.test(dispatch), false, 'the seam is gone')
   // The panel announcement: the request and the creation, in that order, before

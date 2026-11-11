@@ -1173,20 +1173,23 @@ planning happens where it always did.
 
 At plan start the driver settles the directory, in three shapes:
 
-- **The ticket already points at a checkout** (any workspace a human picked, or the
-  copy an earlier planning round cut). If that path is inside the pool it is fetched
-  and fast-forwarded onto the latest default branch — but only when the copy is
-  *pristine*: a clean tree including untracked paths, and no commit the upstream
+- **The ticket points at a copy of the pool already** (the copy an earlier planning
+  round cut, or one made by hand or by the Forge panel in the same pool). It is
+  fetched and fast-forwarded onto the latest default branch — but only when the copy
+  is *pristine*: a clean tree including untracked paths, and no commit the upstream
   default branch does not already have. A copy with work in it is left exactly as it
   is, and the plan prompt gains a line saying so, naming the path, the branch, why it
   was not moved and what it is based on. Nothing is ever deleted, reset or rebased.
-- **The ticket only recorded the intent.** The copy is created now, from the
-  just-fetched `origin/<default branch>` (not from wherever the source checkout
-  happens to sit), registered as a workspace, and the ticket is re-pointed at it.
-  A later phase, or a re-plan, takes the first branch above. A repository with no
-  origin — a scratch repo, an offline clone — is cut from local `HEAD` and says so by
-  recording no base branch; there is nothing to be stale against.
-- **Neither.** The ordinary default workspace, exactly as before.
+- **The ticket asked for a working copy and does not have one yet.** That is every
+  ticket the new-ticket switch filed: the form always names the workspace the copy is
+  wanted *from*, so the copy is cut from that checkout — from its just-fetched
+  `origin/<default branch>` (not from wherever that checkout happens to sit),
+  registered as a workspace, and the ticket is re-pointed at it. A later phase, or a
+  re-plan, takes the first shape above, so one ticket never gets two copies. A
+  repository with no origin — a scratch repo, an offline clone — is cut from local
+  `HEAD` and says so by recording no base branch; there is nothing to be stale
+  against.
+- **Neither.** The ordinary workspace, exactly as before.
 
 A `git fetch` that fails **fails the plan dispatch**: the ticket parks in
 needs-attention carrying git's own words, because planning against a base nobody

@@ -5,6 +5,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A ticket that names a workspace now actually gets its worktree (KAN-82).** The
+  working copy was settled in the wrong order: a ticket with a workspace already on
+  it was asked "is this one of ours?", and when the answer was no — which it always
+  is for a ticket the new-ticket switch filed, since that form always names the
+  workspace the copy is wanted *from* — planning went ahead inside that checkout and
+  the switch did nothing at all. The order is now "is it one of ours" then "was a copy
+  asked for", so an intent ticket is cut from its own workspace's fetched
+  `origin/<default>`, is re-pointed at the copy, and a re-plan refreshes that copy
+  instead of cutting a second one. The same fix makes the fetch failure bite: a
+  ticket whose origin is dead now parks instead of planning against stale code.
+
 ## 0.41.0
 
 ### Changed
