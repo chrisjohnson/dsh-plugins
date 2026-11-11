@@ -5,6 +5,41 @@
 
 ## Unreleased
 
+## 0.37.0
+
+### Added
+
+- **The Work page's orchestrator button now pulls a tray down over the board (KAN-73).**
+  Clicking it opens the real orchestrator session in the centre column and dims
+  everything else away — no sidebars to read around the conversation, no second
+  panel to lose. The tray *is* the session, so it is live: type in it, stop it,
+  watch it work. It gets out of the way the three ways anything floating does — the
+  ✕ pill at its top-right, Esc, or a click on the dim ring around it — and each of
+  them returns you to the board you came from. It also closes by itself the moment
+  the centre column shows something else, because a tray framing the wrong session
+  is just a dim screen. On a phone (≤768px) there is no room for a tray over a
+  tray, so the button does what it always did and switches to the session.
+- **A twisted-arrow button sits beside it and does the full switch at every size** —
+  the same icon a card uses to jump to its session, for the case where the
+  orchestrator should have the whole window rather than the middle of it.
+- **The orchestrator button has a living border.** A 2px ring of the five workflow
+  phase colors — plan blue, build teal, review pink, approval violet, done green —
+  sweeps around it while the orchestrator session has a turn in flight, over a
+  violet glow that breathes, with eight sparkles coming off the edge. When the
+  session goes quiet the ring stops where it stands: still coloured, still glowing,
+  no longer moving or sparkling — and it resumes from exactly that angle when work
+  starts again. Only transform and opacity animate, the sparkles are not in the DOM
+  at all while idle, and `prefers-reduced-motion` leaves a plain static ring.
+
+### Changed
+
+- **Opening a session from the board now settles on the shell's own answer (KAN-73).**
+  The wait for "is this session on screen yet" read a `current` field the session
+  list does not have, so every jump — a card, the orchestrator, a recovery row —
+  held its loading state for the full 1.5s timeout before resolving. It now reads
+  the main-view retention the shell itself uses and resolves as soon as the session
+  is actually up.
+
 ## 0.36.0
 
 ### Changed

@@ -167,8 +167,10 @@ test('nothing opens a session on its own', async () => {
   // the same line as the click that caused it, or is the definition itself.
   const callers = client.split('\n').filter((line) => line.includes('openSessionById'))
   // Every open goes through a handler that reports a failure: the button
-  // component, or the alert helper for controls with no room for a message.
-  assert.equal(callers.length, 4, 'one declaration, one definition and the two reporting handlers, nothing else')
+  // component, or the alert helper for controls with no room for a message, or
+  // the tray launcher KAN-73 added — itself reachable only from the Work page
+  // button's onClick.
+  assert.equal(callers.length, 5, 'one declaration, one definition and the three click handlers, nothing else')
   for (const line of callers) {
     const allowed = line.includes('var openSessionById = null;')
       || line.includes('openSessionById = function')
