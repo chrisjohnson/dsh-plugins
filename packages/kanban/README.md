@@ -589,13 +589,21 @@ a narrow window rather than overlapping the title, and the tail group travels to
 so no button is ever stranded alone.
 
 **Pausing it.** **Pause orchestrator** (in the tray pill, or in the header on a
-phone) cuts all traffic between the engine and the orchestrator: board events are
-dropped, every orchestrator tool call is refused, and the launcher's border goes
-washed out until it is resumed. **Resume
+phone) stops the orchestrator outright: a turn already in flight is cancelled and
+its queued digests are cleared, board events are dropped, every orchestrator tool
+call is refused, and the launcher's border goes washed out until it is resumed
+(0.40.0 — before that a pause only cut the traffic and let the current turn run to
+the end). **Resume
 orchestrator** sends it one fresh board snapshot. The switch is stored in the
 database, so a restart keeps it. RPC: `POST /api/kanban/orchestratorSetPaused
 {paused: boolean}`; the `orchestrator` answer and the board payload both report
 `paused` / `orchestratorPaused`.
+
+**The arrow in the pill (0.40.0).** The twisted arrow means *take me to the
+orchestrator session*. Inside the tray that session is already what you are
+looking at, so there the arrow drops the tray chrome and leaves you with the whole
+session — it no longer switches to what is already showing and appears to do
+nothing. From the phone header, where no tray ever opens, it is the plain switch.
 
 **What it is fed.** On (re)start it receives a `[board snapshot]`: counts, then
 one line per open ticket — key, title, column, phase, and `PARKED:` with the
