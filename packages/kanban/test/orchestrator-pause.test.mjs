@@ -105,7 +105,12 @@ test('an orchestrator that is not paused still runs its tools', async () => {
 function liveOrchestrator() {
   const store = memoryStore()
   const sent = []
-  const agent = { status: 'idle', followup: (message) => sent.push(message) }
+  const cancelled = []
+  const agent = {
+    status: 'idle',
+    followup: (message) => sent.push(message),
+    cancel: (cause) => cancelled.push(cause),
+  }
   const ctx = {
     get: (name) => (name === 'agents' ? { get: () => agent } : undefined),
     on: () => () => {},
@@ -122,8 +127,32 @@ function liveOrchestrator() {
   orchestrator.phase = 'live'
   const ticket = store.createTicket({ title: 'demo', body: '', column: 'backlog' })
   const event = { kind: 'needs_attention', ticketId: ticket.id, actor: 'engine', payload: { reason: 'stuck' } }
-  return { orchestrator, store, sent, event }
+  return { orchestrator, store, sent, event, cancelled, agent }
 }
+
+// KAN-73 round 4: a pause means stop, not "keep burning the turn you are in".
+test('pausing cancels the running turn and clears its queued digests', { skip }, () => {
+  const { orchestrator, cancelled } = liveOrchestrator()
+  assert.equal(cancelled.length, 0, 'nothing is cancelled before the pause')
+  orchestrator.setPaused(true)
+  assert.equal(cancelled.length, 1, 'the pause stops the live session')
+  assert.equal(cancelled[0].kind, 'user', 'attributed to the human who pressed pause')
+  // Resuming does not cancel anything of its own, and a second pause on an
+  // already-paused orchestrator is a no-op rather than a second cancellation.
+  orchestrator.setPaused(false)
+  orchestrator.setPaused(false)
+  assert.equal(cancelled.length, 1, 'resume changes nothing about the turn')
+  orchestrator.setPaused(true)
+  orchestrator.setPaused(true)
+  assert.equal(cancelled.length, 2, 'only a real transition cancels')
+})
+
+test('a session without a cancel verb still pauses cleanly', { skip }, () => {
+  const { orchestrator, agent } = liveOrchestrator()
+  delete agent.cancel
+  const answer = orchestrator.setPaused(true)
+  assert.equal(answer.paused, true, 'the board traffic stop is not lost with the turn stop')
+})
 
 test('while paused, board events are dropped and nothing is delivered or kept', { skip }, async () => {
   const { orchestrator, sent, event } = liveOrchestrator()

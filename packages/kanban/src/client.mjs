@@ -520,6 +520,12 @@ window.__ModuleLoader__.load({
 		function OrchestratorActions(props) {
 			var work = useOrchWork();
 			var paused = Boolean(work.paused);
+			// KAN-73 round 4: from inside the tray the session is already on screen,
+			// so "switch to it" would switch to what is already showing and appear to
+			// do nothing. There the arrow's honest job is to drop the tray chrome and
+			// leave the person with the whole session; from the phone header it is
+			// still the plain switch.
+			var inTray = Boolean(props && props.inTray);
 			function restart() {
 				orchRestart().then(function (ok) {
 					// Always take the board back on success, not only when the tray is
@@ -533,15 +539,15 @@ window.__ModuleLoader__.load({
 				h("button", {
 					type: "button",
 					className: "kb-iconbtn kb-orc-switch",
-					title: "Switch to the orchestrator session",
-					"aria-label": "Switch to the orchestrator session",
-					onClick: function () { openOrchestrator(); },
+					title: inTray ? "Leave the tray and stay with the orchestrator session" : "Switch to the orchestrator session",
+					"aria-label": inTray ? "Leave the tray and keep the orchestrator session full view" : "Switch to the orchestrator session",
+					onClick: inTray ? function () { closeTray(false); } : function () { openOrchestrator(); },
 					children: h(JumpIcon)
 				}),
 				h("button", {
 					type: "button",
 					className: "kb-iconbtn kb-orc-pause" + (paused ? " on" : ""),
-					title: paused ? "Let board events and tool calls reach the orchestrator again" : "Stop all traffic between the board engine and the orchestrator",
+					title: paused ? "Let board events and tool calls reach the orchestrator again" : "Stop the running turn and cut all traffic between the board engine and the orchestrator",
 					"aria-label": paused ? "Resume orchestrator" : "Pause orchestrator",
 					onClick: function () { orchSetPaused(!paused); },
 					children: paused ? h(PlayIcon) : h(PauseIcon)
@@ -682,7 +688,7 @@ window.__ModuleLoader__.load({
 				// pause, because the board header no longer shows a paused chip.
 				compact ? null : h("span", { className: "kb-tray-name" + (work.paused ? " warn" : ""), children: work.paused ? "Orchestrator paused" : "Orchestrator" }),
 				status.text ? h("span", { className: "kb-tray-status", children: status.text }) : null,
-				h(OrchestratorActions, { className: "kb-tray-actions" }),
+				h(OrchestratorActions, { className: "kb-tray-actions", inTray: true }),
 				h("button", {
 					type: "button",
 					className: "kb-tray-x",

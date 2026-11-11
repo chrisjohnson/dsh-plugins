@@ -246,12 +246,15 @@ test('the switch arrow lives in the tray pill, and in the header only on a phone
   const actions = sliceFunction(src, 'OrchestratorActions')
   const tray = sliceFunction(src, 'OrchestratorTray')
 
-  assert.match(actions, /title: "Switch to the orchestrator session"/)
+  assert.match(actions, /title: inTray \? "Leave the tray and stay with the orchestrator session" : "Switch to the orchestrator session"/)
   assert.match(actions, /children: h\(JumpIcon\)/, 'the same icon a card uses to jump to its session')
-  assert.match(actions, /onClick: function \(\) \{ openOrchestrator\(\); \}/, 'a full switch, at every size')
+  // KAN-73 round 4: inside the tray the session is already on screen, so the arrow
+  // drops the chrome instead of switching to what is already showing.
+  assert.match(actions, /onClick: inTray \? function \(\) \{ closeTray\(false\); \} : function \(\) \{ openOrchestrator\(\); \}/)
+  assert.match(tray, /h\(OrchestratorActions, \{ className: "kb-tray-actions", inTray: true \}\)/, 'the pill mounts the tray variant')
   assert.equal(actions.includes('kb-btn-orc'), false, 'the launcher is not part of the moved row')
 
-  assert.match(tray, /h\(OrchestratorActions, \{ className: "kb-tray-actions" \}\)/, 'the pill renders the row')
+  assert.match(tray, /h\(OrchestratorActions, \{ className: "kb-tray-actions", inTray: true \}\)/, 'the pill renders the row, in its tray variant')
   const header = page.slice(page.indexOf('className: "kb-actions"'))
   assert.match(header, /kb-orc-mobileonly/, 'the header keeps a phone-only copy')
   assert.ok(src.includes('.kb-orc-mobileonly{display:none}'), 'hidden on a wide window')

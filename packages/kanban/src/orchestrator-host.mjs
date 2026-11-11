@@ -184,8 +184,11 @@ export class KanbanOrchestrator {
 
   /**
    * Pause or resume. While paused nothing flows between the engine and the
-   * session: digests are dropped and tool calls refused. The session itself is
-   * left alone. Resuming sends one fresh board snapshot rather than a backlog.
+   * session: digests are dropped and tool calls refused. Pausing also stops the
+   * session (KAN-73): a turn already in flight is cancelled and the queued
+   * digests go with it, because "paused" that keeps burning tokens and then
+   * fires its backlog the moment it resumes is not a pause. Resuming sends one
+   * fresh board snapshot rather than a backlog.
    */
   setPaused(paused) {
     const next = paused === true
@@ -195,12 +198,29 @@ export class KanbanOrchestrator {
     if (next) {
       this.window.dispose()
       this.window = createDigestWindow({ windowMs: this.windowMs, deliver: (text) => this.#deliver(text, 'events') })
+      this.#stopLiveTurn()
       this.log.info('orchestrator: paused by a human')
     } else {
       this.log.info('orchestrator: resumed by a human')
       if (this.phase === 'live' && !this.disposed && this.#config().enabled) this.#announce(this.#config())
     }
     return this.state()
+  }
+
+  /**
+   * Cancel the live orchestrator turn and clear its inbox. `cancel()` with no
+   * `keepInbox` does both. A session that is already idle just drops its queue.
+   * Failure is a log line: a pause that refuses board traffic has already done
+   * its job, and a stuck turn is the human's to stop from the session view.
+   */
+  #stopLiveTurn() {
+    const agent = this.#liveAgent()
+    if (agent === null || typeof agent.cancel !== 'function') return
+    try {
+      agent.cancel({ kind: 'user' })
+    } catch (error) {
+      this.log.warn('orchestrator: the pause could not stop the running turn: %s', message(error))
+    }
   }
 
   /** What the Work page's button needs to know before it tries to open it. */

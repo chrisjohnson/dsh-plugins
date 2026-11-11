@@ -5,6 +5,23 @@
 
 ## Unreleased
 
+## 0.40.0
+
+### Fixed
+
+- **The twisted arrow in the tray pill now does something (KAN-73).** It called the
+  plain session switch, and the tray is already showing that session — so clicking
+  it changed nothing at all. From inside the tray its honest job is to drop the tray
+  chrome and leave you with the whole session, which is what it does now; from the
+  phone header, where there is no tray, it is still the plain switch.
+- **Pausing the orchestrator now stops it (KAN-73).** A pause cut the traffic between
+  the board and the session but left a turn already in flight running to the end, and
+  left its queued digests waiting to fire the moment it resumed — which is not what a
+  pause means. Pausing now cancels the live turn and clears that queue (attributed to
+  the human who paused it); resuming behaves as before, with one fresh board snapshot.
+  A session that cannot be cancelled still pauses the board traffic, and a failed
+  cancellation is a log line rather than a refused pause.
+
 ## 0.39.0
 
 ### Changed
