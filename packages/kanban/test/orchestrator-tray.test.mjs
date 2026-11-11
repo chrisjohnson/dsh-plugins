@@ -226,7 +226,7 @@ test('the tray store publishes open and close, and only when it changed', () => 
 test('the Work page button carries the ring, the glow and the sparkles', async () => {
   const src = await clientSource()
   const page = sliceFunction(src, 'KanbanPage')
-  assert.ok(page.includes('"kb-btn kb-btn-orc" + (orch.working ? " working" : "")'), 'the working class is the only thing that changes')
+  assert.ok(page.includes('"kb-btn kb-btn-orc" + orchGlowClass(orch.state, orch.paused, orch.working)'), 'one class swap carries all three looks')
   assert.ok(page.includes('className: "kb-orc-ring"'), 'the rotating ring is in the button')
   assert.ok(page.includes('className: "kb-orc-glow"'), 'and the glow with it')
   assert.ok(page.includes('sparklePositions(ORC_SPARKLES)'), 'sparkles are mounted from the shared count')
@@ -238,18 +238,51 @@ test('the Work page button carries the ring, the glow and the sparkles', async (
   assert.equal(/if[\s\S]{0,40}useOrchWork\(/.test(page), false, 'never a conditional hook')
 })
 
-test('the twisted arrow sits beside the button and does the plain switch', async () => {
+// KAN-73 round 2: the arrow and the two actions left the desktop header for the
+// tray pill, and the same component covers the phone, where there is no tray.
+test('the switch arrow lives in the tray pill, and in the header only on a phone', async () => {
   const src = await clientSource()
   const page = sliceFunction(src, 'KanbanPage')
-  const actions = page.slice(page.indexOf('className: "kb-actions"'))
-  const orcAt = actions.indexOf('kb-btn-orc')
-  const switchAt = actions.indexOf('kb-orc-switch')
-  const restartAt = actions.indexOf('children: "Restart orchestrator"')
-  assert.ok(orcAt >= 0 && switchAt > orcAt, 'the switch button comes right after the orchestrator button')
-  assert.ok(restartAt > switchAt, 'and the rest of the header keeps its order')
+  const actions = sliceFunction(src, 'OrchestratorActions')
+  const tray = sliceFunction(src, 'OrchestratorTray')
+
   assert.match(actions, /title: "Switch to the orchestrator session"/)
   assert.match(actions, /children: h\(JumpIcon\)/, 'the same icon a card uses to jump to its session')
   assert.match(actions, /onClick: function \(\) \{ openOrchestrator\(\); \}/, 'a full switch, at every size')
+  assert.equal(actions.includes('kb-btn-orc'), false, 'the launcher is not part of the moved row')
+
+  assert.match(tray, /h\(OrchestratorActions, \{ className: "kb-tray-actions" \}\)/, 'the pill renders the row')
+  const header = page.slice(page.indexOf('className: "kb-actions"'))
+  assert.match(header, /kb-orc-mobileonly/, 'the header keeps a phone-only copy')
+  assert.ok(src.includes('.kb-orc-mobileonly{display:none}'), 'hidden on a wide window')
+  assert.ok(/@media \(max-width:768px\)\{[\s\S]*\.kb-orc-mobileonly\{display:inline-flex/.test(src), 'shown again at phone width')
+})
+
+// KAN-73 round 2: the glow is the enabled/disabled readout; colour alone is not.
+test('the glow class says working, disabled, or plain idle — and never guesses', async () => {
+  const { orchGlowClass, pillCompact } = await loadClientHelpers(['orchGlowClass', 'pillCompact'], CONSTS)
+  assert.equal(orchGlowClass('live', false, true), ' working', 'a turn in flight moves and sparkles')
+  assert.equal(orchGlowClass('live', false, false), '', 'enabled and idle: colourful, still, glow steady')
+  assert.equal(orchGlowClass('live', true, false), ' disabled', 'a human pause is not an orchestrator that can act')
+  assert.equal(orchGlowClass('live', true, true), ' disabled', 'and a pause outranks a turn still winding down')
+  assert.equal(orchGlowClass('off', false, true), ' disabled', 'same for an orchestrator that is off')
+  assert.equal(orchGlowClass('off', false, false), ' disabled')
+  assert.equal(orchGlowClass('archived', false, false), ' disabled')
+  assert.equal(orchGlowClass(null, false, false), '', 'before the first read, do not flash the disabled look')
+  assert.equal(orchGlowClass(null, false, true), ' working', 'working still wins over an unknown state')
+  // The disabled glow must be the dimmer one in the sheet, by a wide margin.
+  const src = await clientSource()
+  const disabled = src.match(/\.kb-btn-orc\.disabled \.kb-orc-glow\{[^}]*\}/)
+  const idle = src.match(/\.kb-orc-glow\{[^}]*\}/)
+  assert.ok(disabled, 'the disabled rule exists')
+  const dOpacity = Number(/opacity:([\d.]+)/.exec(disabled[0])[1])
+  const iOpacity = Number(/opacity:([\d.]+)/.exec(idle[0])[1])
+  assert.ok(dOpacity <= 0.1, `disabled glow is almost hidden (${dOpacity})`)
+  assert.ok(iOpacity >= 0.25, `idle glow is clearly lit (${iOpacity})`)
+  assert.ok(dOpacity * 3 < iOpacity, 'and the two are not hard to tell apart')
+  assert.equal(pillCompact(419), true, 'a narrow tray drops the word and keeps the icons')
+  assert.equal(pillCompact(420), false)
+  assert.equal(pillCompact(1220), false)
 })
 
 test('the tray is a frame-wide overlay entry, not part of the board page', async () => {

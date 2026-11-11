@@ -345,7 +345,14 @@ test('the page keeps what a poll said apart from what an action said', async () 
   assert.match(page, /React\.useEffect\(function \(\) \{\s*setNotice\(null\);[\s\S]*?\}, \[selectedId, view\]\);/, 'moving to another ticket or view clears it')
   assert.match(page, /detailPollOk\(\);/)
   assert.match(page, /if \(detailFailures\.current >= POLL_FAILURES_SHOWN\) setDetailProblem\(text\)/)
-  assert.match(page, /setNotice\(null\);\s*loadBoard\(\);/, 'a working action still clears an action error')
+  // KAN-73 round 2: the orchestrator actions moved out of this page into the tray,
+  // so "a working action clears the banner" is the status store's rule now, not a
+  // setNotice call in a header handler. Same invariant, one level up: the page
+  // folds the store into the one banner, and a successful action empties it.
+  assert.match(page, /notice \|\| live\.error \|\| detailProblem \|\| orchNews\.text/, 'the orchestrator status shares the one banner')
+  const pause = src.slice(src.indexOf('function orchSetPaused('), src.indexOf('function PauseIcon()'))
+  assert.match(pause, /orchStatus\.clear\(\);/, 'a working action still clears an action error')
+  assert.match(pause, /orchStatus\.set\(res && res\.error \? res\.error\.message : "That did not work\.", "err"\)/, 'and a failed one says so')
 })
 
 test('an unchanged answer keeps the board and the ask carries the last token', async () => {
