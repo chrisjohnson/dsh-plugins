@@ -5,6 +5,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The panel card survives a profile-tree install (KAN-82).** Writing the Forge
+  panel's worktree records calls `appendPluginRecord`, which reaches into a private
+  method of the `Session` class and therefore only works against the *same copy* of
+  `@deepseek-ai/dsh-session` that built the session. A plugin installed into a profile
+  tree can resolve a second copy of a core package — pnpm keeps one per peer set — and
+  calling across copies throws a private-access error, so a ticket installed that way
+  cut its worktree and quietly wrote no records. Every reachable copy is now tried,
+  the one whose exported `Session` is the session's own constructor first.
+
+
 ## 0.41.1
 
 ### Fixed

@@ -831,7 +831,7 @@ test('a session started in a ticket worktree announces it to the panel before it
   const harness = makeCtx({
     store,
     worktrees: fakeWorktrees({ described: worktree }),
-    appendRecord: async () => (session, type, data) => records.push({ sessionId: session.id, type, data }),
+    appendRecord: async (session, data) => { records.push({ sessionId: session.id, type: 'plugin:client-ui-forge/worktree', data }); return true },
   })
   const driver = makeDriver({ ...harness, store })
   const session = await driver.ensureTicketSession({
@@ -851,7 +851,7 @@ test('a session that is not in a worktree announces nothing', { skip }, async ()
   const harness = makeCtx({
     store,
     worktrees: fakeWorktrees({ described: null }),
-    appendRecord: async () => (session, type, data) => records.push({ type, data }),
+    appendRecord: async (session, data) => { records.push({ type: 'plugin:client-ui-forge/worktree', data }); return true },
   })
   const driver = makeDriver({ ...harness, store })
   await driver.ensureTicketSession({ ticket, role: 'implementer', route: ROUTE, purpose: 'build' })
