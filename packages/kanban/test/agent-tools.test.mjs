@@ -194,6 +194,18 @@ test('managementActor credits a write to the session that made it', () => {
   assert.equal(managementActor(undefined), 'agent', 'no id still says what kind of actor it was')
 })
 
+test('a lookup that cannot be made never removes the tool', () => {
+  // The blast radius is the reason: a `when` that throws aborts the harness's
+  // whole step-time tool selection, so one bad board read would leave every
+  // session on the host with no tools at all. An unprovable exclusion costs the
+  // caller the exclusion, nothing more.
+  const broken = { findSession: () => { throw new Error('SQLITE_MISUSE: database is closed') } }
+  assert.equal(isBoardOwnedSession(broken, 'session-abc'), false)
+  assert.equal(managementToolWhen(broken)({ agent: { id: 'session-abc' } }), true)
+  const exploding = { get session() { throw new Error('unreachable agent') } }
+  assert.equal(managementToolWhen(storeWith([]))({ agent: exploding }), true)
+})
+
 test('the when condition hides all five from a board session and shows them to everyone else', () => {
   const when = managementToolWhen(storeWith(['kanban-build-1', 'kanban-plan-1']))
   assert.equal(when({ agent: { id: 'kanban-build-1' } }), false, 'a build session may not manage its own board')

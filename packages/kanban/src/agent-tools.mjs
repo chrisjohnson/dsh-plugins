@@ -46,10 +46,17 @@ export function agentSessionId(agent) {
 /**
  * Whether this session is a role session the board spawned for a ticket.
  *
- * A missing store or an unmounted lookup says *not owned*: the switch is a
- * restriction, and a restriction that cannot be checked must not remove a tool
- * the deployment asked for — the same way an unreadable guard fails open on
- * visibility rather than blanking the board.
+ * A missing store, an unmounted lookup, or a lookup that throws all say *not
+ * owned*: the switch is a restriction, and a restriction that cannot be checked
+ * must not remove a tool the deployment asked for — the same way an unreadable
+ * guard fails open on visibility rather than blanking the board.
+ *
+ * The throw case is the one that matters. A `when` condition is awaited while the
+ * harness assembles a step's tool set, and a rejection there does not merely hide
+ * one tool: it aborts the whole selection, so every session on the host loses its
+ * tools for that step. A board read that cannot be made — the database closed
+ * mid-disposal, a statement that fails to compile — must therefore cost the
+ * caller nothing more than the exclusion it could not prove.
  *
  * @param {{findSession?: (id: string) => object|undefined}|null|undefined} store
  * @param {string|null|undefined} sessionId
@@ -58,7 +65,11 @@ export function agentSessionId(agent) {
 export function isBoardOwnedSession(store, sessionId) {
   if (store === null || store === undefined || typeof store.findSession !== 'function') return false;
   if (typeof sessionId !== 'string' || sessionId === '') return false;
-  return store.findSession(sessionId) !== undefined;
+  try {
+    return store.findSession(sessionId) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -74,11 +85,17 @@ export function isBoardOwnedSession(store, sessionId) {
  */
 export function managementToolWhen(store) {
   return (context) => {
-    const agent = context?.agent;
-    // No agent in context means the caller is not a scoped agent view; there is
-    // no ticket for it to interfere with, so the tool stays available.
-    if (agent === null || agent === undefined) return true;
-    return isBoardOwnedSession(store, agentSessionId(agent)) === false;
+    try {
+      const agent = context?.agent;
+      // No agent in context means the caller is not a scoped agent view; there is
+      // no ticket for it to interfere with, so the tool stays available.
+      if (agent === null || agent === undefined) return true;
+      return isBoardOwnedSession(store, agentSessionId(agent)) === false;
+    } catch {
+      // Same rule as above, one level out: an unanswerable question never removes
+      // the tool, because removing it is the only harm this can do by accident.
+      return true;
+    }
   };
 }
 
