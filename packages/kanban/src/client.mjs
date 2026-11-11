@@ -86,11 +86,10 @@ window.__ModuleLoader__.load({
 		var uiWorkspaceRef = null;
 		var layoutRef = null;
 
-		// The five workflow phase colors, in board order: plan, build, review,
-		// approval, done — the same set the ticket step strip and the Work page
-		// ribbon use, so the orchestrator's border is drawn in the language of the
-		// work it is doing.
-		var ORC_PHASE_COLORS = ["#2563eb", "#0d9488", "#db2777", "#7c3aed", "#15803d"];
+		// The five workflow phase colors — plan blue, build teal, review pink,
+		// approval violet, done green — are painted on the ring in the stylesheet,
+		// the same set the ticket step strip and the Work page ribbon already use,
+		// so the orchestrator's border speaks in the language of the work it drives.
 		var ORC_SPARKLES = 8;
 		var MOBILE_MAX_PX = 768;
 
@@ -308,6 +307,22 @@ window.__ModuleLoader__.load({
 			return col && col !== right ? col : null;
 		}
 
+		/**
+		 * A column's box in frame coordinates, read from the layout rather than
+		 * getBoundingClientRect: the tray animates the centre column with a
+		 * transform, and a rect taken mid-pull-down is 14px short at the bottom,
+		 * which would leave a bright sliver across the dim for the rest of the
+		 * session. offsetLeft/offsetTop/offsetWidth ignore transforms.
+		 */
+		function columnBox(col) {
+			if (!col) return null;
+			if (col.offsetParent || col === document.body) {
+				return { left: col.offsetLeft, top: col.offsetTop, right: col.offsetLeft + col.offsetWidth, bottom: col.offsetTop + col.offsetHeight };
+			}
+			var r = col.getBoundingClientRect();
+			return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+		}
+
 		function enterOrchestratorTray(sessionId) {
 			if (!sessionId) { window.alert("The orchestrator session is not known yet. Try again in a moment."); return; }
 			var opening = openSessionById ? openSessionById(sessionId) : Promise.resolve({ ok: false, error: "The session view is not available in this window." });
@@ -364,7 +379,11 @@ window.__ModuleLoader__.load({
 					var layer = document.querySelector("[data-shell-overlay]");
 					var host = layer && layer.parentElement ? layer.parentElement : document.body;
 					var box = host.getBoundingClientRect();
-					var rect = col ? col.getBoundingClientRect() : null;
+					var rect = columnBox(col);
+					if (rect) {
+						// offset* is frame-relative; the dim is viewport-anchored.
+						rect = { left: rect.left + box.left, top: rect.top + box.top, right: rect.right + box.left, bottom: rect.bottom + box.top };
+					}
 					var next = rect
 						? { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom), w: Math.round(box.width), h: Math.round(box.height) }
 						: { left: 0, top: 0, right: 0, bottom: 0, w: Math.round(box.width), h: Math.round(box.height), none: true };
