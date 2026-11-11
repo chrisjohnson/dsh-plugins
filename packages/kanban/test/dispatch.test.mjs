@@ -765,6 +765,26 @@ test('a ticket that only recorded the intent gets its copy at plan start, from t
   assert.ok(store.listEvents(ticket.id).some((event) => event.kind === 'ticket_updated' && event.payload.reason === 'worktree created at plan start'))
 })
 
+test('a ticket that names a workspace and asks for a worktree gets its copy cut from that workspace', { skip }, async () => {
+  const store = newStore()
+  const ticket = store.createTicket({
+    title: 'named', workspaceCwd: '/work/checkout', worktree: true, planTiming: 'at_pickup', planQuestions: 'autonomous',
+  })
+  const worktrees = fakeWorktrees({
+    created: { path: '/work/checkout/.agents/worktrees/brave-otter', baseCommit: 'remotehead00', branch: 'dsh/brave-otter' },
+  })
+  const harness = makeCtx({ store, worktrees })
+  const driver = makeDriver({ ...harness, store })
+  const prep = await driver.preparePlanWorktree(ticket)
+  assert.equal(prep.cwd, '/work/checkout/.agents/worktrees/brave-otter')
+  assert.deepEqual(
+    worktrees.calls.createWorktree,
+    [{ path: '/work/checkout' }],
+    'the copy is cut from the workspace the ticket named, not the configured default',
+  )
+  assert.equal(store.getTicket(ticket.id).workspaceCwd, '/work/checkout/.agents/worktrees/brave-otter')
+})
+
 test('a plain ticket with no intent and no workspace plans in the default workspace', { skip }, async () => {
   const store = newStore()
   const ticket = store.createTicket({ title: 'plain', planTiming: 'at_pickup', planQuestions: 'autonomous' })

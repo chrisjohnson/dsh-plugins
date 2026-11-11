@@ -514,21 +514,22 @@ export class SessionDriver {
    * Decide — and now, not at ticket-creation time — which directory a plan
    * session starts in (KAN-18).
    *
-   * Three shapes, in the order the board can present them:
+   * Two questions, asked in this order: is the workspace already one of ours, and
+   * did the ticket ask for a working copy at all. That gives three shapes:
    *
-   *   (B) The ticket already names a checkout. That is every ticket a human
-   *       pointed at a workspace, and every ticket whose copy was cut on an
-   *       earlier planning round. When that path is a managed working copy it is
-   *       fetched and brought to the latest default branch *if it holds nothing
-   *       of its own*; a copy with work in it, or a path outside the pool, is
-   *       left exactly as it is and the caller gets a note to say so, which
-   *       lands in the plan prompt.
+   *   (B) The ticket points at a copy in the pool. It is fetched and brought to
+   *       the latest default branch *if it holds nothing of its own*; a copy with
+   *       work in it is left exactly as it is and the caller gets a note to say
+   *       so, which lands in the plan prompt.
    *
-   *   (A) The ticket only recorded the intent — the new-ticket switch. The copy
-   *       is cut here, from the just-fetched default branch, registered as a
-   *       workspace, and the ticket is re-pointed at it.
+   *   (A) The ticket asked for a working copy and does not have one yet — which
+   *       includes every ticket the new-ticket switch filed, because that form
+   *       always names the workspace the copy is wanted *from*. The copy is cut
+   *       here, from the just-fetched default branch of that checkout, registered
+   *       as a workspace, and the ticket is re-pointed at it. A re-plan then takes
+   *       shape (B), so one ticket never gets two copies.
    *
-   *   (C) Neither: the ordinary default workspace, unchanged behavior.
+   *   (C) Neither: the ordinary workspace, unchanged behavior.
    *
    * A `git fetch` that fails throws, on purpose. Planning on a base the plugin
    * could not bring up to date is exactly what the switch was asked to prevent,
@@ -540,19 +541,23 @@ export class SessionDriver {
    */
   async preparePlanWorktree(ticket) {
     const config = this.getConfig();
-    const plain = ticket.workspaceCwd ?? config.defaultWorkspaceCwd ?? process.cwd();
-    // (B) a checkout the ticket already points at.
-    if (typeof ticket.workspaceCwd === 'string' && ticket.workspaceCwd !== '') {
-      const refreshed = await this.worktrees.refreshWorktree({ path: ticket.workspaceCwd });
-      // Not one of ours (a plain checkout, a hand-picked folder): nothing to
-      // refresh, nothing to say.
-      if (refreshed?.managed !== true) return { cwd: ticket.workspaceCwd };
-      if (refreshed.updated === true) return { cwd: ticket.workspaceCwd };
-      return { cwd: ticket.workspaceCwd, note: worktreeStaleNote(refreshed) };
+    const named = typeof ticket.workspaceCwd === 'string' && ticket.workspaceCwd !== '' ? ticket.workspaceCwd : null;
+    const plain = named ?? config.defaultWorkspaceCwd ?? process.cwd();
+    // (B) a copy of the pool the ticket already points at: bring it up to date.
+    if (named !== null) {
+      const refreshed = await this.worktrees.refreshWorktree({ path: named });
+      if (refreshed?.managed === true) {
+        if (refreshed.updated === true) return { cwd: named };
+        return { cwd: named, note: worktreeStaleNote(refreshed) };
+      }
+      // Not one of ours (a plain checkout, a hand-picked folder). Without the
+      // intent there is nothing to say and nothing to cut: plan where it points.
+      if (ticket.worktree !== true) return { cwd: named };
     }
-    // (A) intent only: cut the copy now, from the current upstream.
+    // (A) the intent, with or without a workspace named: cut the copy now, from
+    // the checkout it was asked for, at the current upstream.
     if (ticket.worktree === true) {
-      const created = await this.worktrees.createWorktree({ path: config.defaultWorkspaceCwd ?? process.cwd() });
+      const created = await this.worktrees.createWorktree({ path: plain });
       try {
         await this.ctx.get('workspaceRegistry')?.create?.(created.path, ticket.title);
       } catch (error) {
