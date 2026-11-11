@@ -264,6 +264,8 @@ test('the glow class says working, disabled, or plain idle — and never guesses
   assert.equal(orchGlowClass('live', false, true), ' working', 'a turn in flight moves and sparkles')
   assert.equal(orchGlowClass('live', false, false), '', 'enabled and idle: colourful, still, glow steady')
   assert.equal(orchGlowClass('live', true, false), ' disabled', 'a human pause is not an orchestrator that can act')
+  assert.equal(orchGlowClass('live', true, true), ' disabled', 'and a pause outranks a turn still winding down')
+  assert.equal(orchGlowClass('off', false, true), ' disabled', 'same for an orchestrator that is off')
   assert.equal(orchGlowClass('off', false, false), ' disabled')
   assert.equal(orchGlowClass('archived', false, false), ' disabled')
   assert.equal(orchGlowClass(null, false, false), '', 'before the first read, do not flash the disabled look')

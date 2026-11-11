@@ -288,8 +288,12 @@ window.__ModuleLoader__.load({
 		 * leaves the new destination alone.
 		 */
 		function closeTray(toBoard) {
-			if (!trayStore.get().open) return;
-			trayStore.close();
+			// Returning to the board is not conditional on the tray still being open:
+			// a restart archives the session the tray frames, the watcher closes the
+			// tray on its own a moment first, and the caller's "take me back" must
+			// still land — otherwise the centre column is left holding a transcript
+			// that no longer exists in the open list.
+			if (trayStore.get().open) trayStore.close();
 			if (!toBoard) return;
 			try {
 				if (layoutRef && typeof layoutRef.selectPanel === "function") layoutRef.selectPanel("kanban");
@@ -419,8 +423,11 @@ window.__ModuleLoader__.load({
 		 * page load must not flash the disabled appearance at a working board.
 		 */
 		function orchGlowClass(state, paused, working) {
-			if (working) return " working";
+			// Disabled wins over working: a turn already in flight keeps running for a
+			// moment after a person pauses, and its tool calls are refused anyway, so
+			// the honest read is "this orchestrator cannot act", not "it is working".
 			if (state === "off" || state === "archived" || paused === true) return " disabled";
+			if (working) return " working";
 			return "";
 		}
 
@@ -506,8 +513,11 @@ window.__ModuleLoader__.load({
 			var paused = Boolean(work.paused);
 			function restart() {
 				orchRestart().then(function (ok) {
-					// The session id changed under the tray: frame the board instead.
-					if (ok && trayStore.get().open) closeTray(true);
+					// Always take the board back on success, not only when the tray is
+					// still open: archiving the framed session closes the tray through
+					// its own watcher a moment earlier, and skipping the return then
+					// would leave the centre column on the blank new-session hero.
+					if (ok) closeTray(true);
 				});
 			}
 			return h("span", { className: "kb-orc-actions" + (props && props.className ? " " + props.className : "") },

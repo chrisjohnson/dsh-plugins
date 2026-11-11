@@ -143,6 +143,10 @@ test('the orchestrator restart moved into the tray and reports through the statu
   // The control says what it does wherever it is mounted.
   assert.match(actions, /title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart"/)
   assert.match(actions, /orchRestart\(\)/)
+  // A restart archives the session the tray frames, so its own watcher may close
+  // the tray first; the return to the board must not be gated on still being open.
+  assert.match(actions, /if \(ok\) closeTray\(true\)/)
+  assert.equal(/if \(ok && trayStore\.get\(\)\.open\)/.test(actions), false, 'the board return must not depend on the tray still being open')
 
   // The module handler still asks first (the session it replaces is archived as it
   // happens) and still hits one endpoint.
