@@ -5,6 +5,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Dragging a ticket onto Done / Discarded discards it, after a prompt (KAN-85).**
+  The merged closed column used to refuse a drop outright, so the only way to
+  discard was the button on a ticket's own page. Now a drop onto that column opens
+  a confirmation naming the ticket; confirming moves it to Discarded (the same
+  server path the page's Discard button takes, which stops any sessions working on
+  it), and Cancel or Escape leaves it exactly where it was. Done stays
+  approval-only: a drag never marks a ticket done, and the host still refuses a
+  move into `done`.
+
 ## 0.42.1
 
 ### Fixed

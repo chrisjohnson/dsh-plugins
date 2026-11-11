@@ -1883,7 +1883,9 @@ var CSS =
 			var target = dragging && props.dropTarget && props.dropTarget.column === props.column ? props.dropTarget : null;
 			var ids = items.map(function (t) { return t.id; });
 			var showLine = target !== null && !dropIsNoop(ids, props.dragId, target.beforeId);
-			var droppable = props.column !== "done";
+			// KAN-85: every column is a drop target now. The closed column takes a drop
+			// too - what a drop there means is the board's call (a discard prompt), not
+			// the column's, so "done" is no longer special-cased out of the drag here.
 			// The indicator takes no room (see .kb-drop-line), so showing it, moving it
 			// or hiding it never shifts a card under the pointer.
 			var line = h("div", { key: "drop-line", className: "kb-drop-line", "aria-hidden": "true" });
@@ -1903,7 +1905,7 @@ var CSS =
 				{
 					className: "kb-col kb-col-" + props.column + (props.column === "done" ? " kb-col-pinned" : "") + (target !== null ? " drop-target" : ""),
 					onDragOver: function (ev) {
-						if (!droppable || !dragging) return;
+						if (!dragging) return;
 						ev.preventDefault();
 						ev.dataTransfer.dropEffect = "move";
 						if (!props.onDragOverColumn) return;
@@ -1926,7 +1928,6 @@ var CSS =
 						}
 					},
 					onDrop: function (ev) {
-						if (!droppable) return;
 						ev.preventDefault();
 						var id = ev.dataTransfer.getData("text/kanban");
 						if (id && props.onDropAt) props.onDropAt(id, props.column, beforeIdAt(ev));
@@ -3723,6 +3724,11 @@ var CSS =
 			var dragId = dr[0], setDragId = dr[1];
 			var dp = React.useState(null);
 			var dropTarget = dp[0], setDropTarget = dp[1];
+			// KAN-85: the id of the open ticket a drop onto the closed column wants to
+			// discard, or null when no prompt is up. Unconditional state: the board's
+			// hook order must never depend on whether a prompt is showing.
+			var cd = React.useState(null);
+			var confirmDiscard = cd[0], setConfirmDiscard = cd[1];
 			// KAN-58: on a phone the board shows Working and hides Backlog and Done
 			// behind the reveal buttons above it. These flags say which of the two are
 			// currently shown; the CSS only acts on them inside the mobile media query.
@@ -3897,6 +3903,9 @@ var CSS =
 			var wipTitle = wipInfo && typeof wipInfo.occupancy === "number"
 				? wipInfo.occupancy + " of the " + (columns.working || []).length + " Working cards take a slot: a parked card waits on a person, not on a worker. The cap is " + wipInfo.cap + "."
 				: null;
+			// KAN-85: the ticket the discard prompt names, read from the live board so
+			// its key and title are current when the modal opens.
+			var confirmTicket = confirmDiscard === null ? null : (allTickets.find(function (ticket) { return ticket.id === confirmDiscard; }) || null);
 			return h("div", { className: "kb-root" },
 				h("div", { className: "kb-pagehead" },
 					h("div", { className: "kb-pagehead-main" },
@@ -3967,6 +3976,12 @@ var CSS =
 				h("div", { className: "kb-body", ref: bodyRef },
 					notice || live.error || detailProblem || orchNews.text ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem || orchNews.text) : null,
 					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, defaultWorkspace: defaultWorkspace, onClose: function () { setCreating(false); }, onCreated: function (ticket, workspace) { if (workspace) setLastWorkspace(workspace); setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
+					h(Modal, { open: confirmDiscard !== null, title: "Discard ticket", onClose: function () { setConfirmDiscard(null); } },
+						h("div", { className: "kb-form" },
+							h("div", { className: "kb-hint", children: confirmTicket ? "Discard " + confirmTicket.key + " - " + confirmTicket.title + "? It moves to the Done / Discarded column as Discarded and stops any sessions working on it." : "Discard this ticket? It moves to the Done / Discarded column as Discarded." }),
+							h("div", { className: "kb-row" },
+								h("button", { className: "kb-btn", onClick: function () { setConfirmDiscard(null); }, children: "Cancel" }),
+								h("button", { className: "kb-btn danger", onClick: function () { discardTicket(confirmDiscard); }, children: "Discard" })))),
 					selectedId ? h(TicketDetail, {
 						detail: detail,
 						liveToken: liveToken,
@@ -4083,14 +4098,23 @@ var CSS =
 			// Called continuously while the pointer moves: only a changed target
 			// is state, so a still pointer re-renders nothing.
 			function dragOverColumn(column, beforeId) {
-				if (dragId === null || column === "done") return;
+				if (dragId === null) return;
 				setDropTarget(function (prev) {
 					return prev && prev.column === column && prev.beforeId === beforeId ? prev : { column: column, beforeId: beforeId };
 				});
 			}
 			function dropAt(id, column, beforeId) {
 				finishDrag();
-				if (column === "done") return;
+				// KAN-85: a drop onto the closed column is a request to discard, not a move
+				// and not a reorder. It asks first - the confirm modal names the ticket - and
+				// only the confirm sends anything (to discarded; done stays approval-only). A
+				// card already closed has nothing to discard, so dropping it back there is a
+				// no-op: no state change, no optimistic update, no RPC.
+				if (column === "done") {
+					var dropped = allTickets.find(function (ticket) { return ticket.id === id; });
+					if (dropped && (dropped.column === "backlog" || dropped.column === "working")) setConfirmDiscard(id);
+					return;
+				}
 				var source = allTickets.find(function (ticket) { return ticket.id === id; });
 				if (source === undefined) return;
 				var ids = (columns[column] || []).map(function (ticket) { return ticket.id; });
@@ -4110,6 +4134,34 @@ var CSS =
 					// KAN-72: the drag onto a full board queued the card instead
 					// of moving it. Say so — the card snapped back to where it
 					// was, and without this line it looks like the drop failed.
+					else if (res && res.value && res.value.queued) setNotice(res.value.queued.reason);
+					else setNotice(null);
+				}, function () { setNotice("Could not reach the Host."); }).then(function () {
+					boardStore.release();
+					loadBoard();
+					if (selectedRef.current) loadDetail(selectedRef.current);
+				});
+			}
+
+			// KAN-85: the confirm side of a drag onto the closed column. Same hold /
+			// optimistic-update / notice / release / reload shape as a normal drop, but
+			// the move always goes to `discarded` (never `done`), and there is no trailing
+			// reorder: the closed column is ordered by close time, so a position anchored
+			// on a done card is not honoured (the reorder endpoint answers not_found).
+			function discardTicket(id) {
+				setConfirmDiscard(null);
+				var source = allTickets.find(function (ticket) { return ticket.id === id; });
+				if (source === undefined) return;
+				boardStore.hold();
+				boardStore.update(function (prev) {
+					var moved = Object.assign({}, source, { column: "discarded" });
+					return Object.assign({}, prev, {
+						columns: moveInColumns(prev.columns, id, "discarded", null),
+						closed: [moved].concat((prev.closed || []).filter(function (ticket) { return ticket.id !== id; }))
+					});
+				});
+				rpc("move", { id: id, column: "discarded" }).then(function (res) {
+					if (res && res.ok === false) setNotice(res.error ? res.error.message : "That did not work.");
 					else if (res && res.value && res.value.queued) setNotice(res.value.queued.reason);
 					else setNotice(null);
 				}, function () { setNotice("Could not reach the Host."); }).then(function () {
