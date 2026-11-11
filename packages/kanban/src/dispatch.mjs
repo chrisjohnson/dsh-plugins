@@ -22,7 +22,10 @@
 // so a phase change inside one session never moves it.
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy';
@@ -43,22 +46,72 @@ import * as ticketWorktrees from './worktrees.mjs';
  */
 const WORKTREE_RECORD = 'plugin:client-ui-forge/worktree';
 
+/** The core package that owns the session log and the record API. */
+const RECORD_MODULE = '@deepseek-ai/dsh-session';
+
 /**
- * `appendPluginRecord` from `@deepseek-ai/dsh-session`, resolved lazily and
- * only once. A static import would be a hard requirement on a core export that
- * older harnesses do not have, and a plugin that fails to load over a cosmetic
- * record is a worse outcome than a ticket whose panel shows no worktree card.
+ * Append one worktree record to a live session's log, through the copy of
+ * `@deepseek-ai/dsh-session` that built that session.
+ *
+ * `appendPluginRecord` is not a plain helper: it reaches into a private method
+ * of the `Session` class, so it only works on a Session made by *its own* module
+ * instance. A plugin installed into a profile tree can easily resolve a second
+ * copy of a core package — pnpm keeps one per peer set — and calling across the
+ * copies throws a private-access TypeError rather than writing the record.
+ *
+ * So every copy this module can reach is collected, the one whose exported
+ * `Session` is the session's own constructor goes first, and each is tried until
+ * one takes the append. A static import of the named export is not an option:
+ * it would make the plugin fail to load on a harness old enough to lack it, and
+ * losing the panel card is never worth losing the board.
+ *
+ * @returns {Promise<boolean>} whether a record was appended.
  */
-let appendPluginRecord = undefined;
-async function loadAppendPluginRecord() {
-  if (appendPluginRecord !== undefined) return appendPluginRecord;
-  try {
-    const session = await import('@deepseek-ai/dsh-session');
-    appendPluginRecord = typeof session.appendPluginRecord === 'function' ? session.appendPluginRecord : null;
-  } catch {
-    appendPluginRecord = null;
+async function appendWorktreeRecord(session, data) {
+  const urls = [];
+  const add = (produce) => {
+    try {
+      const url = produce();
+      if (typeof url === 'string' && !urls.includes(url)) urls.push(url);
+    } catch {
+      // An unresolvable candidate is simply not a candidate.
+    }
+  };
+  // The host's own install first. `process.argv[1]` is the harness entry that
+  // built this Session, and dsh's packages are siblings under `@deepseek-ai/`,
+  // so the sibling path is the copy whose `Session` class this one came from.
+  // (`import.meta.resolve`'s parent argument is not honoured for a bare
+  // specifier, so this is spelled out as a path rather than resolved.)
+  const entry = process.argv?.[1];
+  if (typeof entry === 'string' && entry.startsWith('/')) {
+    const name = RECORD_MODULE.slice(RECORD_MODULE.indexOf('/') + 1);
+    const sibling = resolve(dirname(entry), '..', '..', name, 'lib', 'index.js');
+    if (existsSync(sibling)) add(() => pathToFileURL(realpathSync(sibling)).href);
   }
-  return appendPluginRecord;
+  // Then whatever this module's own scope resolves — the same copy when there is
+  // only one, and a working fallback when the host entry is not a file path.
+  add(() => import.meta.resolve(RECORD_MODULE));
+  const modules = [];
+  for (const url of urls) {
+    try {
+      const mod = await import(url);
+      if (typeof mod.appendPluginRecord === 'function') modules.push(mod);
+    } catch {
+      // A copy that will not import cannot be the one.
+    }
+  }
+  if (modules.length === 0) return false;
+  const owner = session?.constructor;
+  modules.sort((a, b) => Number(b.Session === owner) - Number(a.Session === owner));
+  for (const mod of modules) {
+    try {
+      mod.appendPluginRecord(session, WORKTREE_RECORD, data);
+      return true;
+    } catch {
+      // Try the next copy; the caller treats a total failure as a missing card.
+    }
+  }
+  return false;
 }
 
 export class DispatchError extends Error {
@@ -147,9 +200,9 @@ export class SessionDriver {
   constructor({
     ctx, log, getConfig, store,
     worktrees = ticketWorktrees,
-    // The core export behind the panel announcement, injectable so a test can
-    // watch the records without a real session log.
-    appendRecord = loadAppendPluginRecord,
+    // The panel-record writer, injectable so a test can watch the records
+    // without a real session log.
+    appendRecord = appendWorktreeRecord,
   }) {
     this.ctx = ctx;
     /** The ticket working-copy lifecycle: the real one, or a test's stand-in. */
@@ -595,22 +648,19 @@ export class SessionDriver {
     try {
       const worktree = await this.worktrees.describeWorktree(cwd);
       if (worktree === null) return;
-      const append = await this.appendRecord();
-      if (append === null) return;
       const session = handle?.agent?.session;
-      append(session, WORKTREE_RECORD, { action: 'request', from: worktree.from });
+      if (session === undefined || session === null) return;
       // Spelled out field by field: the panel's schema is strict, so a field
       // added here for kanban's own use would silently drop the whole record.
-      append(session, WORKTREE_RECORD, {
-        action: 'created',
-        worktree: {
-          path: worktree.path,
-          branch: worktree.branch,
-          from: worktree.from,
-          baseCommit: worktree.baseCommit,
-          repositoryRoot: worktree.repositoryRoot,
-        },
-      });
+      const created = {
+        path: worktree.path,
+        branch: worktree.branch,
+        from: worktree.from,
+        baseCommit: worktree.baseCommit,
+        repositoryRoot: worktree.repositoryRoot,
+      };
+      if (!(await this.appendRecord(session, { action: 'request', from: worktree.from }))) return;
+      await this.appendRecord(session, { action: 'created', worktree: created });
     } catch (error) {
       // Cosmetic, always: a ticket whose panel shows no card is still a ticket
       // running in its own checkout, so nothing here may fail the dispatch.
