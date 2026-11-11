@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.42.1
+
 ### Fixed
 
 - **A board read that fails cannot take a session's tools away (KAN-81).** The
