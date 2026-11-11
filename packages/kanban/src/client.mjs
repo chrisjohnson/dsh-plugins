@@ -64,6 +64,412 @@ window.__ModuleLoader__.load({
 			}, function () { window.alert("Could not reach the Host."); });
 		}
 
+		// ---------------------------------------------------------------------
+		// KAN-73: the orchestrator tray and its live indicator.
+		//
+		// Two questions are answered here, from two different sources:
+		//
+		//   * which session is the orchestrator, and does it exist at all — the
+		//     Host owns that, so it is read with the `orchestrator` rpc;
+		//   * is that session working right now — the shell already knows: every
+		//     row in uiWorkspace.sessions.list carries the same `running` flag the
+		//     sidebar's spinner reads, pushed over the live connection.
+		//
+		// Joining them in one module-scope store is what lets the Work page button,
+		// the tray's status dot and the tray's dismissal rules agree, even though
+		// opening the tray unmounts the board page (the main slot switches to the
+		// conversation). Nothing polls for `running`: it is a subscription.
+		// ---------------------------------------------------------------------
+
+		// The shell services the tray needs, captured once at apply() time. Both
+		// are optional: without them the button still opens the session the old way.
+		var uiWorkspaceRef = null;
+		var layoutRef = null;
+
+		// The five workflow phase colors, in board order: plan, build, review,
+		// approval, done — the same set the ticket step strip and the Work page
+		// ribbon use, so the orchestrator's border is drawn in the language of the
+		// work it is doing.
+		var ORC_PHASE_COLORS = ["#2563eb", "#0d9488", "#db2777", "#7c3aed", "#15803d"];
+		var ORC_SPARKLES = 8;
+		var MOBILE_MAX_PX = 768;
+
+		function isNarrow(width) {
+			return Number(width) <= MOBILE_MAX_PX;
+		}
+
+		/** The ring only moves while the orchestrator session has a turn in flight. */
+		function orchWorking(state, running) {
+			return state === "live" && running === true;
+		}
+
+		/** One honest sentence for the button's tooltip, from the same two facts. */
+		function orchTitle(state, working) {
+			if (state === "live") return working ? "The orchestrator is working — open its session" : "Open the permanent orchestrator session that keeps tickets moving";
+			if (state === "starting") return "The orchestrator session is starting";
+			if (state === "archived") return "The orchestrator session is archived";
+			if (state === "off") return "The kanban orchestrator is turned off";
+			return "Open the permanent orchestrator session that keeps tickets moving";
+		}
+
+		/**
+		 * Sparkle anchors, evenly spread around the button's own box: each unit
+		 * direction is projected out to the rectangle's edge, so a sparkle sits on
+		 * the coloured ring rather than floating inside or outside it. `dx`/`dy`
+		 * carry a twinkle a few pixels outward, `delay` staggers them so the ring
+		 * reads as a shower and not a blink.
+		 */
+		function sparklePositions(count) {
+			var n = Number(count) > 0 ? Math.floor(Number(count)) : ORC_SPARKLES;
+			var out = [];
+			for (var i = 0; i < n; i++) {
+				var a = (i / n) * Math.PI * 2 - Math.PI / 2;
+				var cx = Math.cos(a), sy = Math.sin(a);
+				var peak = Math.max(Math.abs(cx), Math.abs(sy));
+				var k = peak > 0 ? 1 / peak : 1;
+				out.push({
+					x: Math.round((50 + 50 * cx * k) * 10) / 10,
+					y: Math.round((50 + 50 * sy * k) * 10) / 10,
+					dx: Math.round(cx * 7),
+					dy: Math.round(sy * 7),
+					delay: Math.round((i / n) * 150) / 100
+				});
+			}
+			return out;
+		}
+
+		/**
+		 * The dim ring around the tray, as four axis-aligned rectangles tiling the
+		 * frame minus the hole. They share one set of rounded edges, so they abut
+		 * the session exactly: no seam, and nothing painted over the tray. Returns
+		 * null when there is no usable hole (a full-frame dim is the fallback), or
+		 * an empty list when the hole is the whole frame.
+		 */
+		function trayStrips(rect, frameW, frameH) {
+			if (!rect) return null;
+			var w = Math.round(Number(frameW) || 0), h = Math.round(Number(frameH) || 0);
+			var l = Math.max(0, Math.min(w, Math.round(Number(rect.left) || 0)));
+			var t = Math.max(0, Math.min(h, Math.round(Number(rect.top) || 0)));
+			var r = Math.max(0, Math.min(w, Math.round(Number(rect.right) || 0)));
+			var b = Math.max(0, Math.min(h, Math.round(Number(rect.bottom) || 0)));
+			if (w <= 0 || h <= 0 || r - l < 160 || b - t < 160) return null;
+			var strips = [];
+			if (t > 0) strips.push({ left: 0, top: 0, width: w, height: t });
+			if (b < h) strips.push({ left: 0, top: b, width: w, height: h - b });
+			if (l > 0) strips.push({ left: 0, top: t, width: l, height: b - t });
+			if (r < w) strips.push({ left: r, top: t, width: w - r, height: b - t });
+			return strips;
+		}
+
+		/** The close pill, floating at the tray's top-right corner. */
+		function trayPillPos(rect, frameW) {
+			if (!rect) return null;
+			return {
+				top: Math.max(8, Math.round(Number(rect.top) || 0) + 10),
+				right: Math.max(12, Math.round((Number(frameW) || 0) - Number(rect.right)) + 12)
+			};
+		}
+
+		function createOrchStore(env) {
+			var listeners = [];
+			var value = { state: null, sessionId: null, running: false, working: false, paused: false };
+			var stopList = null;
+			function publish(next) {
+				var changed = false;
+				for (var key in next) {
+					if (Object.prototype.hasOwnProperty.call(next, key) && next[key] !== value[key]) changed = true;
+				}
+				if (!changed) return;
+				value = Object.assign({}, value, next);
+				for (var i = 0; i < listeners.length; i++) listeners[i]();
+			}
+			function readRunning() {
+				var list = env.sessionsList ? env.sessionsList() : null;
+				var snap = list && typeof list.getSnapshot === "function" ? list.getSnapshot() : null;
+				var row = snap && snap.byId && value.sessionId ? snap.byId[value.sessionId] : null;
+				var running = Boolean(row && row.running);
+				publish({ running: running, working: orchWorking(value.state, running) });
+			}
+			return {
+				get: function () { return value; },
+				subscribe: function (fn) {
+					listeners.push(fn);
+					if (listeners.length === 1 && !stopList) {
+						var list = env.sessionsList ? env.sessionsList() : null;
+						if (list && typeof list.subscribe === "function") stopList = list.subscribe(readRunning);
+					}
+					return function () {
+						var at = listeners.indexOf(fn);
+						if (at >= 0) listeners.splice(at, 1);
+						if (listeners.length === 0 && stopList) { stopList(); stopList = null; }
+					};
+				},
+				/** Fold one `orchestrator` rpc answer into the snapshot. */
+				setInfo: function (info) {
+					var answer = info || {};
+					publish({
+						state: answer.state || null,
+						sessionId: answer.sessionId || null,
+						paused: Boolean(answer.paused)
+					});
+					readRunning();
+				},
+				/** Ask the Host again. A failure leaves the last good answer in place. */
+				refresh: function () {
+					var self = this;
+					return Promise.resolve(env.rpc("orchestrator", {})).then(function (res) {
+						if (!res || !res.ok || !res.value) return false;
+						self.setInfo(res.value);
+						return true;
+					}, function () { return false; });
+				},
+				/** Whether the shell shows this session in the main view; null when unknown. */
+				isMainSession: function (sessionId) {
+					var list = env.sessionsList ? env.sessionsList() : null;
+					var snap = list && typeof list.getSnapshot === "function" ? list.getSnapshot() : null;
+					if (!snap || snap.phase !== "ready" || !snap.byId) return null;
+					var row = snap.byId[sessionId];
+					return Boolean(row && row.retainedBy && Number(row.retainedBy.mainView || 0) > 0);
+				},
+				/** Watch the session list; a no-op when the shell has none. */
+				watchList: function (fn) {
+					var list = env.sessionsList ? env.sessionsList() : null;
+					if (!list || typeof list.subscribe !== "function") return function () {};
+					return list.subscribe(fn);
+				}
+			};
+		}
+
+		var orchStore = createOrchStore({
+			rpc: rpc,
+			sessionsList: function () {
+				var ws = uiWorkspaceRef;
+				return ws && ws.sessions ? ws.sessions.list : null;
+			}
+		});
+
+		function useOrchWork() {
+			return React.useSyncExternalStore(orchStore.subscribe, orchStore.get, orchStore.get);
+		}
+
+		// The tray is one module-scope flag plus the session it was opened on: the
+		// board page is unmounted while it is up, so its state cannot live in the
+		// page. The overlay entry reads it from the other side.
+		function createTrayStore() {
+			var listeners = [];
+			var value = { open: false, sessionId: null };
+			function publish(next) {
+				var changed = false;
+				for (var key in next) {
+					if (Object.prototype.hasOwnProperty.call(next, key) && next[key] !== value[key]) changed = true;
+				}
+				if (!changed) return;
+				value = Object.assign({}, value, next);
+				for (var i = 0; i < listeners.length; i++) listeners[i]();
+			}
+			return {
+				get: function () { return value; },
+				subscribe: function (fn) {
+					listeners.push(fn);
+					return function () {
+						var at = listeners.indexOf(fn);
+						if (at >= 0) listeners.splice(at, 1);
+					};
+				},
+				openWith: function (sessionId) { publish({ open: true, sessionId: sessionId }); },
+				close: function () { publish({ open: false, sessionId: null }); }
+			};
+		}
+
+		var trayStore = createTrayStore();
+
+		/**
+		 * Dismiss the tray. `toBoard` returns the centre column to the Work page;
+		 * an automatic close — the person navigated somewhere else on their own —
+		 * leaves the new destination alone.
+		 */
+		function closeTray(toBoard) {
+			if (!trayStore.get().open) return;
+			trayStore.close();
+			if (!toBoard) return;
+			try {
+				if (layoutRef && typeof layoutRef.selectPanel === "function") layoutRef.selectPanel("kanban");
+			} catch (error) { /* an unregistered panel is not worth an alert */ }
+		}
+
+		/**
+		 * The shell's centre column, without hard-coding a hashed CSS class: the
+		 * frame renders `[data-rightbar-col]` directly after it, so the element to
+		 * its left is the column the tray opens over.
+		 */
+		function findCenterCol() {
+			var right = document.querySelector("[data-rightbar-col]");
+			var col = right ? right.previousElementSibling : null;
+			return col && col !== right ? col : null;
+		}
+
+		function enterOrchestratorTray(sessionId) {
+			if (!sessionId) { window.alert("The orchestrator session is not known yet. Try again in a moment."); return; }
+			var opening = openSessionById ? openSessionById(sessionId) : Promise.resolve({ ok: false, error: "The session view is not available in this window." });
+			opening.then(function (result) {
+				if (!result || !result.ok) { window.alert((result && result.error) || "The orchestrator session could not be opened."); return; }
+				trayStore.openWith(sessionId);
+			});
+		}
+
+		/**
+		 * The Work page button: on a phone this is just the session switch (there
+		 * is no room for a tray over a tray), everywhere else it pulls the tray down
+		 * over the board. The "starting" retry loop is the one the plain switch
+		 * already uses — the first click after a boot is often the nudge that brings
+		 * the session into being.
+		 */
+		function openOrchestratorTray(tries) {
+			var left = tries === undefined ? 3 : tries;
+			if (isNarrow(window.innerWidth)) { openOrchestrator(); return; }
+			rpc("orchestrator", {}).then(function (res) {
+				if (!res || !res.ok) { window.alert((res && res.error && res.error.message) || "The orchestrator status could not be read."); return; }
+				var value = res.value || {};
+				orchStore.setInfo(value);
+				if (value.state === "live") { enterOrchestratorTray(value.sessionId); return; }
+				if (value.state === "starting") {
+					if (left > 0) { setTimeout(function () { openOrchestratorTray(left - 1); }, 700); return; }
+					enterOrchestratorTray(value.sessionId);
+					return;
+				}
+				if (value.state === "archived") { window.alert("The orchestrator session is archived. Unarchive it in the session list to use the board orchestrator."); return; }
+				window.alert("The kanban orchestrator is turned off. Set orchestratorEnabled to true in the kanban config row to run it.");
+			}, function () { window.alert("Could not reach the Host."); });
+		}
+
+		/**
+		 * The tray: the orchestrator conversation, already open in the centre
+		 * column, with everything around it dimmed and click-to-dismiss. It is a
+		 * frame-wide overlay entry, not part of the board page, because the board is
+		 * gone from the main slot the moment the session opens.
+		 */
+		function OrchestratorTray() {
+			var tray = React.useSyncExternalStore(trayStore.subscribe, trayStore.get, trayStore.get);
+			var work = useOrchWork();
+			var geomState = React.useState(null);
+			var geom = geomState[0], setGeom = geomState[1];
+
+			// Measure the hole: the centre column's box, re-read whenever it or the
+			// window changes size (a rightbar drag moves it without resizing the
+			// window, so a resize listener alone leaves the dim out of register).
+			React.useEffect(function () {
+				if (!tray.open) return undefined;
+				function measure() {
+					var col = findCenterCol();
+					var layer = document.querySelector("[data-shell-overlay]");
+					var host = layer && layer.parentElement ? layer.parentElement : document.body;
+					var box = host.getBoundingClientRect();
+					var rect = col ? col.getBoundingClientRect() : null;
+					var next = rect
+						? { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom), w: Math.round(box.width), h: Math.round(box.height) }
+						: { left: 0, top: 0, right: 0, bottom: 0, w: Math.round(box.width), h: Math.round(box.height), none: true };
+					setGeom(function (prev) {
+						if (prev && prev.left === next.left && prev.top === next.top && prev.right === next.right && prev.bottom === next.bottom && prev.w === next.w && prev.h === next.h) return prev;
+						return next;
+					});
+				}
+				measure();
+				var col = findCenterCol();
+				var observer = typeof ResizeObserver === "function" && col ? new ResizeObserver(measure) : null;
+				if (observer) observer.observe(col);
+				window.addEventListener("resize", measure);
+				return function () {
+					if (observer) observer.disconnect();
+					window.removeEventListener("resize", measure);
+				};
+			}, [tray.open]);
+
+			// The tray pulls down: one animation on the column it opens over, added
+			// and taken off from here because the column belongs to the shell.
+			React.useEffect(function () {
+				if (!tray.open) return undefined;
+				var col = findCenterCol();
+				if (!col) return undefined;
+				col.classList.add("kb-tray-drop");
+				var timer = setTimeout(function () { col.classList.remove("kb-tray-drop"); }, 400);
+				return function () { clearTimeout(timer); col.classList.remove("kb-tray-drop"); };
+			}, [tray.open]);
+
+			// Esc closes it, like any other floating layer.
+			React.useEffect(function () {
+				if (!tray.open) return undefined;
+				function onKey(ev) {
+					if (ev.key !== "Escape") return;
+					ev.preventDefault();
+					ev.stopPropagation();
+					closeTray(true);
+				}
+				document.addEventListener("keydown", onKey, true);
+				return function () { document.removeEventListener("keydown", onKey, true); };
+			}, [tray.open]);
+
+			// It also closes by itself when the session it frames stops being what
+			// the centre shows: another panel was picked, or another session opened.
+			React.useEffect(function () {
+				if (!tray.open) return undefined;
+				function check() {
+					try {
+						var info = layoutRef && layoutRef.panelInfo && typeof layoutRef.panelInfo.getSnapshot === "function" ? layoutRef.panelInfo.getSnapshot() : null;
+						if (info && info.activePanelId !== null) { closeTray(false); return; }
+					} catch (error) { /* a layout without panelInfo simply never auto-closes */ }
+					var main = orchStore.isMainSession(tray.sessionId);
+					if (main === false) closeTray(false);
+				}
+				var stopList = orchStore.watchList(check);
+				var stopPanel = null;
+				try {
+					if (layoutRef && layoutRef.panelInfo && typeof layoutRef.panelInfo.subscribe === "function") stopPanel = layoutRef.panelInfo.subscribe(check);
+				} catch (error) { stopPanel = null; }
+				return function () {
+					stopList();
+					if (stopPanel) stopPanel();
+				};
+			}, [tray.open, tray.sessionId]);
+
+			if (!tray.open) return null;
+			var rect = geom && !geom.none ? geom : null;
+			var strips = trayStrips(rect, geom ? geom.w : 0, geom ? geom.h : 0);
+			var pill = trayPillPos(rect, geom ? geom.w : 0);
+			var kids = [];
+			if (strips === null) {
+				kids.push(h("div", { key: "all", className: "kb-tray-dim", style: { left: 0, top: 0, right: 0, bottom: 0 }, onClick: function () { closeTray(true); } }));
+			} else {
+				for (var i = 0; i < strips.length; i++) {
+					var s = strips[i];
+					kids.push(h("div", {
+						key: "dim" + i,
+						className: "kb-tray-dim",
+						style: { left: s.left + "px", top: s.top + "px", width: s.width + "px", height: s.height + "px" },
+						onClick: function () { closeTray(true); }
+					}));
+				}
+			}
+			kids.push(h("div", {
+				key: "pill",
+				className: "kb-tray-pill",
+				style: pill ? { top: pill.top + "px", right: pill.right + "px" } : undefined,
+				role: "toolbar",
+				"aria-label": "Orchestrator tray"
+			},
+				h("span", { className: "kb-tray-dot" + (work.working ? " active" : ""), "aria-hidden": "true" }),
+				h("span", { className: "kb-tray-name", children: "Orchestrator" }),
+				h("button", {
+					type: "button",
+					className: "kb-tray-x",
+					title: "Close the orchestrator tray and go back to the board",
+					"aria-label": "Close the orchestrator tray",
+					onClick: function () { closeTray(true); },
+					children: "✕"
+				})
+			));
+			return h(React.Fragment, null, kids);
+		}
+
 		function fmtUsd(value) {
 			if (value === null || value === undefined) return "unpriced";
 			return "$" + Number(value).toFixed(value > 0 && value < 0.01 ? 4 : 2);
@@ -457,6 +863,40 @@ var CSS =
 		+ ".kb-md pre code{background:none;padding:0}"
 		+ ".kb-md img{max-width:100%;max-height:360px;border-radius:var(--dsw-radius-sm,8px);border:.5px solid var(--dsw-alias-border-l1,#e4e4e4);display:block;margin:4px 0}"
 		+ ".kb-img-broken{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#d8d8d8);background:var(--dsw-alias-bg-layer-2,#eee);color:var(--dsw-alias-label-tertiary,#888);font:500 11px/16px var(--dsw-font-family,sans-serif)}"
+		// KAN-73: the orchestrator button's living border. The ring is an oversized
+		// disc of the five workflow phase colors, rotated inside a 2px mask, so the
+		// color sweeps around the button rather than the button moving. Only
+		// transform and opacity animate — the glow is a static shadow on its own
+		// layer whose opacity breathes — and the sparkles exist only while a turn is
+		// in flight. Idle is not "off": the ring keeps its color and freezes at its
+		// current angle (animation-play-state), then sweeps on from exactly there
+		// when work resumes.
+		+ ".kb-btn-orc{position:relative;overflow:visible}"
+		+ ".kb-orc-label{position:relative;z-index:2}"
+		+ ".kb-orc-ring{position:absolute;inset:-2px;z-index:0;padding:2px;border-radius:calc(var(--dsw-radius-md,12px) + 2px);overflow:hidden;pointer-events:none;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}"
+		+ ".kb-orc-disc{position:absolute;top:50%;left:50%;width:220px;height:220px;transform:translate(-50%,-50%) rotate(0deg);animation:kb-orc-spin 3s linear infinite;will-change:transform;background:conic-gradient(#2563eb 0deg,#0d9488 72deg,#db2777 144deg,#7c3aed 216deg,#15803d 288deg,#2563eb 360deg)}"
+		+ ".kb-btn-orc:not(.working) .kb-orc-disc{animation-play-state:paused}"
+		+ ".kb-orc-glow{position:absolute;inset:-1px;z-index:0;border-radius:calc(var(--dsw-radius-md,12px) + 1px);box-shadow:0 0 12px 2px rgba(139,92,246,.55);opacity:.3;pointer-events:none}"
+		+ ".kb-btn-orc.working .kb-orc-glow{animation:kb-orc-pulse 1.9s ease-in-out infinite}"
+		+ "@keyframes kb-orc-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}"
+		+ "@keyframes kb-orc-pulse{0%,100%{opacity:.26}50%{opacity:.85}}"
+		+ ".kb-orc-spark{position:absolute;z-index:3;width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;clip-path:polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%);filter:drop-shadow(0 0 3px rgba(139,92,246,.95));opacity:0;pointer-events:none;will-change:transform,opacity;animation:kb-orc-twinkle 1.5s ease-in-out infinite}"
+		+ "@keyframes kb-orc-twinkle{0%{transform:translate(0,0) scale(.15) rotate(0deg);opacity:0}35%{transform:translate(calc(var(--kb-spark-dx,0px) * .3),calc(var(--kb-spark-dy,0px) * .3)) scale(1) rotate(45deg);opacity:1}70%{transform:translate(var(--kb-spark-dx,0px),var(--kb-spark-dy,0px)) scale(.55) rotate(90deg);opacity:.5}100%{transform:translate(var(--kb-spark-dx,0px),var(--kb-spark-dy,0px)) scale(.1) rotate(120deg);opacity:0}}"
+		+ ".kb-orc-switch{border-color:color-mix(in srgb,#8b5cf6 34%,var(--dsw-alias-border-l3,#cbd2da));color:#8b5cf6}"
+		// KAN-73: the tray. The dim is four strips around the centre column rather
+		// than one clipped sheet, so the hole is exact in every browser and a click
+		// anywhere on the dim — and only on the dim — lands on something dismissable.
+		+ ".kb-tray-dim{position:fixed;z-index:60;background:rgba(17,17,17,.38);-webkit-user-select:none;user-select:none}"
+		+ ".kb-tray-pill{position:fixed;z-index:61;display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 4px 0 12px;border-radius:999px;background:rgba(17,17,17,.86);color:#fff;font:600 12px/16px var(--dsw-font-family,sans-serif);box-shadow:0 10px 30px rgba(0,0,0,.3)}"
+		+ ".kb-tray-dot{flex:none;width:8px;height:8px;border-radius:999px;background:#64748b}"
+		+ ".kb-tray-dot.active{background:#8b5cf6;animation:kb-tray-pulse 1.8s ease-out infinite}"
+		+ "@keyframes kb-tray-pulse{0%{box-shadow:0 0 0 0 rgba(139,92,246,.55)}70%{box-shadow:0 0 0 6px rgba(139,92,246,0)}100%{box-shadow:0 0 0 0 rgba(139,92,246,0)}}"
+		+ ".kb-tray-name{letter-spacing:.02em}"
+		+ ".kb-tray-x{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font:600 13px/16px var(--dsw-font-family,sans-serif);cursor:pointer}"
+		+ ".kb-tray-x:hover{background:rgba(255,255,255,.3)}"
+		+ "@keyframes kb-tray-pulldown{from{transform:translateY(-14px);opacity:.5}to{transform:translateY(0);opacity:1}}"
+		+ ".kb-tray-drop{animation:kb-tray-pulldown 200ms ease-out}"
+		+ "@media (prefers-reduced-motion:reduce){.kb-orc-disc,.kb-orc-glow,.kb-tray-drop,.kb-tray-dot.active{animation:none}.kb-orc-spark{display:none}.kb-orc-glow{opacity:.45}}"
 		// KAN-58: the mobile column reveal bar is a phone-only control; hidden on
 		// desktop, where all three columns already fit side by side.
 		+ ".kb-mobcolbar{display:none}"
@@ -2943,6 +3383,18 @@ var CSS =
 
 		function KanbanPage() {
 			var live = useBoardStore();
+			// KAN-73: the ring's "is it working" answer needs two facts, and only
+			// one of them arrives by subscription — the session list pushes the
+			// `running` flag, but which session *is* the orchestrator is the Host's
+			// to say. Ask on mount, then every half minute while the board is on
+			// screen, so a session that starts late or is restarted from elsewhere
+			// still lights the border up without a click.
+			var orch = useOrchWork();
+			React.useEffect(function () {
+				orchStore.refresh();
+				var timer = setInterval(function () { if (!document.hidden) orchStore.refresh(); }, 30000);
+				return function () { clearInterval(timer); };
+			}, []);
 			var board = live.board;
 			var sel = React.useState(null);
 			var selectedId = sel[0], setSelectedId = sel[1];
@@ -3150,6 +3602,8 @@ var CSS =
 						var state = value.state || {};
 						setNotice("Orchestrator restarted: " + (value.previousId || "the old session") + " archived, " + (value.sessionId || "a new session") + " is " + (state.state || "starting") + ".");
 						loadBoard();
+						// The border follows the new session, not the one it was showing.
+						orchStore.refresh();
 					} else {
 						setNotice(res && res.error ? res.error.message : "The orchestrator session could not be restarted.");
 					}
@@ -3177,7 +3631,37 @@ var CSS =
 						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
 						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
 board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
-						h("button", { className: "kb-btn", title: "Open the permanent orchestrator session that keeps tickets moving", onClick: function () { openOrchestrator(); }, children: "Open orchestrator" }),
+						h("button", {
+							type: "button",
+							className: "kb-btn kb-btn-orc" + (orch.working ? " working" : ""),
+							title: orchTitle(orch.state, orch.working),
+							onClick: function () { openOrchestratorTray(); },
+							children: [
+								h("span", { key: "glow", className: "kb-orc-glow", "aria-hidden": "true" }),
+								h("span", { key: "ring", className: "kb-orc-ring", "aria-hidden": "true" }, h("span", { className: "kb-orc-disc" })),
+								// Sparkles are mounted only while a turn is in flight: an
+								// idle ring is a still, glowing ring, not a paused show.
+								orch.working ? sparklePositions(ORC_SPARKLES).map(function (sp, i) {
+									return h("span", {
+										key: "sp" + i,
+										className: "kb-orc-spark",
+										style: { left: sp.x + "%", top: sp.y + "%", "--kb-spark-dx": sp.dx + "px", "--kb-spark-dy": sp.dy + "px", animationDelay: "-" + sp.delay + "s" }
+									});
+								}) : null,
+								h("span", { key: "label", className: "kb-orc-label", children: "Open orchestrator" })
+							]
+						}),
+						// KAN-73: the twisted arrow, same gesture as a card's jump icon,
+						// for the one thing the tray cannot do — leave the board behind and
+						// take the whole window to the orchestrator.
+						h("button", {
+							type: "button",
+							className: "kb-iconbtn kb-orc-switch",
+							title: "Switch to the orchestrator session",
+							"aria-label": "Switch to the orchestrator session",
+							onClick: function () { openOrchestrator(); },
+							children: h(JumpIcon)
+						}),
 						h("button", { className: "kb-btn", title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart", onClick: function () { restartOrchestrator(); }, children: "Restart orchestrator" }),
 						h("button", {
 							className: "kb-btn" + (board && board.orchestratorPaused ? " primary" : ""),
@@ -3621,11 +4105,16 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 
 		function apply(ctx) {
 			connection = ctx.connection !== undefined ? ctx.connection : ctx.get ? ctx.get("connection") : null;
+			// KAN-73: the working indicator reads the shell's own session list, so
+			// grab the service here rather than waiting for the first session open
+			// to do it. Optional: without it the ring simply never lights up.
+			try { uiWorkspaceRef = ctx.get ? ctx.get("uiWorkspace") : null; } catch (error) { uiWorkspaceRef = null; }
 			openSessionById = function (sessionId) {
 				return new Promise(function (resolveOpen) {
 					function failed(text) { resolveOpen({ ok: false, error: text }); }
 					try {
 						var uiWorkspace = ctx.get("uiWorkspace");
+						uiWorkspaceRef = uiWorkspace;
 						if (!uiWorkspace || typeof uiWorkspace.openSession !== "function") { failed("The session view is not available in this window."); return; }
 						// A session the list has finished loading and does not
 						// contain is gone (deleted, or never reached the list):
@@ -3635,11 +4124,15 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 						var opened = uiWorkspace.openSession(sessionId);
 						Promise.resolve(opened).then(function () {
 							// Hold the loading state until the session is the current one
-							// (bounded), so the click visibly does something.
+							// (bounded), so the click visibly does something. The shell
+							// says which session that is by its retention source — the
+							// list snapshot has no `current` field to read.
 							var waited = 0;
 							(function settle() {
 								var now = uiWorkspace.sessions && uiWorkspace.sessions.list && typeof uiWorkspace.sessions.list.getSnapshot === "function" ? uiWorkspace.sessions.list.getSnapshot() : null;
-								if (!now || now.current === sessionId || waited >= 1500) { resolveOpen({ ok: true }); return; }
+								var row = now && now.byId ? now.byId[sessionId] : null;
+								var isMain = Boolean(row && row.retainedBy && Number(row.retainedBy.mainView || 0) > 0);
+								if (!now || isMain || waited >= 1500) { resolveOpen({ ok: true }); return; }
 								waited += 100;
 								setTimeout(settle, 100);
 							})();
@@ -3672,6 +4165,11 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 			try {
 				layout = ctx.layout !== undefined ? ctx.layout : ctx.get ? ctx.get("layout") : null;
 			} catch (error) { layout = null; }
+			// KAN-73: the tray dismisses itself by returning the centre column to the
+			// board, and watches the panel selection for the moment the person goes
+			// somewhere else on their own. Both need the layout service; without it
+			// the tray still opens, it just stays until it is closed.
+			layoutRef = layout;
 			ctx.effect(function () {
 				function onDocumentClick(event) {
 					if (event.button) return;
@@ -3714,6 +4212,23 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 					);
 				});
 			}, "dsh-kanban: turn phase banner");
+			// KAN-73: the orchestrator tray lives in the frame-wide overlay layer,
+			// above every column and outside their scroll containers, because the
+			// thing it frames is the session in the centre column and the thing it
+			// covers is the rest of the shell.
+			ctx.effect(function () {
+				return slots.inject("shell.overlay", function () {
+					return slots.register(
+						{
+							name: "shell.overlay",
+							id: "kanban-orchestrator-tray",
+							order: 40,
+							label: function () { return "Orchestrator tray"; },
+						},
+						OrchestratorTray
+					);
+				});
+			}, "dsh-kanban: orchestrator tray");
 		}
 
 		exports.apply = apply;

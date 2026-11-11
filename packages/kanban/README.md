@@ -539,13 +539,32 @@ for a person. The orchestrator is the session that stops "a person" being the
 only thing between a park and a retry: one permanent DSH session that watches the
 board, nudges what is stuck, and tells you what it did.
 
-It is a session, not a panel. The Work page has an **Orchestrator** button in its
-header row; it asks the Host which session the orchestrator is (`POST
+It is a session, not a panel. The Work page has an **Open orchestrator** button in
+its header row; it asks the Host which session the orchestrator is (`POST
 /api/kanban/orchestrator` → `{sessionId, state}`) and opens it, so you talk to it
 in the ordinary conversation view — same history, same composer, same everything.
 `state` is `live`, `starting` (the button waits a moment and retries), `archived`
 (unarchive it; the engine will not mint a second permanent session) or `off`
 (`orchestratorEnabled: false`).
+
+**The tray (0.37.0).** On a wide window that button does not navigate away from the
+board, it pulls a tray down over it: the orchestrator conversation opens in the
+centre column and the rest of the shell dims. The tray *is* the session, so it is
+live — nothing is mirrored or re-rendered. It closes on the ✕ pill at its top-right,
+on Esc, or on a click anywhere in the dim around it, and each of those returns you
+to the board; it also closes by itself when the centre column starts showing another
+session or another panel. On a phone (≤768px) it is the plain session switch it
+always was. The twisted-arrow button beside it does the full switch at every size,
+for when the orchestrator should have the whole window.
+
+**The border (0.37.0).** That button also says what the orchestrator is doing. A 2px
+ring of the five workflow phase colors sweeps around it while its session has a turn
+in flight — the same `running` flag the sidebar spinner reads, pushed over the live
+connection, joined with the `state` above — over a breathing violet glow with eight
+sparkles off the edge. When the turn ends the ring freezes where it stands, glowing
+but still, and resumes from that angle when work starts again. Only transform and
+opacity animate, the sparkles are unmounted while idle, and `prefers-reduced-motion`
+leaves a plain static ring. There is no config for any of it.
 
 **Pausing it.** **Pause orchestrator** (beside the button that opens it) cuts all
 traffic between the engine and the orchestrator: board events are dropped, every
