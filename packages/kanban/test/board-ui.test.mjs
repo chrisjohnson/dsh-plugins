@@ -124,32 +124,40 @@ test('the mobile board collapses to one track and reveals Backlog/Done behind bu
   )
 })
 
-// KAN-65: the Work page can retire the orchestrator session and start a fresh
-// one, so a tool shipped by a release is usable without restarting the service.
-test('the Work header can restart the orchestrator session', async () => {
+// KAN-65 kept: the orchestrator session can be retired without restarting the
+// service. KAN-73 round 2 moved the control: it lives in the tray pill now (and
+// in the phone-only header row), so the handler cannot be a KanbanPage closure.
+test('the orchestrator restart moved into the tray and reports through the status store', async () => {
   const src = await clientSource()
   const page = sliceFunction(src, 'KanbanPage')
+  const actions = sliceFunction(src, 'OrchestratorActions')
 
-  // The control sits with the one that opens the session, and says what it does.
-  const actions = page.slice(page.indexOf('className: "kb-actions"'))
-  const openAt = actions.indexOf('children: "Open orchestrator"')
-  const restartAt = actions.indexOf('children: "Restart orchestrator"')
-  assert.ok(openAt >= 0, 'the Open button is still there')
-  assert.ok(restartAt > openAt, 'the restart button sits next to it in the header')
+  // The desktop header no longer carries it: KanbanPage renders the shared
+  // component inside a phone-only wrapper and nothing else.
+  const header = page.slice(page.indexOf('className: "kb-actions"'))
+  assert.equal(header.includes('children: "Restart orchestrator"'), false, 'the restart button is out of the header markup')
+  assert.equal(header.includes('orchestratorSetPaused'), false, 'and so is the pause toggle')
+  assert.match(header, /className: "kb-orc-mobileonly" \}, h\(OrchestratorActions\)/, 'the header keeps one phone-only row of the shared controls')
+  assert.ok(page.includes('children: "Open orchestrator"'), 'the launcher itself is still there')
+
+  // The control says what it does wherever it is mounted.
   assert.match(actions, /title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart"/)
+  assert.match(actions, /orchRestart\(\)/)
 
-  // It asks first: the session it replaces is archived as it happens.
-  assert.match(page, /function restartOrchestrator\(\) \{/)
-  assert.match(page, /window\.confirm\("Restart the orchestrator session\?/)
-  // One endpoint, and the board is re-read so the notice and the session list
-  // both show the new state.
-  assert.match(page, /rpc\("orchestratorDetach", \{\}\)/)
-  assert.match(page, /setNotice\("Orchestrator restarted: /)
-  assert.match(page, /loadBoard\(\)/)
+  // The module handler still asks first (the session it replaces is archived as it
+  // happens) and still hits one endpoint.
+  const restart = sliceFunction(src, 'orchRestart')
+  assert.match(restart, /window\.confirm\("Restart the orchestrator session\?/)
+  assert.match(restart, /rpc\("orchestratorDetach", \{\}\)/)
+  assert.match(restart, /orchStatus\.set\("Orchestrator restarted: /)
+  assert.match(restart, /orchStore\.refresh\(\)/)
+  assert.match(restart, /if \(boardRefreshRequest\) boardRefreshRequest\(\)/, 'the mounted page is asked to re-read the board')
+  assert.match(sliceFunction(src, 'orchSetPaused'), /rpc\("orchestratorSetPaused", \{ paused: paused \}\)/)
 
   // A plain handler, like the file's other actions: no hook is added for it, so
   // the slot's hook count cannot change between renders.
-  assert.equal(/function restartOrchestrator\(\)[\s\S]{0,600}?React\.use(State|Effect|Ref|Memo)/.test(page), false, 'the restart handler must not call a hook')
+  assert.equal(/function orchRestart\(\)[\s\S]{0,700}?React\.use(State|Effect|Ref|Memo)/.test(src), false, 'the restart handler must not call a hook')
+  assert.equal(/function orchSetPaused\([\s\S]{0,700}?React\.use(State|Effect|Ref|Memo)/.test(src), false, 'nor may the pause handler')
 })
 
 

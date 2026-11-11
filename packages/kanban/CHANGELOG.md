@@ -5,6 +5,30 @@
 
 ## Unreleased
 
+## 0.38.0
+
+### Changed
+
+- **The Work header keeps one orchestrator button, not four (KAN-73).** The
+  twisted-arrow switch, **Restart orchestrator** and **Pause / Resume
+  orchestrator** left the header and became icon buttons in the tray pill, beside
+  the status dot and the ✕ — they are the tray's chrome now, not the board's. The
+  amber **Orchestrator paused** chip stays on the board: it is a status, not a
+  control, and a pause you can only notice by opening the tray is a pause you
+  miss. Because the tray never opens on a phone, the same three controls render in
+  the header at ≤768px (one component, two mount points, so they cannot drift).
+  Restarting from the tray closes the tray and returns to the board, because a
+  restart mints a new session id and the tray would otherwise be framing the
+  archived one; its result, and the pause result, now travel through a module-scope
+  status store that both the pill and the board's notice line read.
+- **The button's glow is now a three-state readout (KAN-73).** Colourful and
+  sweeping means working. Colourful and still means enabled but idle — the glow
+  holds steady and is clearly lit. A **disabled** orchestrator (turned off in
+  config, archived, or paused by a person) keeps the coloured ring but loses
+  almost all of its glow, so colour alone never reads as "ready" when the
+  orchestrator cannot act. An unread state shows the idle look: a page load never
+  flashes the disabled appearance at a working board.
+
 ## 0.37.0
 
 ### Added

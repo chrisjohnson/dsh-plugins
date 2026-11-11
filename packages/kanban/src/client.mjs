@@ -357,6 +357,186 @@ window.__ModuleLoader__.load({
 			}, function () { window.alert("Could not reach the Host."); });
 		}
 
+
+		// KAN-73 round 2: the orchestrator's own controls live in the tray, so they
+		// cannot depend on the board page — the page is unmounted the moment the
+		// session opens. They sit at module scope and report through one status
+		// store that both the pill and the board's notice line read.
+		//
+		// The board itself still needs re-reading when the page *is* mounted (a
+		// phone has no tray, so the same buttons render in the header there), and
+		// KanbanPage hands its loader over through the same kind of module-scope
+		// bridge the sidebar row already uses for goBoardRequest.
+		var boardRefreshRequest = null;
+
+		function createOrchStatus() {
+			var listeners = [];
+			var value = { text: null, tone: "info", at: 0 };
+			var timer = 0;
+			function publish(next) {
+				if (next.text === value.text && next.tone === value.tone) return;
+				value = next;
+				for (var i = 0; i < listeners.length; i++) listeners[i]();
+			}
+			return {
+				get: function () { return value; },
+				subscribe: function (fn) {
+					listeners.push(fn);
+					return function () {
+						var at = listeners.indexOf(fn);
+						if (at >= 0) listeners.splice(at, 1);
+					};
+				},
+				/** Say something for a moment; a status line is not a permanent banner. */
+				set: function (text, tone) {
+					if (timer) { clearTimeout(timer); timer = 0; }
+					publish({ text: text, tone: tone || "info", at: Date.now() });
+					if (text) timer = setTimeout(function () { timer = 0; publish({ text: null, tone: "info", at: 0 }); }, 12000);
+				},
+				clear: function () {
+					if (timer) { clearTimeout(timer); timer = 0; }
+					publish({ text: null, tone: "info", at: 0 });
+				}
+			};
+		}
+
+		var orchStatus = createOrchStatus();
+
+		function useOrchStatus() {
+			return React.useSyncExternalStore(orchStatus.subscribe, orchStatus.get, orchStatus.get);
+		}
+
+		/**
+		 * The three looks the border can wear, and what each one means:
+		 *
+		 *   " working"  — colourful, sweeping, glowing, sparkling
+		 *   ""          — enabled but idle: colourful and still, glow steady
+		 *   " disabled" — off, archived or paused by a person: the glow is dimmed
+		 *                 until it is almost gone, so colour alone never reads as
+		 *                 "ready" when the orchestrator cannot act.
+		 *
+		 * An unread state (null, before the first rpc lands) is the idle look: a
+		 * page load must not flash the disabled appearance at a working board.
+		 */
+		function orchGlowClass(state, paused, working) {
+			if (working) return " working";
+			if (state === "off" || state === "archived" || paused === true) return " disabled";
+			return "";
+		}
+
+		/** Below this the pill keeps its icons and drops the word "Orchestrator". */
+		function pillCompact(holeWidth) {
+			return Number(holeWidth) < 420;
+		}
+
+		/**
+		 * Retire the live orchestrator session and start a fresh one (KAN-65). The
+		 * new session gets a NEW id — nextOrchestratorSessionId bumps the suffix —
+		 * so a tray framing the old one is showing an archived transcript the moment
+		 * this succeeds: the caller closes the tray.
+		 */
+		function orchRestart() {
+			var sure = window.confirm("Restart the orchestrator session?\n\nThe current session is archived with its history and a fresh one starts, with the current tools, prompt and a new board snapshot. Nothing else is touched, and no service restart is needed.");
+			if (!sure) return Promise.resolve(false);
+			orchStatus.set("Restarting the orchestrator session…", "info");
+			return rpc("orchestratorDetach", {}).then(function (res) {
+				if (res && res.ok) {
+					var value = res.value || {};
+					var state = value.state || {};
+					orchStatus.set("Orchestrator restarted: " + (value.previousId || "the old session") + " archived, " + (value.sessionId || "a new session") + " is " + (state.state || "starting") + ".", "ok");
+					// The border follows the new session, not the one it was showing.
+					orchStore.refresh();
+					if (boardRefreshRequest) boardRefreshRequest();
+					return true;
+				}
+				orchStatus.set(res && res.error ? res.error.message : "The orchestrator session could not be restarted.", "err");
+				return false;
+			}, function () {
+				orchStatus.set("Could not reach the Host.", "err");
+				return false;
+			});
+		}
+
+		/** Cut or restore all traffic between the engine and the orchestrator (KAN-65). */
+		function orchSetPaused(paused) {
+			orchStatus.set(paused ? "Pausing the orchestrator…" : "Resuming the orchestrator…", "info");
+			return rpc("orchestratorSetPaused", { paused: paused }).then(function (res) {
+				if (res && res.ok) {
+					orchStatus.clear();
+					orchStore.refresh();
+					if (boardRefreshRequest) boardRefreshRequest();
+					return true;
+				}
+				orchStatus.set(res && res.error ? res.error.message : "That did not work.", "err");
+				return false;
+			}, function () {
+				orchStatus.set("Could not reach the Host.", "err");
+				return false;
+			});
+		}
+
+		function PauseIcon() {
+			return h("svg", { width: 13, height: 13, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", "aria-hidden": "true" },
+				h("path", { d: "M6 3.5v9" }),
+				h("path", { d: "M10 3.5v9" })
+			);
+		}
+
+		function PlayIcon() {
+			return h("svg", { width: 13, height: 13, viewBox: "0 0 16 16", fill: "currentColor", "aria-hidden": "true" },
+				h("path", { d: "M5.5 3.6a1 1 0 0 1 1.5-.87l6 3.53a1 1 0 0 1 0 1.73l-6 3.53a1 1 0 0 1-1.5-.86z" })
+			);
+		}
+
+		function RestartIcon() {
+			return h("svg", { width: 13, height: 13, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+				h("path", { d: "M13 8a5 5 0 1 1-1.7-3.75" }),
+				h("path", { d: "M13 2.6V5h-2.4" })
+			);
+		}
+
+		/**
+		 * The orchestrator's three controls, rendered in two places: inside the tray
+		 * pill on a wide window, and in the Work header at phone width, where the
+		 * tray never opens and dropping them would make them unreachable. One
+		 * component, so the two can never drift.
+		 */
+		function OrchestratorActions(props) {
+			var work = useOrchWork();
+			var paused = Boolean(work.paused);
+			function restart() {
+				orchRestart().then(function (ok) {
+					// The session id changed under the tray: frame the board instead.
+					if (ok && trayStore.get().open) closeTray(true);
+				});
+			}
+			return h("span", { className: "kb-orc-actions" + (props && props.className ? " " + props.className : "") },
+				h("button", {
+					type: "button",
+					className: "kb-iconbtn kb-orc-switch",
+					title: "Switch to the orchestrator session",
+					"aria-label": "Switch to the orchestrator session",
+					onClick: function () { openOrchestrator(); },
+					children: h(JumpIcon)
+				}),
+				h("button", {
+					type: "button",
+					className: "kb-iconbtn kb-orc-pause" + (paused ? " on" : ""),
+					title: paused ? "Let board events and tool calls reach the orchestrator again" : "Stop all traffic between the board engine and the orchestrator",
+					"aria-label": paused ? "Resume orchestrator" : "Pause orchestrator",
+					onClick: function () { orchSetPaused(!paused); },
+					children: paused ? h(PlayIcon) : h(PauseIcon)
+				}),
+				h("button", {
+					type: "button",
+					className: "kb-iconbtn kb-orc-restart",
+					title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart",
+					"aria-label": "Restart orchestrator",
+					onClick: restart,
+					children: h(RestartIcon)
+				})
+			);
+		}
 		/**
 		 * The tray: the orchestrator conversation, already open in the centre
 		 * column, with everything around it dimmed and click-to-dismiss. It is a
@@ -366,6 +546,7 @@ window.__ModuleLoader__.load({
 		function OrchestratorTray() {
 			var tray = React.useSyncExternalStore(trayStore.subscribe, trayStore.get, trayStore.get);
 			var work = useOrchWork();
+			var status = useOrchStatus();
 			var geomState = React.useState(null);
 			var geom = geomState[0], setGeom = geomState[1];
 
@@ -454,6 +635,7 @@ window.__ModuleLoader__.load({
 			var rect = geom && !geom.none ? geom : null;
 			var strips = trayStrips(rect, geom ? geom.w : 0, geom ? geom.h : 0);
 			var pill = trayPillPos(rect, geom ? geom.w : 0);
+			var compact = pillCompact(rect ? rect.right - rect.left : 0);
 			var kids = [];
 			if (strips === null) {
 				kids.push(h("div", { key: "all", className: "kb-tray-dim", style: { left: 0, top: 0, right: 0, bottom: 0 }, onClick: function () { closeTray(true); } }));
@@ -476,7 +658,11 @@ window.__ModuleLoader__.load({
 				"aria-label": "Orchestrator tray"
 			},
 				h("span", { className: "kb-tray-dot" + (work.working ? " active" : ""), "aria-hidden": "true" }),
-				h("span", { className: "kb-tray-name", children: "Orchestrator" }),
+				// A narrow tray keeps its icons and loses the word: the controls are
+				// the point of the pill, the label is not.
+				compact ? null : h("span", { className: "kb-tray-name", children: "Orchestrator" }),
+				status.text ? h("span", { className: "kb-tray-status", children: status.text }) : null,
+				h(OrchestratorActions, { className: "kb-tray-actions" }),
 				h("button", {
 					type: "button",
 					className: "kb-tray-x",
@@ -895,13 +1081,28 @@ var CSS =
 		+ ".kb-orc-ring{position:absolute;inset:-2px;z-index:0;padding:2px;border-radius:calc(var(--dsw-radius-md,12px) + 2px);overflow:hidden;pointer-events:none;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}"
 		+ ".kb-orc-disc{position:absolute;top:50%;left:50%;width:220px;height:220px;transform:translate(-50%,-50%) rotate(0deg);animation:kb-orc-spin 3s linear infinite;will-change:transform;background:conic-gradient(#2563eb 0deg,#0d9488 72deg,#db2777 144deg,#7c3aed 216deg,#15803d 288deg,#2563eb 360deg)}"
 		+ ".kb-btn-orc:not(.working) .kb-orc-disc{animation-play-state:paused}"
-		+ ".kb-orc-glow{position:absolute;inset:-1px;z-index:0;border-radius:calc(var(--dsw-radius-md,12px) + 1px);box-shadow:0 0 12px 2px rgba(139,92,246,.55);opacity:.3;pointer-events:none}"
+		+ ".kb-orc-glow{position:absolute;inset:-1px;z-index:0;border-radius:calc(var(--dsw-radius-md,12px) + 1px);box-shadow:0 0 12px 2px rgba(139,92,246,.55);opacity:.34;pointer-events:none}"
+		// KAN-73 round 2: the glow is what separates "enabled, waiting" from
+		// "cannot act". Colour alone never means ready — a disabled orchestrator
+		// keeps the ring but loses almost all of the light around it.
+		+ ".kb-btn-orc.disabled .kb-orc-glow{opacity:.05}"
 		+ ".kb-btn-orc.working .kb-orc-glow{animation:kb-orc-pulse 1.9s ease-in-out infinite}"
 		+ "@keyframes kb-orc-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}"
 		+ "@keyframes kb-orc-pulse{0%,100%{opacity:.26}50%{opacity:.85}}"
 		+ ".kb-orc-spark{position:absolute;z-index:3;width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;clip-path:polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%);filter:drop-shadow(0 0 3px rgba(139,92,246,.95));opacity:0;pointer-events:none;will-change:transform,opacity;animation:kb-orc-twinkle 1.5s ease-in-out infinite}"
 		+ "@keyframes kb-orc-twinkle{0%{transform:translate(0,0) scale(.15) rotate(0deg);opacity:0}35%{transform:translate(calc(var(--kb-spark-dx,0px) * .3),calc(var(--kb-spark-dy,0px) * .3)) scale(1) rotate(45deg);opacity:1}70%{transform:translate(var(--kb-spark-dx,0px),var(--kb-spark-dy,0px)) scale(.55) rotate(90deg);opacity:.5}100%{transform:translate(var(--kb-spark-dx,0px),var(--kb-spark-dy,0px)) scale(.1) rotate(120deg);opacity:0}}"
 		+ ".kb-orc-switch{border-color:color-mix(in srgb,#8b5cf6 34%,var(--dsw-alias-border-l3,#cbd2da));color:#8b5cf6}"
+		// KAN-73 round 2: the orchestrator's controls, wherever they are mounted.
+		// On a wide window they live in the tray pill (light on dark); at ≤768px the
+		// tray never opens, so the same row shows in the Work header instead.
+		+ ".kb-orc-actions{display:inline-flex;align-items:center;gap:6px}"
+		+ ".kb-orc-mobileonly{display:none}"
+		+ ".kb-orc-pause.on{border-color:color-mix(in srgb,#b45309 42%,var(--dsw-alias-border-l3,#cbd2da));color:#b45309}"
+		+ ".kb-tray-actions{gap:4px;margin-left:2px}"
+		+ ".kb-tray-actions .kb-iconbtn{width:24px;height:24px;border:0;border-radius:999px;background:rgba(255,255,255,.14);color:#fff}"
+		+ ".kb-tray-actions .kb-iconbtn:hover{background:rgba(255,255,255,.3);color:#fff}"
+		+ ".kb-tray-actions .kb-iconbtn.on{background:rgba(240,173,78,.3);color:#ffd9a0}"
+		+ ".kb-tray-status{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 11px/14px var(--dsw-font-family,sans-serif);opacity:.85}"
 		// KAN-73: the tray. The dim is four strips around the centre column rather
 		// than one clipped sheet, so the hole is exact in every browser and a click
 		// anywhere on the dim — and only on the dim — lands on something dismissable.
@@ -934,6 +1135,10 @@ var CSS =
 		+ ".kb-flow{margin:8px 0 10px;gap:3px}.kb-flow-label{display:none}.kb-flow-bar{height:3px}"
 		+ ".kb-mobcolbar{display:flex;gap:8px;margin:0 0 10px}.kb-col-toggle{flex:1 1 0}.kb-col-toggle.on{border-color:var(--dsw-alias-border-l3,#cbd2da);background:var(--dsw-alias-bg-layer-2,#eee)}"
 		+ ".kb-col-backlog,.kb-col-done{display:none}.kb-cols.show-backlog .kb-col-backlog,.kb-cols.show-done .kb-col-done{display:flex}"
+		// KAN-73 round 2: on a phone the tray never opens, so the orchestrator's own
+		// controls come back into the header row here — the same component the pill
+		// renders, so the two can never drift apart.
+		+ ".kb-orc-mobileonly{display:inline-flex;align-items:center;gap:6px}"
 		+ "}";
 
 		function ensureStyles() {
@@ -3409,6 +3614,10 @@ var CSS =
 			// screen, so a session that starts late or is restarted from elsewhere
 			// still lights the border up without a click.
 			var orch = useOrchWork();
+			// KAN-73 round 2: the orchestrator's controls live in the tray, so their
+			// result is read from a module-scope store rather than this page's own
+			// notice state — the page is gone while the tray is up.
+			var orchNews = useOrchStatus();
 			React.useEffect(function () {
 				orchStore.refresh();
 				var timer = setInterval(function () { if (!document.hidden) orchStore.refresh(); }, 30000);
@@ -3513,6 +3722,13 @@ var CSS =
 					else if (asked === true) setNotice(null);
 				});
 			}
+			// kanban-boardRefreshRequest: the same bridge as goBoardRequest, for the
+			// orchestrator actions. They live in the tray now, but on a phone they
+			// render in this header, and a pause or a restart has to re-read the board
+			// through this page's own loader. When the tray is up the page is not
+			// mounted, the bridge is this page's last one, and the board simply loads
+			// fresh when the tray closes.
+			boardRefreshRequest = loadBoard;
 			// A notice that polling set is cleared by the next poll that works, and
 			// by moving to another ticket or view; one a user action set stays until
 			// the next action that works.
@@ -3603,31 +3819,13 @@ var CSS =
 				}, function () { setNotice("Could not reach the Host."); });
 			}
 
-			// KAN-65: refresh the orchestrator session without restarting the
-			// service. A session's tools and system prompt are decorated once, when
-			// it is created, so a tool shipped by a plugin release does not exist in
-			// the live orchestrator until the next restart — and a restart ends
-			// every session on the box. This retires that one session and starts a
-			// fresh one carrying the current preset, prompt and tools, greeted with
-			// a board snapshot. The confirm is because the session being replaced is
-			// archived as it happens, so its transcript leaves the open list.
-			function restartOrchestrator() {
-				var sure = window.confirm("Restart the orchestrator session?\n\nThe current session is archived with its history and a fresh one starts, with the current tools, prompt and a new board snapshot. Nothing else is touched, and no service restart is needed.");
-				if (!sure) return;
-				setNotice("Restarting the orchestrator session…");
-				rpc("orchestratorDetach", {}).then(function (res) {
-					if (res && res.ok) {
-						var value = res.value || {};
-						var state = value.state || {};
-						setNotice("Orchestrator restarted: " + (value.previousId || "the old session") + " archived, " + (value.sessionId || "a new session") + " is " + (state.state || "starting") + ".");
-						loadBoard();
-						// The border follows the new session, not the one it was showing.
-						orchStore.refresh();
-					} else {
-						setNotice(res && res.error ? res.error.message : "The orchestrator session could not be restarted.");
-					}
-				}, function () { setNotice("Could not reach the Host."); });
-			}
+			// KAN-73 round 2: the restart and the pause used to be handlers here.
+			// They are module-scope now (orchRestart / orchSetPaused) because the
+			// controls moved into the tray, and the tray is mounted when this page is
+			// not. The KAN-65 reasoning is unchanged: a session's tools and system
+			// prompt are decorated once, when it is created, so a tool shipped by a
+			// plugin release does not exist in the live orchestrator until it is
+			// retired — and retiring it keeps its transcript out of the open list.
 
 			var columns = board ? board.columns : { backlog: [], working: [], done: [], discarded: [] };
 			var allTickets = Object.keys(columns).reduce(function (list, column) { return list.concat(columns[column] || []); }, []);
@@ -3652,7 +3850,7 @@ var CSS =
 board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
 						h("button", {
 							type: "button",
-							className: "kb-btn kb-btn-orc" + (orch.working ? " working" : ""),
+							className: "kb-btn kb-btn-orc" + orchGlowClass(orch.state, orch.paused, orch.working),
 							title: orchTitle(orch.state, orch.working),
 							onClick: function () { openOrchestratorTray(); },
 							children: [
@@ -3670,29 +3868,12 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 								h("span", { key: "label", className: "kb-orc-label", children: "Open orchestrator" })
 							]
 						}),
-						// KAN-73: the twisted arrow, same gesture as a card's jump icon,
-						// for the one thing the tray cannot do — leave the board behind and
-						// take the whole window to the orchestrator.
-						h("button", {
-							type: "button",
-							className: "kb-iconbtn kb-orc-switch",
-							title: "Switch to the orchestrator session",
-							"aria-label": "Switch to the orchestrator session",
-							onClick: function () { openOrchestrator(); },
-							children: h(JumpIcon)
-						}),
-						h("button", { className: "kb-btn", title: "Detach this orchestrator session and start a fresh one with the current tools and prompt — no service restart", onClick: function () { restartOrchestrator(); }, children: "Restart orchestrator" }),
-						h("button", {
-							className: "kb-btn" + (board && board.orchestratorPaused ? " primary" : ""),
-							title: board && board.orchestratorPaused ? "Let board events and tool calls reach the orchestrator again" : "Stop all traffic between the board engine and the orchestrator",
-							onClick: function () {
-								var pause = !(board && board.orchestratorPaused);
-								rpc("orchestratorSetPaused", { paused: pause }).then(function (res) {
-									if (res && res.ok) { setNotice(null); loadBoard(); } else { setNotice(res && res.error ? res.error.message : "That did not work."); }
-								}, function () { setNotice("Could not reach the Host."); });
-							},
-							children: board && board.orchestratorPaused ? "Resume orchestrator" : "Pause orchestrator"
-						}),
+						// KAN-73 round 2: the switch arrow and the two orchestrator
+						// actions left the desktop header for the tray pill. They stay
+						// in the markup behind a phone-only class, because at ≤768px the
+						// tray never opens and moving them out of reach would take a
+						// control away rather than tidy the header.
+						h("span", { className: "kb-orc-mobileonly" }, h(OrchestratorActions)),
 						h(WipControl, { wip: board ? board.wip : null, onSave: function (cap) { return act("setWipCap", { cap: cap }); } }),
 						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
 						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
@@ -3713,7 +3894,7 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 					)
 				),
 				h("div", { className: "kb-body", ref: bodyRef },
-					notice || live.error || detailProblem ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem) : null,
+					notice || live.error || detailProblem || orchNews.text ? h("div", { className: "kb-notice" }, notice || live.error || detailProblem || orchNews.text) : null,
 					h(Modal, { open: creating, title: "New ticket", onClose: function () { setCreating(false); } }, h(CreateForm, { workspaces: workspaces, worktreeAvailable: Boolean(capabilities.worktree), presets: capabilities.presets || null, defaultWorkspace: defaultWorkspace, onClose: function () { setCreating(false); }, onCreated: function (ticket, workspace) { if (workspace) setLastWorkspace(workspace); setCreating(false); setSelectedId(ticket.id); loadBoard(); } })),
 					selectedId ? h(TicketDetail, {
 						detail: detail,
