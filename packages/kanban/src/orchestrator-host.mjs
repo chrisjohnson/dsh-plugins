@@ -66,7 +66,12 @@ const KV_GENERATION = 'orchestrator.generation'
 const ARCHIVE_ATTEMPTS = 3
 
 
-const TOOL_OUTPUT = {
+/**
+ * How a kanban tool answer reaches the model: the raw object as pretty JSON. One
+ * definition shared by the orchestrator's scoped tools and the host's global
+ * registration, so a board read looks the same whichever session asked for it.
+ */
+export const TOOL_OUTPUT = {
   schema: { type: 'object', additionalProperties: true },
   render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }],
 }
@@ -638,7 +643,18 @@ export class KanbanOrchestrator {
     }
   }
 
-  #api() {
+  /**
+   * The board seam every tool registration runs through.
+   *
+   * `actor` is who a write is credited to in the ticket's event log. The
+   * orchestrator's own scoped tools use the default; the host's global
+   * registration (KAN-81) passes the calling session, so an ordinary session's
+   * create, edit or discard names itself on the card instead of pretending to be
+   * the orchestrator. Everything else — the store paths, the pristine lock, the
+   * engine's own discard sequence — is identical, which is the whole reason this
+   * is one factory rather than two.
+   */
+  #api(actor = 'orchestrator') {
     const store = this.store
     const engine = this.engine
     return {
@@ -732,7 +748,7 @@ export class KanbanOrchestrator {
               ? await isGitCheckout(this.getConfig()?.defaultWorkspaceCwd ?? process.cwd())
               : worktree === true,
           },
-          { actor: 'orchestrator' },
+          { actor },
         )
         void engine?.tick()
         return { created: true, ticket: this.#ticketLine(ticket) }
@@ -745,7 +761,7 @@ export class KanbanOrchestrator {
        * actor and the list of fields that actually changed.
        */
       edit: (ticket, patch) => {
-        const updated = store.updateTicket(ticket.id, patch, { actor: 'orchestrator', reason: 'orchestrator edit' })
+        const updated = store.updateTicket(ticket.id, patch, { actor, reason: `${actor} edit` })
         void engine?.tick()
         return { edited: true, ticket: this.#ticketLine(updated) }
       },
@@ -778,8 +794,8 @@ export class KanbanOrchestrator {
           }
         }
         const updated = store.updateTicket(ticket.id, patch, {
-          actor: 'orchestrator',
-          reason: reason ?? 'orchestrator configure',
+          actor,
+          reason: reason ?? `${actor} configure`,
         })
         void engine?.tick()
         return {
@@ -795,8 +811,8 @@ export class KanbanOrchestrator {
           engine,
           id: ticket.id,
           column: to,
-          reason: reason ?? 'orchestrator move',
-          actor: 'orchestrator',
+          reason: reason ?? `${actor} move`,
+          actor,
           // KAN-72: the same cap a human drag meets. A refusal is not an error
           // — the ticket is queued and will start on its own — so it is handed
           // back as a readable `queued` answer rather than something to force.
@@ -811,7 +827,7 @@ export class KanbanOrchestrator {
       start: (ticket, what, reason) => {
         const result = what === 'planning'
           ? startPlanning({ store, driver: this.driver, engine, ticket })
-          : startBuild({ store, engine, ticket, reason: reason ?? 'orchestrator start', wip: engine?.wip ?? null })
+          : startBuild({ store, engine, ticket, reason: reason ?? `${actor} start`, wip: engine?.wip ?? null })
         if (!result.ok) return { started: false, reason: result.message }
         if (result.queued !== undefined) {
           return { started: false, queued: result.queued, reason: result.queued.reason, ticket: this.#ticketLine(result.ticket) }
@@ -820,7 +836,7 @@ export class KanbanOrchestrator {
       },
 
       retry: (ticket, instruction) => {
-        const updated = engine.retry(ticket, { instruction, actor: 'orchestrator' })
+        const updated = engine.retry(ticket, { instruction, actor })
         return { retried: true, ticket: this.#ticketLine(updated) }
       },
 
@@ -879,7 +895,7 @@ export class KanbanOrchestrator {
        * discard runs, with the actor being the only difference.
        */
       discard: async (ticket, reason) => {
-        const updated = await engine.discard(ticket.id, reason, { actor: 'orchestrator' })
+        const updated = await engine.discard(ticket.id, reason, { actor })
         return { discarded: true, ticket: this.#ticketLine(updated) }
       },
 
@@ -901,5 +917,22 @@ export class KanbanOrchestrator {
         return { sessions: rows, orchestrator: this.state() }
       },
     }
+  }
+
+  /**
+   * The board seam for the host's global registration of the five management
+   * tools (KAN-81): the same `#api()` the orchestrator's own tools run on, with
+   * writes credited to the session that made them instead of to the orchestrator.
+   *
+   * Exposed as a method rather than rebuilt in src/host.mjs so there is exactly
+   * one place that decides what `kanban_create` writes, where the pristine lock is
+   * asked, and which engine call a discard goes through. If the two ever drifted,
+   * a card filed from an ordinary session would land differently from one filed by
+   * the orchestrator, and the board would be the thing that lied about it.
+   *
+   * @param {string} actor - recorded on every write this call performs.
+   */
+  managementApi(actor) {
+    return this.#api(actor)
   }
 }

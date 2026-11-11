@@ -9,6 +9,8 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { defineTool } from '@deepseek-ai/dsh-tools';
+
 import { resolveConfig } from './config.mjs';
 import { applyRoutes, prepareRoutes, staleEffortWarnings } from './routing.mjs';
 import { KanbanStore, WRITE_MODES } from './store.mjs';
@@ -16,7 +18,9 @@ import { appendAcceptance, editTicket, replaceAcceptance, startedFailure } from 
 import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
-import { KanbanOrchestrator } from './orchestrator-host.mjs';
+import { KanbanOrchestrator, TOOL_OUTPUT } from './orchestrator-host.mjs';
+import { MANAGEMENT_TOOL_SPECS, runManagementTool } from './orchestrator.mjs';
+import { managementActor, managementToolWhen } from './agent-tools.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { canMarkDone, canRerunReview } from './lifecycle.mjs';
@@ -154,6 +158,63 @@ export default async function kanban(ctx, config = {}) {
       engineRef.current.stop();
     };
   }, `${PLUGIN_NAME}: engine`);
+
+  // ---- the management tools on every session that is not the board's own -----
+  //
+  // KAN-81: the five ticket-management tools the permanent orchestrator has
+  // always had — read the board, read one ticket, file one, fix one nothing has
+  // started, discard one with a reason — are registered globally, so any
+  // interactive session can put work it discovers onto the board instead of
+  // mentioning it in a chat nobody files a ticket from.
+  //
+  // Three things make this safe rather than a wide-open write surface:
+  //
+  //   - The specs are the orchestrator's own, imported not copied, so the same
+  //     guards refuse a blank discard reason or an empty title here as there, and
+  //     the same store/engine paths apply the same pristine lock and the same
+  //     WIP rules. `runManagementTool` differs from `runOrchestratorTool` only in
+  //     ignoring the orchestrator's paused flag: pausing the engine's driver is
+  //     not a reason the board must go unread to everyone else.
+  //   - `when` hides all five from a session the board already owns (src/
+  //     agent-tools.mjs) — a planner or build session must not edit or discard
+  //     the card it is working. The orchestrator session itself is unaffected:
+  //     its scoped registration shadows the global one for its own scope.
+  //   - Writes are credited to the calling session (`agent:<id>`), so the
+  //     ticket's event log says who did it.
+  //
+  // `agentManagementTools: false` in the deployment's row is the kill switch; it
+  // is read once at composition, so flipping it takes effect on the next boot.
+  ctx.inject(['tools'], (toolScope) => {
+    if (getConfig().agentManagementTools === false) return;
+    const tools = toolScope?.tools;
+    if (tools === undefined || tools === null) {
+      log.error('tools service is missing; the board management tools cannot be registered');
+      return;
+    }
+    const when = managementToolWhen(store);
+    for (const spec of MANAGEMENT_TOOL_SPECS) {
+      ctx.effect(
+        () => tools.register(
+          defineTool({
+            name: spec.name,
+            description: spec.description,
+            parameters: spec.parameters,
+            output: TOOL_OUTPUT,
+            execute: async (args, exec) => {
+              const orchestrator = orchestratorRef.current;
+              if (orchestrator === null || orchestrator === undefined) {
+                throw new Error('dsh-kanban is not mounted, so the board cannot be read');
+              }
+              return runManagementTool(spec.name, args ?? {}, orchestrator.managementApi(managementActor(exec?.agent)));
+            },
+          }),
+          { when },
+        ),
+        `${PLUGIN_NAME}: agent tool ${spec.name}`,
+      );
+    }
+    log.info('registered %d board management tools for every non-board session', MANAGEMENT_TOOL_SPECS.length);
+  }, `${PLUGIN_NAME}: agent management tools`);
 
   // ---- config reload (atomic, validated, never half-applied) ---------------
   const configEditor = ctx.get('configEditor');

@@ -111,6 +111,20 @@ export const DEFAULT_CONFIG = {
    */
   orchestratorDigestWindowMs: 30000,
 
+  /**
+   * KAN-81: whether every session on the host that the board does not own is
+   * offered the five ticket-management tools — `kanban_board`, `kanban_ticket`,
+   * `kanban_create`, `kanban_edit`, `kanban_discard` — the same five the
+   * permanent orchestrator session has. On is the point of the board being the
+   * deployment's shared work list: a session doing unrelated work can file what
+   * it discovers instead of waiting for a person to type it. Off is a real answer
+   * for a deployment where the board is private to one operator and every other
+   * session must not even see it. Role sessions the board spawned for a ticket
+   * never get them either way, and the orchestrator's own scoped set is
+   * unaffected. Read at boot: changing it takes effect on the next restart.
+   */
+  agentManagementTools: true,
+
   /** Every met condition must carry at least this confidence for a mechanical pass. */
   confidenceThreshold: 0.7,
   /** Whether a ticket may carry its own threshold (still bounded by [0,1]). */
@@ -346,6 +360,13 @@ export function resolveConfig(input = {}) {
     errors.push(new ConfigError('must be a non-empty string', 'orchestratorSessionId'));
   }
   positiveNumber(config.orchestratorDigestWindowMs, 'orchestratorDigestWindowMs', errors);
+
+  // KAN-81: the kill switch for the board's management tools on ordinary sessions.
+  // Checked as a boolean rather than truthiness so `"false"` in a YAML row fails
+  // loudly instead of silently meaning on.
+  if (typeof config.agentManagementTools !== 'boolean') {
+    errors.push(new ConfigError('must be a boolean', 'agentManagementTools'));
+  }
 
   if (!isFiniteNumber(config.confidenceThreshold) || config.confidenceThreshold < 0 || config.confidenceThreshold > 1) {
     errors.push(new ConfigError('must be a number in [0,1]', 'confidenceThreshold'));

@@ -115,6 +115,18 @@ test('a malformed orchestrator setting is refused with the key named', () => {
   assert.throws(() => resolveConfig({ orchestratorDigestWindowMs: 0 }), /orchestratorDigestWindowMs: must be a positive number/)
 })
 
+// ------------------------------------------------------------------- KAN-81 --
+
+test('the board’s management tools are on for ordinary sessions unless the deployment says otherwise', () => {
+  // Default on: the feature is the point of a shared board, and a deployment that
+  // never heard of the key must not silently lose it on upgrade.
+  assert.equal(resolveConfig({}).config.agentManagementTools, true)
+  assert.equal(resolveConfig({ agentManagementTools: false }).config.agentManagementTools, false)
+  // A string "false" in a YAML row would be truthy at the registration check, so
+  // it is refused rather than quietly meaning on.
+  assert.throws(() => resolveConfig({ agentManagementTools: 'false' }), /agentManagementTools: must be a boolean/)
+})
+
 test('a deployment row that names only its own roles still gets the orchestrator entry', () => {
   const { config } = resolveConfig({ roles: { planner: { provider: 'p', model: 'm' } } })
   assert.equal(config.roles.orchestrator.provider, null)
