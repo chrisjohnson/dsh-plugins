@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.42.0
+
 ### Added
 
 - **Every session can manage tickets (KAN-81).** The five ticket-management tools
