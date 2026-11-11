@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.41.1
+
 ### Fixed
 
 - **A ticket that names a workspace now actually gets its worktree (KAN-82).** The
