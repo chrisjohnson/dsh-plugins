@@ -557,31 +557,41 @@ column starts showing another session or another panel. On a phone (≤768px) it
 the plain session switch it always was.
 
 **The tray pill is where the orchestrator's controls live (0.38.0).** The pill
-carries the status dot, the word **Orchestrator**, the twisted-arrow **switch** (the
+carries the status dot, the word **Orchestrator** — which reads **Orchestrator
+paused** when a person has paused it — the twisted-arrow **switch** (the
 full-window switch, same gesture a card uses to jump to its session), **pause /
-resume**, **restart** and the ✕. The Work header keeps only the launcher — plus the
-amber **Orchestrator paused** chip, which stays on the board so a pause is visible
-without opening anything. At ≤768px, where the tray never opens, those three
+resume**, **restart** and the ✕. The Work header keeps only the launcher: since
+0.39.0 the amber **Orchestrator paused** chip is gone, because the button's own
+border carries the news and a badge competing with it for attention was one widget
+too many. At ≤768px, where the tray never opens, those three
 controls render in the header instead: one component, two mount points. Restarting
 from the tray closes the tray and returns to the board, because a restart mints a
 new session id and the tray would otherwise frame the archived one.
 
-**The border (0.37.0, three states since 0.38.0).** That button also says what the
-orchestrator is doing, in three looks. Colourful and **sweeping** means a turn is in
-flight — a 2px ring of the five workflow phase colors rotating over a breathing
-violet glow with eight sparkles off the edge. Colourful and **still** means enabled
-but idle: the ring freezes where it stands, the glow holds steady and clearly lit,
-and it resumes from that angle when work starts again. **Almost no glow** means the
-orchestrator cannot act — `orchestratorEnabled: false`, archived, or paused by a
-person — so colour alone never reads as ready. Only transform and opacity animate,
-the sparkles are unmounted while idle, and `prefers-reduced-motion` leaves a plain
-static ring. There is no config for any of it.
+**The border (0.37.0, three states since 0.38.0, dimmed since 0.39.0).** That button
+also says what the orchestrator is doing, in three looks. Colourful and **sweeping**
+means a turn is in flight — a 2px ring of the five workflow phase colors rotating
+over a breathing violet glow with eight sparkles off the edge. Colourful and
+**still** means enabled but idle: the ring freezes where it stands, the glow holds
+steady and clearly lit, and it resumes from that angle when work starts again.
+**Washed out** — the ring at a third of its opacity and a third of its colour, the
+label grey, the glow almost gone — means the orchestrator cannot act:
+`orchestratorEnabled: false`, archived, or paused by a person. The board pushes the
+pause on every frame, so the border dims the moment the board knows. Only transform
+and opacity animate, the sparkles are unmounted while idle, and
+`prefers-reduced-motion` leaves a plain static ring. There is no config for any of it.
+
+**The header row (0.39.0).** **Board / Analytics** is a segmented view switch, not
+two buttons dressed like actions; **Model routing** and **Refresh** are quiet ghost
+buttons; **+ New ticket** stays the one loud control. The title keeps its own space
+and the controls right-align as a block, wrapping to their own right-aligned line on
+a narrow window rather than overlapping the title, and the tail group travels together
+so no button is ever stranded alone.
 
 **Pausing it.** **Pause orchestrator** (in the tray pill, or in the header on a
 phone) cuts all traffic between the engine and the orchestrator: board events are
-dropped, every orchestrator tool call is refused, and an amber **Orchestrator
-paused** chip shows on every open page. The session stays put and you can still talk
-to it. **Resume
+dropped, every orchestrator tool call is refused, and the launcher's border goes
+washed out until it is resumed. **Resume
 orchestrator** sends it one fresh board snapshot. The switch is stored in the
 database, so a restart keeps it. RPC: `POST /api/kanban/orchestratorSetPaused
 {paused: boolean}`; the `orchestrator` answer and the board payload both report

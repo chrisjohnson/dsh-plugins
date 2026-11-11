@@ -285,6 +285,29 @@ test('the glow class says working, disabled, or plain idle — and never guesses
   assert.equal(pillCompact(1220), false)
 })
 
+// KAN-73 round 3: the header is one tidy line, and "paused" is a look on the
+// button rather than a badge next to it.
+test('the paused badge left the header and the button carries the news instead', async () => {
+  const src = await clientSource()
+  const page = sliceFunction(src, 'KanbanPage')
+  const tray = sliceFunction(src, 'OrchestratorTray')
+  assert.equal(page.includes('Orchestrator paused'), false, 'no paused chip in the Work header any more')
+  assert.equal(page.includes('orchestratorPaused ? h('), false, 'and no conditional chip element')
+  assert.match(tray, /work\.paused \? "Orchestrator paused" : "Orchestrator"/, 'the pill says it in words instead')
+  // The board pushes the pause, so the border does not wait for the next status read.
+  assert.match(page, /orchStore\.setPaused\(live\.board \? live\.board\.orchestratorPaused : false\)/)
+  assert.match(page, /className: "kb-btn kb-btn-orc" \+ orchGlowClass/)
+  // A disabled button loses colour, not only the halo.
+  const disc = src.match(/\.kb-btn-orc\.disabled \.kb-orc-disc\{[^}]*\}/)
+  assert.ok(disc, 'the disabled disc rule exists')
+  assert.ok(/opacity:\.(?:[0-3]\d?|0\.\d)/.test(disc[0]), `the ring is dimmed: ${disc[0]}`)
+  assert.ok(/saturate\(\.?\d/.test(disc[0]), 'and desaturated')
+  // The view switch is a segmented pair, not two buttons competing with actions.
+  assert.match(page, /h\(SegmentedControl, \{[\s\S]{0,400}kb-viewseg/)
+  assert.match(src, /\.kb-actions\{[^}]*justify-content:flex-end/, 'wrapped action lines stay right-aligned')
+  assert.match(src, /\.kb-actions-tail\{/, 'the tail travels as one unit')
+})
+
 test('the tray is a frame-wide overlay entry, not part of the board page', async () => {
   const src = await clientSource()
   assert.ok(src.includes('slots.inject("shell.overlay"'), 'registered in the shell overlay layer')
