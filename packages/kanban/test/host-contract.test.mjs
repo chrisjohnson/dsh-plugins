@@ -831,10 +831,17 @@ test('orchestratorDetach is a registered endpoint that answers from the orchestr
   assert.match(caseBody, /return \{ ok: true, value: \{ previousId: result\.previousId, sessionId: result\.sessionId, state: result\.state \} \}/)
 })
 
-test('the orchestrator seam files tickets with their settings and discards as itself', async () => {
+test('the orchestrator seam files tickets with their settings and credits writes to its actor', async () => {
   const files = await sources()
   const host = files['orchestrator-host.mjs']
-  // create: every setting reaches the store, under the orchestrator actor.
+  // KAN-81: the seam is one factory parameterised by who is asking. The
+  // orchestrator's own scoped tools get the default, so the audit trail it had
+  // before is unchanged; the host's global registration passes the calling
+  // session. A hardcoded actor here would mean an ordinary session's create
+  // silently reported itself as the orchestrator.
+  assert.match(host, /#api\(actor = 'orchestrator'\)/, 'the api factory must default to the orchestrator actor')
+  assert.match(host, /managementApi\(actor\) \{\n\s*return this\.#api\(actor\)/, 'the host seam must reuse the same factory')
+  // create: every setting reaches the store, under the caller's actor.
   const create = host.slice(host.indexOf('create: async ('), host.indexOf('edit: (ticket, patch)'))
   for (const field of ['preset', 'writeMode', 'planTiming', 'planQuestions']) {
     assert.ok(create.includes(`...(${field} === undefined`), `create must pass ${field} through only when it was given`)
@@ -844,15 +851,43 @@ test('the orchestrator seam files tickets with their settings and discards as it
   assert.match(create, /worktree: worktree === undefined/)
   assert.match(create, /await isGitCheckout\(/)
   assert.match(create, /presets\.resolve\(String\(preset\)\)/, 'a preset id is checked against the live registry, as on the human path')
-  assert.match(create, /actor: 'orchestrator'/)
-  // discard: the engine's own path, credited to the orchestrator.
+  assert.match(create, /\{ actor \}/, 'create must record the caller as the actor')
+  // discard: the engine's own path, credited to the caller.
   assert.match(host, /discard: async \(ticket, reason\) => \{/)
-  assert.match(host, /engine\.discard\(ticket\.id, reason, \{ actor: 'orchestrator' \}\)/)
+  assert.match(host, /engine\.discard\(ticket\.id, reason, \{ actor \}\)/)
   // The retired session is archived with its work stopped, and the new id is
   // persisted, or the next boot resumes the archived one.
   assert.match(host, /registry\.archiveSession\(previousId, \{ stopActivity: true \}\)/)
   assert.match(host, /this\.store\.kvSet\(KV_SESSION_ID, nextId\)/)
   assert.match(host, /nextOrchestratorSessionId\(previousId, config\.generation\)/)
   assert.equal(/engine\.discard\(ticket\.id, reason\)/.test(host), false, 'the seam must not drop the actor')
+  assert.equal(/store\.createTicket\([\s\S]*?\{ actor: 'human' \}/.test(host), false, 'create must not credit a human for an agent write')
   assert.equal(files['orchestrator.mjs'].includes("import { WRITE_MODES } from './store.mjs'"), true)
+})
+
+// ------------------------------------------------------------------- KAN-81 --
+
+test('the five management tools are registered globally, hidden from board sessions', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  // One shared spec list, not a paraphrase: the guards and refusals an ordinary
+  // session meets are the orchestrator's.
+  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool \} from '\.\/orchestrator\.mjs'/)
+  assert.match(host, /for \(const spec of MANAGEMENT_TOOL_SPECS\)/)
+  assert.match(host, /runManagementTool\(spec\.name/)
+  // Registered on the tools service for every scope, the same way dsh-model-switch
+  // gives every session switch_model — and disposed with the plugin's effects.
+  assert.match(host, /ctx\.inject\(\['tools'\]/)
+  assert.match(host, /tools\.register\(\s*defineTool\(/)
+  // The exclusion: a session the board owns never sees them, so a build session
+  // cannot edit or discard the ticket it is working.
+  assert.match(host, /managementToolWhen\(store\)/)
+  assert.match(host, /\{ when \}/, 'the condition must be passed as a registration option')
+  // The kill switch, read from the resolved config at composition.
+  assert.match(host, /getConfig\(\)\.agentManagementTools === false/)
+  // Writes name the calling session, and go through the orchestrator's own seam.
+  assert.match(host, /orchestrator\.managementApi\(managementActor\(exec\?\.agent\)\)/)
+  // The decision module stays pure so it is testable on a bare clone.
+  assert.equal(/^\s*import[^\n]*@deepseek-ai/m.test(files['agent-tools.mjs']), false, 'agent-tools.mjs must import nothing from the harness')
+  assert.equal(/store\.findSession/.test(files['agent-tools.mjs']), true)
 })

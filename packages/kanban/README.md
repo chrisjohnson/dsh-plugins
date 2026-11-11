@@ -759,6 +759,61 @@ archived — the board is unaffected: the engine logs one line, the endpoint rep
 the state, and the button says what is missing. A retry is attempted every 30s and
 a click nudges it immediately.
 
+## Ticket management from any session (0.42.0)
+
+Before 0.42.0 the only session on a deployment that could touch the board from a
+tool was the permanent orchestrator. Work discovered anywhere else — in a chat
+about a bug, in a scheduled report, in a session doing unrelated work — had to be
+typed into the board by a person, so it usually was not. Now the five
+*management* tools are registered globally, the same way `dsh-model-switch` gives
+every session `switch_model`:
+
+| Tool | What it does |
+| --- | --- |
+| `kanban_board` | Read the open board: every Working and Backlog ticket with its column, phase, park reason, pending question and the WIP state. No gate — read it as often as you like. |
+| `kanban_ticket` | Read one ticket in full: body, plan and conditions, last review, sessions, recent events. |
+| `kanban_create` | File a new ticket into Backlog: title, markdown body, optional priority, plus the settings its build session needs (`preset`, `writeMode`, `worktree`, `planTiming`, `planQuestions`). |
+| `kanban_edit` | Fix the title and/or body of a ticket nothing has started. |
+| `kanban_discard` | Close an open ticket without approval, **with a required reason**. |
+
+These are the orchestrator's own specs, imported rather than paraphrased, so every
+guard and refusal is identical: an empty title, a blank discard reason, a ticket
+that is already Done, a card anything has started (the same pristine lock the human
+edit boundary uses) and an unknown agent preset are all refused at the tool. What
+the other seven orchestrator tools do — `kanban_move`, `kanban_start`,
+`kanban_retry`, `kanban_kick`, `kanban_message`, `kanban_configure`,
+`kanban_sessions` — stays the orchestrator's alone: an ordinary session may put
+work on the board and take it off, but does not drive the engine. Approving and
+closing as done remain human actions everywhere.
+
+**Who does not get them.** A session the board already owns — a planner,
+implementer, reviewer, approver or build session attached to a ticket — is shown
+none of the five. A worker that could discard its own ticket could end its own
+review, and a worker that could rewrite its brief could rewrite the review it is
+being given; those sessions act on their card through the workflow, not around it.
+The check is one indexed read (`store.findSession`) done as a step-time `when`
+condition, and it fails *open*: if the lookup cannot be made, the tool stays
+available rather than silently blanking the board. The orchestrator session itself
+is unaffected either way — it registers the same five scoped to itself, and a
+scoped registration shadows a global one.
+
+**Who did it.** A write from an ordinary session is credited to that session, as
+`agent:<session id>`, on the ticket's `created` / `ticket_updated` / `discarded`
+events — not to `orchestrator`, and not to a human. The board's audit trail says
+which session filed, edited or discarded the card. Because that actor is not
+`orchestrator`, the orchestrator also *sees* these moves in its digest: work
+appearing on the board from elsewhere is news to it, which is the point.
+
+**A paused orchestrator does not hide the board.** The pause switch means the
+engine's driver is stopped; it is not a lock on reading or filing. The global
+registration runs through `runManagementTool`, which is `runOrchestratorTool`
+minus that one check.
+
+**The kill switch.** `agentManagementTools: false` in the deployment's kanban row
+registers nothing, and an ordinary session simply never sees the five. Read once
+at composition, so it takes effect on the next restart. A deployment that never
+mentions the key gets the tools: the default is on.
+
 ## Work-in-progress cap (0.34.0)
 
 Working holds a limited number of tickets, and the engine — not the caller's
@@ -826,6 +881,7 @@ Everything below lives on the `kanban` row.
 | `orchestratorEnabled` | whether the permanent orchestrator session runs at all (default `true`). Off means the session is never created and the Work page's Orchestrator button says so; everything else about the board is unchanged. See [The orchestrator session](#the-orchestrator-session-0260). |
 | `orchestratorSessionId` | the stable DSH session id of that session (default `kanban-orchestrator`). Stable across restarts on purpose: it is the same conversation tomorrow, and the fixed thing the Work page opens. **Restart orchestrator** rotates it to `<id>-2`, `-3`, … and the rotated id is persisted in the board db, which then wins over this row on every later boot; the archived predecessor stays in the session list with its history. |
 | `orchestratorDigestWindowMs` | how long a batch of board events waits for company before it is delivered to the orchestrator (default 30000). A burst of movement costs one message and one turn; a longer window makes it slower to notice. |
+| `agentManagementTools` | whether every session on the host that the board does not own is offered the five ticket-management tools — `kanban_board`, `kanban_ticket`, `kanban_create`, `kanban_edit`, `kanban_discard` (default `true`). See [Ticket management from any session](#ticket-management-from-any-session-0420). Off is the kill switch for a deployment where the board is private to one operator. Read at composition: flipping it takes effect on the next restart. |
 | `confidenceThreshold` | default `0.70`. |
 | `allowTicketThresholdOverride` | whether a ticket may carry its own threshold. |
 | `maxAttempts` | implement/review rounds before `needs_attention`. |

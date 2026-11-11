@@ -5,6 +5,33 @@
 
 ## Unreleased
 
+### Added
+
+- **Every session can manage tickets (KAN-81).** The five ticket-management tools
+  the permanent orchestrator alone had — `kanban_board`, `kanban_ticket`,
+  `kanban_create`, `kanban_edit` and `kanban_discard` — are now registered
+  globally, so any interactive session can file the work it discovers onto the
+  board, read what is on it, correct a thin card, or close a duplicate with a
+  reason, instead of waiting for a person to type it. They are the orchestrator's
+  own specs imported into one shared list, not a second copy: the same guards
+  refuse the same calls, and the same store and engine paths apply the same
+  pristine lock, the same preset check and the same discard sequence. Writes are
+  credited to the calling session as `agent:<session id>`, so the ticket's event
+  log says who did it.
+- **Role sessions are excluded, and the exclusion is a condition, not a prompt.**
+  A session the board already owns — a planner, implementer, reviewer, approver or
+  build session attached to a ticket — is offered none of the five, so a worker
+  cannot edit or discard the card it is working. The check is a step-time `when`
+  on the registration (new pure module `src/agent-tools.mjs`) and fails open when
+  the lookup cannot be made. The orchestrator's own scoped set shadows the global
+  one and is unchanged.
+- **`agentManagementTools`** (default `true`): the deployment kill switch. Off
+  registers nothing; a deployment that never mentions the key gets the tools.
+- **A paused orchestrator no longer hides the board from everyone else.** The
+  pause means the engine's driver is stopped, not that the board is unreadable;
+  the global tools run through `runManagementTool`, which is
+  `runOrchestratorTool` without that one check.
+
 ## 0.41.2
 
 ### Fixed

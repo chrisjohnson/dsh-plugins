@@ -669,7 +669,12 @@ export function planMessageDelivery({ mode = 'queue', sessionId = null, agentSta
   }
 }
 
-export const ORCHESTRATOR_TOOL_SPECS = [
+/**
+ * The one physical list of every kanban tool spec, in the order the orchestrator
+ * has always declared them. The two exported lists below are derived from it, so
+ * a spec is written once and shared by both registrations rather than copied.
+ */
+const KANBAN_TOOL_SPECS = [
   {
     name: 'kanban_board',
     description:
@@ -932,6 +937,37 @@ export const ORCHESTRATOR_TOOL_SPECS = [
   },
 ]
 
+/**
+ * The five specs that are *ticket management* rather than workflow driving: read
+ * the board, read one ticket, file one, fix one nothing has started, throw one
+ * away with a reason. KAN-81 made these a shared list because they are exactly
+ * what any interactive session also needs — a person chatting to a session on an
+ * unrelated task can discover a piece of work and put it on the board, correct a
+ * thin card, or close a duplicate, without opening the page.
+ *
+ * The other seven stay the orchestrator's own: they start, move, retry, nudge and
+ * talk to role sessions, which is the job of the session the engine feeds, not of
+ * every session on the host.
+ */
+export const MANAGEMENT_TOOL_NAMES = Object.freeze([
+  'kanban_board',
+  'kanban_ticket',
+  'kanban_create',
+  'kanban_edit',
+  'kanban_discard',
+])
+
+const MANAGEMENT_NAME_SET = new Set(MANAGEMENT_TOOL_NAMES)
+
+/** The management specs, in the order declared above. */
+export const MANAGEMENT_TOOL_SPECS = KANBAN_TOOL_SPECS.filter((spec) => MANAGEMENT_NAME_SET.has(spec.name))
+
+/** The seven specs only the permanent orchestrator is offered. */
+const ORCHESTRATOR_ONLY_TOOL_SPECS = KANBAN_TOOL_SPECS.filter((spec) => !MANAGEMENT_NAME_SET.has(spec.name))
+
+/** Every tool the orchestrator session is offered: the management five plus its own seven. */
+export const ORCHESTRATOR_TOOL_SPECS = [...MANAGEMENT_TOOL_SPECS, ...ORCHESTRATOR_ONLY_TOOL_SPECS]
+
 /** Every tool name the orchestrator is offered (the host registers exactly these). */
 export const ORCHESTRATOR_TOOL_NAMES = ORCHESTRATOR_TOOL_SPECS.map((spec) => spec.name)
 
@@ -950,6 +986,31 @@ export async function runOrchestratorTool(name, args, api) {
   if (api?.paused?.() === true) throw new Error(ORCHESTRATOR_PAUSED_MESSAGE)
   const spec = ORCHESTRATOR_TOOL_SPECS.find((candidate) => candidate.name === name)
   if (spec === undefined) throw new Error(`unknown orchestrator tool ${name}`)
+  const input = args !== null && typeof args === 'object' ? args : {}
+  const checked = spec.guard(input, api)
+  if (checked.ok !== true) throw new Error(checked.message ?? 'that call is not allowed')
+  return spec.run(input, api, checked)
+}
+
+/**
+ * Validate and run one of the five management tools for a session that is not the
+ * orchestrator (KAN-81). Same specs, same guards, same `api` seam — the only
+ * difference is that the orchestrator's paused flag is not consulted.
+ *
+ * That difference is the point. `paused` means *the engine is not driving tickets
+ * right now*; it is a brake on the session whose job is to drive them. A person
+ * asking an ordinary session to read the board or file a card they just
+ * discovered is not asking anyone to start work, so a paused orchestrator must
+ * not turn the board unreadable to the rest of the deployment.
+ *
+ * @param {string} name - one of MANAGEMENT_TOOL_NAMES.
+ * @param {object} args
+ * @param {object} api - the host seam: resolveTicket, board, ticket, create,
+ *   edit, ticketEditable, discard.
+ */
+export async function runManagementTool(name, args, api) {
+  const spec = MANAGEMENT_TOOL_SPECS.find((candidate) => candidate.name === name)
+  if (spec === undefined) throw new Error(`unknown management tool ${name}`)
   const input = args !== null && typeof args === 'object' ? args : {}
   const checked = spec.guard(input, api)
   if (checked.ok !== true) throw new Error(checked.message ?? 'that call is not allowed')
