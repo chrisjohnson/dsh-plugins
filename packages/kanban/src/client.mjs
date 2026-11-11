@@ -213,6 +213,15 @@ window.__ModuleLoader__.load({
 					});
 					readRunning();
 				},
+				/**
+				 * The board payload carries `orchestratorPaused` on every push, so the
+				 * border can follow a pause the instant the board says so instead of
+				 * waiting for the next status read.
+				 */
+				setPaused: function (paused) {
+					publish({ paused: Boolean(paused) });
+					readRunning();
+				},
 				/** Ask the Host again. A failure leaves the last good answer in place. */
 				refresh: function () {
 					var self = this;
@@ -669,8 +678,9 @@ window.__ModuleLoader__.load({
 			},
 				h("span", { className: "kb-tray-dot" + (work.working ? " active" : ""), "aria-hidden": "true" }),
 				// A narrow tray keeps its icons and loses the word: the controls are
-				// the point of the pill, the label is not.
-				compact ? null : h("span", { className: "kb-tray-name", children: "Orchestrator" }),
+				// the point of the pill, the label is not. The word also carries the
+				// pause, because the board header no longer shows a paused chip.
+				compact ? null : h("span", { className: "kb-tray-name" + (work.paused ? " warn" : ""), children: work.paused ? "Orchestrator paused" : "Orchestrator" }),
 				status.text ? h("span", { className: "kb-tray-status", children: status.text }) : null,
 				h(OrchestratorActions, { className: "kb-tray-actions" }),
 				h("button", {
@@ -850,11 +860,28 @@ var CSS =
 		+ ".kb-spin{display:inline-block;width:12px;height:12px;border:2px solid #ccc;border-top-color:#555;border-radius:50%;animation:kb-spin .8s linear infinite}"
 		+ "@keyframes kb-spin{to{transform:rotate(360deg)}}"
 		+ ".kb-root{background:radial-gradient(900px 440px at 6% -8%,color-mix(in srgb,#3b82f6 6%,transparent),transparent 60%),radial-gradient(760px 380px at 100% 0%,color-mix(in srgb,#8b5cf6 5%,transparent),transparent 58%),var(--dsw-alias-bg-base,#fff)}"
-		+ ".kb-pagehead{display:flex;align-items:flex-start;gap:16px;padding:28px clamp(20px,4vw,48px) 0;flex-wrap:wrap}"
-		+ ".kb-pagehead-main{flex:1;min-width:0}"
-		+ ".kb-title{margin:0;font:500 20px/28px var(--dsw-font-family,sans-serif);letter-spacing:-.01em}"
+		// KAN-73 round 3: the header is one tidy line. The title keeps its own
+		// space (flex:0 0 auto — it is never squeezed under the buttons, which is
+		// how "Work" ended up painted behind Board), the controls right-align as a
+		// block, and when they run out of room the whole block drops to its own line
+		// instead of colliding with the title.
+		+ ".kb-pagehead{display:flex;align-items:center;gap:10px 16px;padding:24px clamp(20px,4vw,48px) 0;flex-wrap:wrap}"
+		+ ".kb-pagehead-main{flex:0 0 auto;min-width:0;display:flex;align-items:baseline;gap:10px}"
+		+ ".kb-title{margin:0;white-space:nowrap;font:600 20px/28px var(--dsw-font-family,sans-serif);letter-spacing:-.015em}"
 		+ ".kb-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary,#888);font-size:12px;line-height:18px}"
-		+ ".kb-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}"
+		+ ".kb-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}"
+		// The tail travels as one unit, so a narrow window never leaves a lone black
+		// button stranded on a line of its own.
+		+ ".kb-actions-tail{display:inline-flex;align-items:center;gap:8px}"
+		// Quieter second-tier controls: the row needs a hierarchy, and right now
+		// eight black-bordered pills all shout at the same volume. Same height as
+		// their louder neighbours — a mixed-height row is what makes a header look
+		// accidental.
+		+ ".kb-btn.ghost{border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary,#555);font-size:13px}"
+		+ ".kb-btn.ghost:hover{border-color:var(--dsw-alias-border-l3,#d0d0d0);background:var(--dsw-alias-interactive-bg-hover,#f2f2f2);color:var(--dsw-alias-label-primary,#111)}"
+		+ ".kb-viewseg{height:36px;padding:3px;align-self:center}"
+		+ ".kb-viewseg .kb-seg-tab{height:30px;padding:0 14px;font:500 13px/22px var(--dsw-font-family,sans-serif)}"
+		+ ".kb-viewseg .kb-seg-indicator{top:3px;left:3px;height:calc(100% - 6px);width:calc((100% - 6px - 2px * (var(--dsh-segment-count) - 1)) / var(--dsh-segment-count))}"
 		// KAN-68: the Work page flow ribbon. One row per stage, the same 4px
 		// segment language as a ticket's kb-steps strip, with the stage name
 		// floating under it. `flex:1 1 100%` puts it on its own line of the
@@ -1095,7 +1122,11 @@ var CSS =
 		// KAN-73 round 2: the glow is what separates "enabled, waiting" from
 		// "cannot act". Colour alone never means ready — a disabled orchestrator
 		// keeps the ring but loses almost all of the light around it.
-		+ ".kb-btn-orc.disabled .kb-orc-glow{opacity:.05}"
+		// Round 3 takes the colour down with it: a paused orchestrator must read as
+		// quiet at a glance, not just lose its halo.
+		+ ".kb-btn-orc.disabled .kb-orc-glow{opacity:.04}"
+		+ ".kb-btn-orc.disabled .kb-orc-disc{opacity:.3;filter:saturate(.35)}"
+		+ ".kb-btn-orc.disabled{color:var(--dsw-alias-label-secondary,#555)}"
 		+ ".kb-btn-orc.working .kb-orc-glow{animation:kb-orc-pulse 1.9s ease-in-out infinite}"
 		+ "@keyframes kb-orc-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}"
 		+ "@keyframes kb-orc-pulse{0%,100%{opacity:.26}50%{opacity:.85}}"
@@ -1122,6 +1153,7 @@ var CSS =
 		+ ".kb-tray-dot.active{background:#8b5cf6;animation:kb-tray-pulse 1.8s ease-out infinite}"
 		+ "@keyframes kb-tray-pulse{0%{box-shadow:0 0 0 0 rgba(139,92,246,.55)}70%{box-shadow:0 0 0 6px rgba(139,92,246,0)}100%{box-shadow:0 0 0 0 rgba(139,92,246,0)}}"
 		+ ".kb-tray-name{letter-spacing:.02em}"
+		+ ".kb-tray-name.warn{color:#f0ad4e}"
 		+ ".kb-tray-x{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font:600 13px/16px var(--dsw-font-family,sans-serif);cursor:pointer}"
 		+ ".kb-tray-x:hover{background:rgba(255,255,255,.3)}"
 		+ "@keyframes kb-tray-pulldown{from{transform:translateY(-14px);opacity:.5}to{transform:translateY(0);opacity:1}}"
@@ -1137,6 +1169,9 @@ var CSS =
 		// base and the light override of .kb-cols.
 		+ "@media (max-width:768px){"
 		+ ".kb-pagehead{padding:16px 12px 0}.kb-title{font-size:17px;line-height:24px}.kb-sub{font-size:11px}.kb-actions{gap:6px}.kb-btn{height:32px;padding:0 10px;font-size:13px}.kb-body{padding:10px 12px 24px}"
+		// The phone row keeps one height: the header override shrinks every button
+		// to 32px, so the segmented pair and the tail group shrink with it.
+		+ ".kb-viewseg{height:32px;padding:2px}.kb-viewseg .kb-seg-tab{height:28px;padding:0 11px}.kb-actions-tail{gap:6px;flex-wrap:wrap;justify-content:flex-end}"
 		+ ".kb-cols{grid-template-columns:1fr;min-width:0;gap:10px}.kb-col{max-height:none}"
 		+ ".kb-col-pinned{position:static;height:auto}.kb-col-pinned .kb-list{flex:none;max-height:300px;overflow-y:auto}"
 		+ ".kb-created{display:none}"
@@ -1916,7 +1951,7 @@ var CSS =
 			var index = 0;
 			options.forEach(function (o, i) { if (o.value === props.value) index = i; });
 			return h("div", {
-				className: "kb-seg",
+				className: "kb-seg" + (props.className ? " " + props.className : ""),
 				role: "tablist",
 				"aria-label": props.ariaLabel,
 				style: { "--dsh-segment-count": options.length, "--dsh-segment-index": index }
@@ -3633,6 +3668,13 @@ var CSS =
 				var timer = setInterval(function () { if (!document.hidden) orchStore.refresh(); }, 30000);
 				return function () { clearInterval(timer); };
 			}, []);
+			// The board pushes the pause on every frame it sends, so the border follows
+			// it immediately rather than waiting for the next status read. Read from
+			// `live.board`, not the `board` alias below: this hook runs before that
+			// alias is assigned, and a dependency on it would be frozen at undefined.
+			React.useEffect(function () {
+				orchStore.setPaused(live.board ? live.board.orchestratorPaused : false);
+			}, [live.board ? Boolean(live.board.orchestratorPaused) : false]);
 			var board = live.board;
 			var sel = React.useState(null);
 			var selectedId = sel[0], setSelectedId = sel[1];
@@ -3855,9 +3897,20 @@ var CSS =
 						h("h1", { className: "kb-title", children: "Work" }),
 					),
 					h("div", { className: "kb-actions" },
-						h("button", { className: "kb-btn" + (view === "board" ? " primary" : ""), onClick: function () { setView("board"); setSelectedId(null); }, children: "Board" }),
-						h("button", { className: "kb-btn" + (view === "analytics" ? " primary" : ""), onClick: function () { setView("analytics"); }, children: "Analytics" }),
-board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title: "A person paused the orchestrator: no board events reach it and its tools are refused until it is resumed", children: "Orchestrator paused" }) : null,
+						// KAN-73 round 3: Board / Analytics are a view switch, not two
+						// of the same pills as everything else — as a segmented pair they
+						// stop competing with the actions beside them.
+						h(SegmentedControl, {
+							ariaLabel: "Work view",
+							value: view,
+							options: [{ value: "board", label: "Board" }, { value: "analytics", label: "Analytics" }],
+							onChange: function (next) { setView(next); if (next === "board") setSelectedId(null); },
+							className: "kb-viewseg"
+						}),
+						// KAN-73 round 3: the paused chip left the header with the rest of
+						// the orchestrator chrome. The button itself now carries the news —
+						// a paused orchestrator is dim and colourless — and the tray pill
+						// says "Paused" in words.
 						h("button", {
 							type: "button",
 							className: "kb-btn kb-btn-orc" + orchGlowClass(orch.state, orch.paused, orch.working),
@@ -3885,9 +3938,11 @@ board && board.orchestratorPaused ? h("span", { className: "kb-chip warn", title
 						// control away rather than tidy the header.
 						h("span", { className: "kb-orc-mobileonly" }, h(OrchestratorActions)),
 						h(WipControl, { wip: board ? board.wip : null, onSave: function (cap) { return act("setWipCap", { cap: cap }); } }),
-						h("button", { className: "kb-btn", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
-						h("button", { className: "kb-btn", onClick: function () { loadBoard(true); }, children: "Refresh" }),
-						h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
+						h("span", { className: "kb-actions-tail" },
+							h("button", { className: "kb-btn ghost", onClick: function () { setRoutingOpen(true); }, children: "Model routing" }),
+							h("button", { className: "kb-btn ghost", title: "Re-read the board now", onClick: function () { loadBoard(true); }, children: "Refresh" }),
+							h("button", { className: "kb-btn primary", onClick: function () { setCreating(true); setSelectedId(null); setView("board"); }, children: "+ New ticket" })
+						)
 					),
 					// KAN-68: the lifecycle every ticket walks, drawn as a ribbon the
 					// full width of the columns. Static on purpose — the five stages

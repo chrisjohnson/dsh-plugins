@@ -5,6 +5,31 @@
 
 ## Unreleased
 
+## 0.39.0
+
+### Changed
+
+- **The Work header is one tidy line (KAN-73).** The title used to be a flexible
+  column that the button row could squeeze until "Work" was painted *behind* the
+  Board button; it now keeps its own space and the controls right-align as a block,
+  dropping to their own right-aligned line when the window is narrow instead of
+  colliding. Board / Analytics became a segmented pair rather than two pills dressed
+  like actions, **Model routing** and **Refresh** went quiet (ghost buttons), and the
+  tail — routing, refresh, **+ New ticket** — travels as one unit so a narrow window
+  never strands a lone black button on a line by itself. Every control in the row now
+  shares one height, on desktop and on a phone.
+- **The paused badge left the header (KAN-73).** The amber **Orchestrator paused**
+  chip is gone: the button itself now carries the news, and the tray pill says
+  **Orchestrator paused** in words where the label used to read **Orchestrator**.
+  The board pushes the pause on every frame it sends, so the border dims the moment
+  the board knows, not on the next status read.
+- **A paused or disabled orchestrator goes dim *and* colourless (KAN-73).** Before,
+  only the halo dropped; the ring stayed at full colour, which still read as "ready".
+  The ring now fades to 30% opacity at 35% saturation and the label to secondary
+  grey, so the three states are unmistakable side by side: sweeping and bright
+  (working), colourful and still with a steady glow (enabled, waiting), washed out
+  with almost no light (off, archived or paused).
+
 ## 0.38.0
 
 ### Changed
