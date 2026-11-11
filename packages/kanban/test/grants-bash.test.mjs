@@ -9,7 +9,7 @@ import { commandPaths } from '../src/command-paths.mjs'
 
 const WORK = '/srv/scratch/work'
 const STORE = '/var/cache/pkgstore'
-const TICKET_WS = '/srv/live-checkout/.dsh-worktrees/kan12-ticket'
+const TICKET_WS = '/srv/live-checkout/.agents/worktrees/kan12-ticket'
 const PATH_GRANTS = { paths: [WORK, STORE], commands: [] }
 const viaPath = (command, extra = {}) =>
   matchGrantDetail({ grants: PATH_GRANTS, toolName: 'bash', arguments: { command }, workspaceRoot: TICKET_WS, home: '/home/user', ...extra })

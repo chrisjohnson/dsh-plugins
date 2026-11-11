@@ -150,8 +150,8 @@ export const DEFAULT_CONFIG = {
 
   /**
    * Clear a closed ticket's managed worktree and archive its sessions: `off`,
-   * `done` (approved or marked done) or `done_and_discarded`. Only a copy under a
-   * `.dsh-worktrees` root that holds no unsaved work is ever removed.
+   * `done` (approved or marked done) or `done_and_discarded`. Only a copy under
+   * an `.agents/worktrees` pool that holds no unsaved work is ever removed.
    */
   archiveWorkspaceOnClose: 'off',
 

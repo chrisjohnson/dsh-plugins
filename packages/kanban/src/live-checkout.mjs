@@ -8,8 +8,14 @@
 
 import { normalize } from 'node:path';
 
-/** Directory name, directly under a root, that holds every managed working copy. */
-export const MANAGED_WORKTREES_DIR = '.dsh-worktrees';
+import { WORKTREE_POOL_SEGMENTS } from './worktrees.mjs';
+
+/**
+ * Path, relative to a root, that holds every managed working copy. Two segments
+ * deep — `.agents/worktrees` is the harness's native pool, the one the Forge
+ * panel uses, so a ticket copy and a panel copy live side by side.
+ */
+export const MANAGED_WORKTREES_DIR = WORKTREE_POOL_SEGMENTS.join('/');
 
 function canon(path) {
   return normalize(path).replace(/\/+$/, '') || '/';
@@ -21,8 +27,8 @@ function within(root, path) {
 
 /**
  * Whether `path` is inside the live checkout `root`: within the root, and not
- * within `<root>/.dsh-worktrees` (the managed-worktree directory itself counts
- * as inside; a copy under it does not).
+ * within `<root>/.agents/worktrees` (the managed-worktree directory itself
+ * counts as inside; a copy under it does not).
  */
 export function isInsideLiveCheckout(root, path) {
   if (typeof root !== 'string' || typeof path !== 'string' || root === '' || path === '') return false;

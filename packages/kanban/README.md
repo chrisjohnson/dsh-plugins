@@ -309,12 +309,15 @@ changes nothing about the rejection.
 
 Managed working copies are not the live checkout, even when they sit inside it: a
 path counts as inside a live checkout only when it is within the live root and not
-under `<live root>/.dsh-worktrees`. The live root, its `.dsh/` profile and
-everything else beneath it stay protected; a `.dsh-worktrees` directory that is not
-directly under the live root, or a lookalike such as `.dsh-worktrees-evil`, gets no
-exemption. Another open ticket's worktree there is still denied by the cross-ticket
+under `<live root>/.agents/worktrees`. The live root, its `.dsh/` profile and
+everything else beneath it stay protected; a `.agents/worktrees` directory that is
+not directly under the live root, or a lookalike such as
+`.agents/worktrees-evil`, gets no exemption. Another open ticket's worktree there is
+still denied by the cross-ticket
 rule, and `archiveWorkspaceOnClose` applies the same rule (a managed copy under the
-live checkout is archivable). The rule lives in `src/live-checkout.mjs`.
+live checkout is archivable). The rule lives in `src/live-checkout.mjs`, and the pool
+it names is the harness's own: the Forge panel's worktree service cuts its copies
+into the same directory.
 
 Naming convention: a ticket's clones are `kan<number>-plugins` and
 `kan<number>-deploy` under the worktrees directory (ticket 12 uses `kan12-plugins`);
@@ -679,7 +682,7 @@ ticket's build session runs under. Shape is checked in the tool (an unknown
 id is checked against the live registry, exactly as the human path checks it, and
 an unknown one is a refusal naming it. An omitted setting stays at the store
 default, except `worktree`, which mirrors the human form and is on whenever the
-worktree service is mounted. This matters because a build of `dsh-deploy` or
+workspace is a git checkout. This matters because a build of `dsh-deploy` or
 `dsh-plugins` is denied dependency installs, lab runs and git pushes under the
 defaults: those tickets are filed with the Creator preset (`cordis`), Full Access
 (`danger-full-access`) and `worktree: true`, and the orchestrator's prompt says
@@ -817,7 +820,7 @@ Everything below lives on the `kanban` row.
 | `defaultWorkspaceCwd` | cwd for a ticket with no workspace. |
 | `liveCheckouts[]` | absolute paths of live deployment checkouts that build sessions may not modify (see Checkout isolation); `DSH_KANBAN_LIVE_CHECKOUTS` adds to it. Default none. |
 | `liveCheckoutReadOnlyCommands[]` | command prefixes (token prefix, word boundaries) a build session may run from a live checkout as read-only inspection, on top of the built-in set. A deployment lists its own inspection commands; a matching segment with a write redirect, or chained with anything not read-only, is still denied. Default none. |
-| `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: the copy is removed through `dsh-better-git-worktree` (0.3.0+) only when it sits under a `.dsh-worktrees` root, is not a live checkout (a `liveCheckouts` path, other than a copy under its `.dsh-worktrees`) and is not used by another open ticket; a copy with uncommitted, unpushed or stashed work, or whose state cannot be read, is left in place and its sessions stay unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
+| `archiveWorkspaceOnClose` | `off` (default), `done` or `done_and_discarded`. When a ticket closes in a covered column, clear its working copy and archive its sessions: kanban removes the linked worktree itself (`git worktree remove`, then `git branch -d`), only when the path sits under an `.agents/worktrees` pool, is not a live checkout (a `liveCheckouts` path, other than a copy under its pool) and is not used by another open ticket; a copy with uncommitted work, or whose state git cannot read, is refused and left in place with its sessions unarchived. Runs after the close commits and never fails or delays it; the outcome is a `workspace_archived` or `workspace_archive_skipped` event on the ticket. A ticket with no worktree is untouched. |
 | `providers[]` | `{name, tier: local\|paid, priceIn, priceOut, priceCacheRead, priceCacheWrite}`. |
 | `roles{}` | `planner`, `implementer`, `reviewer`, `approver` and `orchestrator`; each has `provider`, `model`, `reasoningEffort`. A null route falls back to the host default model. `allowTools` is still accepted but deprecated and ignored (warned at boot): Kanban registers no tool guard. |
 | `orchestratorEnabled` | whether the permanent orchestrator session runs at all (default `true`). Off means the session is never created and the Work page's Orchestrator button says so; everything else about the board is unchanged. See [The orchestrator session](#the-orchestrator-session-0260). |
@@ -1134,11 +1137,12 @@ is visible and costed, and it does not consume an attempt.
 
 **The integration is optional and detected, never required.** The service is
 resolved lazily and duck-typed (`typeof ctx.get('continueKicker')?.kick ===
-'function'`), the same way the worktree integration treats
-`betterGitWorktree`. Without the plugin installed kanban logs one line at boot —
+'function'`). Without the plugin installed kanban logs one line at boot —
 `dsh-continue-kicker not mounted; halted turns park to needs-attention without
 auto-recovery` — and behaves exactly as in 0.3.x. `GET /api/kanban/capabilities`
-reports `continueKicker: true|false` alongside `worktree`. A recovery kick shows
+reports `continueKicker: true|false` alongside `worktree` (which since 0.41.0
+answers whether the workspace is a git checkout, not whether another plugin is
+mounted). A recovery kick shows
 up on the ticket timeline as an `auto_recovered` event carrying the phase, the
 halt flavor and the kick number.
 
@@ -1150,38 +1154,56 @@ A ticket can ask to be worked in its own git working copy, and the ask is
 actually starts, which is the moment the question "where should this work?" first
 has an answer.
 
-The switch is **on by default** whenever `dsh-better-git-worktree` is mounted: the
+Kanban owns that lifecycle itself (0.41.0): it shells out to plain `git` and makes a
+**linked** worktree — `git worktree add -b dsh/<pet-name>
+<repo>/.agents/worktrees/<pet-name> <base>` — in the same native pool the harness's
+own Forge panel uses. No other plugin is involved, and nothing has to be installed
+for it to work. Because a linked worktree keeps its index and refs in the source
+repository's `.git`, a build session needs write access there; kanban build sessions
+run with the ticket's chosen write mode, and the default-on rule below assumes the
+full-access mode a build normally gets.
+
+The switch is **on by default** whenever the workspace is a git checkout: the
 new-ticket form starts with it on, and a `create` that omits `worktree` (or sends
 `null`) records the intent on the host, so a ticket gets its own working copy
 unless the human turns it off (`worktree: false`). A ticket without one runs its
 sessions inside the workspace itself, which for a live checkout is unusable for
-builds. With the service absent nothing is defaulted.
+builds. In a plain directory there is nothing to cut, so the intent defaults off and
+planning happens where it always did.
 
-At plan start the driver asks `dsh-better-git-worktree` for the directory, in
-three shapes:
+At plan start the driver settles the directory, in three shapes:
 
-- **The ticket already points at a checkout** (every ticket made before 0.14.0,
-  and any workspace a human picked). If that path is a managed working copy it is
-  fetched and fast-forwarded onto the latest default branch — but only when the
-  copy is *pristine*: a clean tree including untracked paths, and no commit the
-  commit it was cut from does not already have. A copy with work in it is left
-  exactly as it is, and the plan prompt gains a line saying so, naming the path,
-  the branch, why it was not moved and what it is based on. Nothing is ever
-  deleted, reset or rebased.
+- **The ticket already points at a checkout** (any workspace a human picked, or the
+  copy an earlier planning round cut). If that path is inside the pool it is fetched
+  and fast-forwarded onto the latest default branch — but only when the copy is
+  *pristine*: a clean tree including untracked paths, and no commit the upstream
+  default branch does not already have. A copy with work in it is left exactly as it
+  is, and the plan prompt gains a line saying so, naming the path, the branch, why it
+  was not moved and what it is based on. Nothing is ever deleted, reset or rebased.
 - **The ticket only recorded the intent.** The copy is created now, from the
   just-fetched `origin/<default branch>` (not from wherever the source checkout
   happens to sit), registered as a workspace, and the ticket is re-pointed at it.
-  A later phase, or a re-plan, takes the first branch above.
+  A later phase, or a re-plan, takes the first branch above. A repository with no
+  origin — a scratch repo, an offline clone — is cut from local `HEAD` and says so by
+  recording no base branch; there is nothing to be stale against.
 - **Neither.** The ordinary default workspace, exactly as before.
 
 A `git fetch` that fails **fails the plan dispatch**: the ticket parks in
 needs-attention carrying git's own words, because planning against a base nobody
-could bring up to date is the one thing the switch was asked to prevent. With
-`dsh-better-git-worktree` not mounted at all, the switch is hidden, the intent is
-ignored with one log line, and planning behaves as it always did.
+could bring up to date is the one thing the switch was asked to prevent.
+
+Every ticket session that starts in a pool copy writes the Forge panel's own two
+worktree records — the open request and the creation that settles it — into its
+session log before its first turn, so a ticket copy reads in the native "Change
+requests & worktrees" panel exactly like one the panel made, including its restore
+path if the directory is deleted under a live session. The records are ordinary
+session-log entries: with that bundle unmounted nobody parses them, and on a harness
+old enough to lack the record API the card is simply absent.
 
 The `worktree` endpoint on the `action` route stays as the manual escape hatch
-(create a copy for a ticket right now); the create form no longer calls it.
+(create a copy for a ticket right now); the create form no longer calls it. Copies
+an older release left under `.dsh-worktrees` are left exactly where they are: that
+directory is no longer read, written or removed by anything here.
 
 ## Restart safety
 

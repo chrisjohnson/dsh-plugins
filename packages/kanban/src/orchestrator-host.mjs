@@ -36,6 +36,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { startBuild, moveToColumn } from './build.mjs'
 import { queueSummary } from './wip.mjs'
 import { startPlanning } from './planning.mjs'
+import { isGitCheckout } from './worktrees.mjs'
 import {
   ORCHESTRATOR_PRESET_ID,
   ORCHESTRATOR_PROMPT_SECTION,
@@ -698,8 +699,8 @@ export class KanbanOrchestrator {
        * any other — only the recorded actor differs. The settings the guard
        * handed over are treated exactly as the human form's are: a preset id
        * means nothing until the live registry says it does, and the worktree
-       * default is mirrored from that path — intent is ON whenever the worktree
-       * service is mounted, because a ticket without its own worktree would plan
+       * default is mirrored from that path — intent is ON whenever the workspace
+       * is a git checkout, because a ticket without its own worktree would plan
        * inside a live checkout. An omitted setting stays the store default.
        */
       create: async ({ title, body, priority, preset, writeMode, worktree, planTiming, planQuestions }) => {
@@ -724,8 +725,11 @@ export class KanbanOrchestrator {
             ...(planTiming === undefined ? {} : { planTiming }),
             ...(planQuestions === undefined ? {} : { planQuestions }),
             column: 'backlog',
+            // The same rule the human form follows (src/host.mjs): kanban cuts
+            // the copy itself, so an omitted answer means "yes" wherever there
+            // is a git checkout to cut one from.
             worktree: worktree === undefined
-              ? typeof this.ctx.get('betterGitWorktree')?.createForPath === 'function'
+              ? await isGitCheckout(this.getConfig()?.defaultWorkspaceCwd ?? process.cwd())
               : worktree === true,
           },
           { actor: 'orchestrator' },

@@ -1,5 +1,5 @@
 // Archiving a closed ticket's workspace: the pure decisions, then the engine's
-// post-close step against a fake worktree service and workspace registry.
+// post-close step against a fake working-copy lifecycle and workspace registry.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,9 +13,9 @@ import { pickedUp, setup } from './support/engine-harness.mjs'
 
 const ROOT = mkdtempSync(join(tmpdir(), 'kanban-archive-'))
 let counter = 0
-/** A real directory under a `.dsh-worktrees` root, so existence checks mean something. */
+/** A real directory under an `.agents/worktrees` pool, so existence checks mean something. */
 function worktreeDir() {
-  const dir = join(ROOT, `repo${++counter}`, '.dsh-worktrees', `copy-${counter}`)
+  const dir = join(ROOT, `repo${++counter}`, '.agents', 'worktrees', `copy-${counter}`)
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -37,35 +37,37 @@ test('archivesColumn: which closures each mode covers', () => {
   assert.equal(archivesColumn('done_and_discarded', 'working'), false)
 })
 
-test('isManagedWorktreePath needs an absolute path strictly inside a .dsh-worktrees directory', () => {
-  assert.equal(isManagedWorktreePath('/r/p/.dsh-worktrees/otter'), true)
-  assert.equal(isManagedWorktreePath('/r/p/.dsh-worktrees/otter/'), true)
-  assert.equal(isManagedWorktreePath('/r/p/.dsh-worktrees'), false)
+test('isManagedWorktreePath needs an absolute path inside an .agents/worktrees pool', () => {
+  assert.equal(isManagedWorktreePath('/r/p/.agents/worktrees/otter'), true)
+  assert.equal(isManagedWorktreePath('/r/p/.agents/worktrees/otter/'), true)
+  assert.equal(isManagedWorktreePath('/r/p/.agents/worktrees/otter/src/deep/file.mjs'), true)
+  assert.equal(isManagedWorktreePath('/r/p/.agents/worktrees'), false, 'the pool itself is not a copy')
+  assert.equal(isManagedWorktreePath('/r/p/.agents'), false, 'one segment of the pool is not the pool')
   assert.equal(isManagedWorktreePath('/r/p/work'), false)
-  assert.equal(isManagedWorktreePath('/r/p/.dsh-worktrees-x/otter'), false)
-  assert.equal(isManagedWorktreePath('.dsh-worktrees/otter'), false)
+  assert.equal(isManagedWorktreePath('/r/p/.agents/worktrees-x/otter'), false)
+  assert.equal(isManagedWorktreePath('.agents/worktrees/otter'), false, 'relative is not a workspace')
   assert.equal(isManagedWorktreePath(null), false)
 })
 
 test('archiveSkipReason: silent without a managed copy, loud for a live checkout or a sharing ticket', () => {
-  const path = '/r/p/.dsh-worktrees/otter'
+  const path = '/r/p/.agents/worktrees/otter'
   const mine = { id: 'a', key: 'KAN-1', workspaceCwd: path, column: 'done' }
   const run = (extra = {}) => archiveSkipReason({ ticket: mine, tickets: [mine], openSessions: [], ...extra })
   assert.equal(run(), null)
   assert.deepEqual(run({ ticket: { ...mine, workspaceCwd: null } }), { reason: 'no_workspace', silent: true })
   assert.equal(run({ ticket: { ...mine, workspaceCwd: '/r/p' } }).silent, true)
   assert.equal(run({ liveCheckouts: ['/r/p'] }), null, 'a managed copy under the live checkout is archivable')
-  assert.equal(run({ liveCheckouts: ['/r/p/.dsh-worktrees/otter'] }).reason, 'live_checkout', 'the live root itself is skipped')
-  const nested = { ...mine, workspaceCwd: '/r/p/sub/.dsh-worktrees/otter' }
-  assert.equal(run({ ticket: nested, tickets: [nested], liveCheckouts: ['/r/p'] }).reason, 'live_checkout', 'only a directory directly under the root is managed')
-  const evil = { ...mine, workspaceCwd: '/r/p/.dsh-worktrees-evil/.dsh-worktrees/otter' }
+  assert.equal(run({ liveCheckouts: ['/r/p/.agents/worktrees/otter'] }).reason, 'live_checkout', 'the live root itself is skipped')
+  const nested = { ...mine, workspaceCwd: '/r/p/sub/.agents/worktrees/otter' }
+  assert.equal(run({ ticket: nested, tickets: [nested], liveCheckouts: ['/r/p'] }).reason, 'live_checkout', 'only a pool directly under the root is managed')
+  const evil = { ...mine, workspaceCwd: '/r/p/.agents/worktrees-evil/.agents/worktrees/otter' }
   assert.equal(run({ ticket: evil, tickets: [evil], liveCheckouts: ['/r/p'] }).reason, 'live_checkout')
   const other = { id: 'b', key: 'KAN-2', workspaceCwd: `${path}/`, column: 'working' }
   assert.equal(run({ tickets: [mine, other] }).reason, 'shared_with_open_ticket')
   const closedOther = { ...other, column: 'done' }
   assert.equal(run({ tickets: [mine, closedOther] }), null, 'a closed sharer does not block')
   assert.equal(run({ tickets: [mine, closedOther], openSessions: [{ ticketId: 'b' }] }).reason, 'shared_with_open_ticket')
-  assert.equal(run({ tickets: [mine, { ...other, workspaceCwd: '/r/p/.dsh-worktrees/heron' }] }), null)
+  assert.equal(run({ tickets: [mine, { ...other, workspaceCwd: '/r/p/.agents/worktrees/heron' }] }), null)
 })
 
 test('copyIsGone: a refusal never counts; nothing-to-do counts only when the directory is absent', () => {
@@ -79,25 +81,25 @@ test('copyIsGone: a refusal never counts; nothing-to-do counts only when the dir
 
 // ---------------------------------------------------------------- the engine step
 
-/** Engine + store with a fake worktree service and workspace registry wired in. */
-function rig({ mode = 'done', service, archive, config = {} } = {}) {
+/** Engine + store with a fake working-copy lifecycle and workspace registry wired in. */
+function rig({ mode = 'done', worktrees, archive, config = {} } = {}) {
   const t = setup({}, { config: { archiveWorkspaceOnClose: mode, ...config } })
   const calls = { removed: [], archived: [] }
-  const worktree = service === undefined
+  const lifecycle = worktrees === undefined
     ? {
-      removeForPath: async ({ path }) => {
+      removeWorktree: async ({ path }) => {
         calls.removed.push(path)
         rmSync(path, { recursive: true, force: true })
         return { removed: true, refused: false }
       },
     }
-    : service
+    : worktrees
+  t.engine.worktrees = lifecycle
   const registry = {
     archiveSession: archive ?? (async (id) => { calls.archived.push(id) }),
   }
   t.engine.ctx = {
     get(name) {
-      if (name === 'betterGitWorktree') return worktree
       if (name === 'workspaceRegistry') return registry
       return undefined
     },
@@ -168,12 +170,11 @@ test('config off: nothing is removed or archived and no event is written', async
 })
 
 for (const [name, answer] of [
-  ['dirty', { removed: false, refused: true, code: 'unsaved-work', reason: '3 uncommitted path(s)' }],
-  ['unpushed', { removed: false, refused: true, code: 'unsaved-work', reason: '1 unpushed commit(s)' }],
-  ['unreadable', { removed: false, refused: true, code: 'unverified', reason: 'could not verify' }],
+  ['dirty', { removed: false, refused: true, code: 'dirty', reason: '3 uncommitted changes' }],
+  ['unreadable', { removed: false, refused: true, code: 'no-repository', reason: 'git could not read the working tree' }],
 ]) {
   test(`a ${name} copy is refused: nothing archived, the ticket still closes, the event says why`, async () => {
-    const r = rig({ service: { removeForPath: async () => answer } })
+    const r = rig({ worktrees: { removeWorktree: async () => answer } })
     const dir = worktreeDir()
     const ticket = r.ticketIn(dir)
     const done = await r.close(ticket)
@@ -199,7 +200,7 @@ test('a second open ticket on the same workspace blocks removal; so does its ope
   assert.deepEqual(r.calls.removed, [dir], 'once the sharer closes too, the last one out clears the copy')
 })
 
-test('a ticket without a worktree, or outside .dsh-worktrees, is untouched and silent', async () => {
+test('a ticket without a worktree, or outside an .agents/worktrees pool, is untouched and silent', async () => {
   const r = rig()
   const plain = r.ticketIn(null)
   const checkout = r.ticketIn(join(ROOT, 'production-checkout'))
@@ -210,7 +211,7 @@ test('a ticket without a worktree, or outside .dsh-worktrees, is untouched and s
   assert.deepEqual(r.kinds(checkout), [])
 })
 
-test('a live checkout is never cleared even when it sits under a .dsh-worktrees directory', async () => {
+test('a live checkout is never cleared even when it sits under an .agents/worktrees pool', async () => {
   const dir = worktreeDir()
   const r = rig({ config: { liveCheckouts: [dir] } })
   const ticket = r.ticketIn(dir)
@@ -219,17 +220,17 @@ test('a live checkout is never cleared even when it sits under a .dsh-worktrees 
   assert.equal(r.kinds(ticket)[0].payload.reason, 'live_checkout')
 })
 
-test('without the removal export (an older worktree plugin) the copy stays and the reason is recorded', async () => {
-  const r = rig({ service: {} })
+test('a copy git does not manage is left alone and the reason is recorded', async () => {
+  const r = rig({ worktrees: { removeWorktree: async () => ({ removed: false, refused: false, code: 'not-managed' }) } })
   const ticket = r.ticketIn(worktreeDir())
   await r.close(ticket)
   assert.deepEqual(r.calls.archived, [])
-  assert.equal(r.kinds(ticket)[0].payload.reason, 'worktree_service_unavailable')
+  assert.equal(r.kinds(ticket)[0].payload.reason, 'not_removed')
 })
 
 test('removal that throws does not fail markDone, discard or approve', async () => {
-  const boom = { removeForPath: async () => { throw new Error('disk on fire') } }
-  const r = rig({ mode: 'done_and_discarded', service: boom })
+  const boom = { removeWorktree: async () => { throw new Error('disk on fire') } }
+  const r = rig({ mode: 'done_and_discarded', worktrees: boom })
   const a = r.ticketIn(worktreeDir())
   const b = r.ticketIn(worktreeDir())
   const c = r.ticketIn(worktreeDir())
@@ -282,7 +283,7 @@ test('a transient archive failure succeeds on retry', async () => {
 })
 
 test('a copy an earlier attempt already removed still gets its sessions archived, once', async () => {
-  const r = rig({ service: { removeForPath: async () => ({ removed: false, refused: false, code: 'not-managed', reason: 'not a managed working copy' }) } })
+  const r = rig({ worktrees: { removeWorktree: async () => ({ removed: false, refused: false, code: 'not-managed', reason: 'not a kanban worktree' }) } })
   const dir = worktreeDir()
   const ticket = r.ticketIn(dir)
   rmSync(dir, { recursive: true, force: true })
@@ -291,8 +292,8 @@ test('a copy an earlier attempt already removed still gets its sessions archived
   assert.equal(r.kinds(ticket)[0].kind, 'workspace_archived')
 })
 
-test('a path the worktree plugin does not own, still on disk, is left alone', async () => {
-  const r = rig({ service: { removeForPath: async () => ({ removed: false, refused: false, code: 'not-managed', reason: 'not a managed working copy' }) } })
+test('a path git does not manage, still on disk, is left alone', async () => {
+  const r = rig({ worktrees: { removeWorktree: async () => ({ removed: false, refused: false, code: 'not-managed', reason: 'not a kanban worktree' }) } })
   const ticket = r.ticketIn(worktreeDir())
   await r.close(ticket)
   assert.deepEqual(r.calls.archived, [])
