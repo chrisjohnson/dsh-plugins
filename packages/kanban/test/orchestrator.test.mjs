@@ -10,7 +10,10 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
 
+import { migrate } from '../src/db.mjs'
+import { KanbanStore } from '../src/store.mjs'
 import {
   MAX_DIGEST_LINES,
   MESSAGE_MODES,
@@ -25,6 +28,7 @@ import {
   nextOrchestratorSessionId,
   planMessageDelivery,
   runOrchestratorTool,
+  ticketLineFacts,
 } from '../src/orchestrator.mjs'
 
 const event = (kind, extra = {}) => ({
@@ -728,4 +732,310 @@ test('the tool contracts say the engine queues at the cap and must not be forced
   for (const field of ['wipCap', 'working', 'queue']) {
     assert.ok(board.includes(field), `kanban_board must advertise engine.${field}`)
   }
+})
+
+// ---------------------------------------------------------------- KAN-93 ---
+//
+// Every field the human new-ticket and edit-ticket screens set is now reachable
+// from `kanban_create` and `kanban_edit`. The case that prompted it: an agent
+// filed a batch of tickets into the wrong workspace and had no way to say so —
+// not at creation, and not afterwards, because `kanban_edit` was title/body
+// only. Two claims matter, and they are tested separately:
+//
+//   - the **guard** accepts the whole field set and refuses the same junk the
+//     human form refuses, before anything is written;
+//   - the **store** keeps what the guard handed over — the workspace on the row,
+//     the acceptance as rows, the budget as numbers — because a tool that files
+//     a value into a column it does not land in is worse than no tool.
+//
+// The second half runs the real host seam (`KanbanOrchestrator.managementApi`)
+// against a real SQLite store. That class imports the dsh peers, so those tests
+// skip on a bare clone rather than pretend.
+
+const CREATE_FIELDS = ['title', 'body', 'acceptance', 'priority', 'workspace', 'preset', 'writeMode', 'worktree', 'planTiming', 'planQuestions', 'allowPaid', 'budgetUsd', 'column']
+const EDIT_FIELDS = ['ticket', 'title', 'body', 'acceptance', 'workspace', 'priority', 'preset', 'writeMode', 'planTiming', 'planQuestions', 'allowPaid', 'budgetUsd']
+
+test('kanban_create declares every field the new-ticket screen has', () => {
+  const params = specOf('kanban_create').parameters
+  for (const key of CREATE_FIELDS) {
+    assert.ok(params[key], `${key} is missing from kanban_create`)
+    assert.ok(typeof params[key].description === 'string' && params[key].description.length > 10, `${key} has no model-facing description`)
+  }
+  assert.equal(params.acceptance.type, 'array', 'acceptance is a list of statements')
+  assert.equal(params.acceptance.items.type, 'string')
+  assert.equal(params.column.enum, undefined, 'the refusal sentence names the two columns; the enum would hide it')
+  assert.match(params.column.description, /backlog/i)
+  assert.match(params.workspace.description, /default/i, 'omitting the workspace has to read as the engine default, not as a bug')
+})
+
+test('kanban_edit declares every field the edit screen has', () => {
+  const params = specOf('kanban_edit').parameters
+  for (const key of EDIT_FIELDS) {
+    assert.ok(params[key], `${key} is missing from kanban_edit`)
+    assert.ok(typeof params[key].description === 'string' && params[key].description.length > 10, `${key} has no model-facing description`)
+  }
+  // The three the human editor can clear back to a default say so in their type.
+  for (const key of ['workspace', 'preset', 'writeMode']) {
+    assert.deepEqual(params[key].oneOf, [{ type: 'string' }, { type: 'null' }], `${key} must accept null`)
+  }
+  assert.equal(Object.prototype.hasOwnProperty.call(params, 'worktree'), false, 'the edit screen has no worktree control; configure does')
+})
+
+test('create hands the seam the workspace, acceptance, budget and column it was given', async () => {
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_create', {
+    title: ' A card with everything ',
+    body: 'the body',
+    acceptance: ['the row carries its workspace', 'a read shows the budget'],
+    workspace: '/srv/work/dsh-deploy',
+    priority: 4,
+    allowPaid: true,
+    budgetUsd: 25,
+    column: 'working',
+  }, api)
+  assert.deepEqual(calls[0], ['create', {
+    title: 'A card with everything',
+    body: 'the body',
+    priority: 4,
+    acceptance: ['the row carries its workspace', 'a read shows the budget'],
+    workspaceCwd: '/srv/work/dsh-deploy',
+    allowPaid: true,
+    budgetUsd: 25,
+    column: 'working',
+  }])
+})
+
+test('create refuses the combinations the human form refuses', async () => {
+  const { api, calls } = fakeApi()
+  const base = { title: 't', body: 'b' }
+  for (const column of ['done', 'discarded', 'review', 'Backlog']) {
+    await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, column }, api), /column must be "backlog" or "working"/)
+  }
+  // Paid needs money, on a fresh card exactly as on an existing one.
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, allowPaid: true }, api), /positive budgetUsd/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, allowPaid: true, budgetUsd: 0 }, api), /positive budgetUsd/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, allowPaid: 'yes' }, api), /allowPaid must be true or false/)
+  for (const budgetUsd of [-1, '25', Number.POSITIVE_INFINITY]) {
+    await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, budgetUsd }, api), /budgetUsd must be a finite number/)
+  }
+  // Acceptance is a list of statements, not a blob and not a list of blanks.
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, acceptance: 'one long string' }, api), /acceptance must be an array/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, acceptance: ['fine', '   '] }, api), /non-empty string/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, acceptance: [42] }, api), /non-empty string/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, acceptance: null }, api), /acceptance must be an array/)
+  // A workspace is a path or nothing; an empty one is nothing, spelled wrong.
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, workspace: '   ' }, api), /workspace must be a non-empty directory path/)
+  await assert.rejects(() => runOrchestratorTool('kanban_create', { ...base, workspace: 7 }, api), /workspace must be a non-empty directory path/)
+  assert.equal(calls.length, 0, 'not one refusal reached the host seam')
+})
+
+test('create files a paid card when the money arrives with it, and leaves an empty acceptance list out', async () => {
+  const { api, calls } = fakeApi()
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b', allowPaid: true, budgetUsd: 5 }, api)
+  assert.deepEqual(calls[0][1], { title: 't', body: 'b', priority: undefined, allowPaid: true, budgetUsd: 5 })
+  await runOrchestratorTool('kanban_create', { title: 't', body: 'b', acceptance: [] }, api)
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[1][1], 'acceptance'), false, 'no statements is the store default, not a blank row')
+})
+
+test('edit patches the whole edit screen in one call', async () => {
+  const pristine = fakeApi({
+    ticket: fakeTicket({
+      column: 'backlog', phase: 'plan', planTiming: 'at_pickup', planQuestions: 'interactive',
+      priority: 0, allowPaid: false, budgetUsd: 0, preset: null, writeMode: null, workspaceCwd: null,
+    }),
+  })
+  await runOrchestratorTool('kanban_edit', {
+    ticket: 'KAN-1',
+    title: ' a cleaner title ',
+    body: ' the fuller body ',
+    acceptance: ['one', 'two'],
+    workspace: '/srv/work/dsh-plugins',
+    priority: 7,
+    preset: 'cordis',
+    writeMode: 'danger-full-access',
+    planTiming: 'now',
+    planQuestions: 'autonomous',
+    allowPaid: true,
+    budgetUsd: 12,
+  }, pristine.api)
+  const edit = pristine.calls.find((call) => call[0] === 'edit')
+  assert.deepEqual(edit[2], {
+    title: 'a cleaner title',
+    body: ' the fuller body '.trim(),
+    acceptance: ['one', 'two'],
+    workspaceCwd: '/srv/work/dsh-plugins',
+    priority: 7,
+    preset: 'cordis',
+    writeMode: 'danger-full-access',
+    planTiming: 'now',
+    planQuestions: 'autonomous',
+    allowPaid: true,
+    budgetUsd: 12,
+  })
+})
+
+test('edit sends only what was sent, and null clears what the form can clear', async () => {
+  const pristine = fakeApi({ ticket: fakeTicket({ column: 'backlog', phase: 'plan', planTiming: 'at_pickup', planQuestions: 'interactive' }) })
+  await runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', workspace: null }, pristine.api)
+  assert.deepEqual(pristine.calls.find((call) => call[0] === 'edit')[2], { workspaceCwd: null })
+  await runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', acceptance: [] }, pristine.api)
+  assert.deepEqual(pristine.calls.at(-1)[2], { acceptance: [] }, 'an emptied list is an answer: it clears the criteria')
+})
+
+test('edit refuses the junk create refuses, and keeps the pristine lock', async () => {
+  const pristine = fakeApi({ ticket: fakeTicket({ column: 'backlog', phase: 'plan', planTiming: 'at_pickup', planQuestions: 'interactive', budgetUsd: 0 }) })
+  const base = { ticket: 'KAN-1' }
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, writeMode: 'full-access' }, pristine.api), /writeMode must be one of/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, priority: 1.5 }, pristine.api), /priority must be an integer/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, budgetUsd: -2 }, pristine.api), /budgetUsd must be a finite number/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, allowPaid: true }, pristine.api), /positive budgetUsd/, 'flipping a ticket paid without money is refused')
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, acceptance: ['ok', ''] }, pristine.api), /non-empty string/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, workspace: '  ' }, pristine.api), /workspace must be a non-empty directory path/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ...base, planTiming: 'soon' }, pristine.api), /planTiming must be one of/)
+  assert.equal(pristine.calls.some((call) => call[0] === 'edit'), false)
+
+  // The lock is the first thing asked, whatever the patch carries: a setting is
+  // as much a change to a card a role may already be reading as a new title is.
+  const started = fakeApi({ ticket: fakeTicket({ column: 'working', phase: 'implement' }), ticketEditable: false })
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', workspace: '/srv/x' }, started.api), /already started; it can no longer be edited/)
+  await assert.rejects(() => runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', acceptance: ['too late'] }, started.api), /already started/)
+  assert.equal(started.calls.some((call) => call[0] === 'edit'), false)
+})
+
+test('a paid edit is legal when the budget is already on the ticket', async () => {
+  const funded = fakeApi({ ticket: fakeTicket({ column: 'backlog', phase: 'plan', budgetUsd: 40 }) })
+  await runOrchestratorTool('kanban_edit', { ticket: 'KAN-1', allowPaid: true }, funded.api)
+  assert.deepEqual(funded.calls.find((call) => call[0] === 'edit')[2], { allowPaid: true })
+})
+
+test('every read shows the workspace a ticket was filed against', () => {
+  const facts = ticketLineFacts(fakeTicket({ column: 'backlog', workspaceCwd: '/srv/work/dsh-deploy' }))
+  assert.equal(facts.settings.workspaceCwd, '/srv/work/dsh-deploy')
+  assert.equal(ticketLineFacts(fakeTicket()).settings.workspaceCwd, null, 'no workspace is the engine default, spelled null')
+})
+
+// ------------------------------------------------- parity with the real store --
+
+const LOG = { info() {}, warn() {}, error() {}, debug() {} }
+
+let KanbanOrchestrator
+try {
+  await import('@deepseek-ai/dsh-llm')
+  await import('@deepseek-ai/dsh-tools')
+  KanbanOrchestrator = (await import('../src/orchestrator-host.mjs')).KanbanOrchestrator
+} catch {
+  KanbanOrchestrator = undefined
+}
+const needsPeers = KanbanOrchestrator === undefined ? 'the dsh peer packages are not installed' : false
+
+function hostHarness({ presets = null, wip = null } = {}) {
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  const store = new KanbanStore(db)
+  const ctx = {
+    get: (name) => (name === 'agentPresets' ? presets : undefined),
+    on: () => () => {},
+  }
+  const orchestrator = new KanbanOrchestrator({
+    ctx,
+    store,
+    engine: { active: new Set(), tick: () => {}, wip },
+    driver: undefined,
+    getConfig: () => ({ orchestratorEnabled: true, orchestratorSessionId: 'kanban-orchestrator', defaultWorkspaceCwd: process.cwd() }),
+    getPrompts: () => ({ bodies: {} }),
+    log: LOG,
+  })
+  return { store, api: orchestrator.managementApi('orchestrator') }
+}
+
+test('what create files is what the board stores: workspace, acceptance, budget', { skip: needsPeers }, async () => {
+  const { store, api } = hostHarness()
+  const answer = await runOrchestratorTool('kanban_create', {
+    title: 'A card with everything',
+    body: 'b',
+    workspace: '/srv/work/dsh-deploy',
+    acceptance: ['the row carries its workspace', 'the budget reads back'],
+    allowPaid: true,
+    budgetUsd: 25,
+    priority: 4,
+    worktree: false,
+  }, api)
+  assert.equal(answer.created, true)
+  const row = store.getTicket(answer.ticket.key)
+  assert.equal(row.workspaceCwd, '/srv/work/dsh-deploy')
+  assert.deepEqual(store.listAcceptance(row.id).map((entry) => entry.statement), ['the row carries its workspace', 'the budget reads back'])
+  assert.equal(row.allowPaid, true)
+  assert.equal(row.budgetUsd, 25)
+  assert.equal(row.priority, 4)
+  assert.equal(row.column, 'backlog', 'a card nobody asked for in Working waits in Backlog')
+  assert.equal(answer.ticket.settings.workspaceCwd, '/srv/work/dsh-deploy', 'the answer the model reads carries it too')
+})
+
+test('create mirrors the human form’s worktree default against the workspace it was given', { skip: needsPeers }, async () => {
+  // The board cuts its own copies, so intent is ON wherever there is a checkout
+  // to cut one from — and the checkout that decides is the one the card names.
+  const { store, api } = hostHarness()
+  const inRepo = await runOrchestratorTool('kanban_create', { title: 'in a repo', body: 'b', workspace: process.cwd() }, api)
+  assert.equal(store.getTicket(inRepo.ticket.key).worktree, true, 'this checkout is a git work tree, so the card wants its own copy')
+  const elsewhere = await runOrchestratorTool('kanban_create', { title: 'nowhere', body: 'b', workspace: '/definitely/not/a/checkout' }, api)
+  assert.equal(store.getTicket(elsewhere.ticket.key).worktree, false)
+})
+
+test('create into Working obeys the cap the same way a human filing does', { skip: needsPeers }, async () => {
+  const refusal = { cap: 2, occupancy: 2, position: 3, reason: 'WIP cap 2/2 — queued at position 3. It starts automatically when a Working slot frees.' }
+  const { store, api } = hostHarness({ wip: { arrivalRefusal: () => refusal } })
+  const answer = await runOrchestratorTool('kanban_create', { title: 'straight in', body: 'b', column: 'working' }, api)
+  assert.equal(answer.created, true)
+  assert.deepEqual(answer.queued, refusal)
+  const row = store.getTicket(answer.ticket.key)
+  assert.equal(row.column, 'backlog', 'at the cap the intent is recorded, nothing is lost')
+  assert.equal(row.needsAttentionReason, refusal.reason, 'and the card wears the queue notice')
+})
+
+test('create into Working with room on the board lands in Working', { skip: needsPeers }, async () => {
+  const { store, api } = hostHarness({ wip: { arrivalRefusal: () => null } })
+  const answer = await runOrchestratorTool('kanban_create', { title: 'go now', body: 'b', column: 'working' }, api)
+  assert.equal(answer.queued, undefined)
+  assert.equal(store.getTicket(answer.ticket.key).column, 'working')
+})
+
+test('edit writes the settings patch and replaces acceptance through the store', { skip: needsPeers }, async () => {
+  const { store, api } = hostHarness()
+  const ticket = store.createTicket({ title: 'pristine', body: 'b' })
+  const answer = await runOrchestratorTool('kanban_edit', {
+    ticket: ticket.key,
+    title: 'fixed up',
+    acceptance: ['first', 'second'],
+    workspace: '/srv/work/dsh-plugins',
+    preset: null,
+    budgetUsd: 3,
+  }, api)
+  assert.equal(answer.edited, true)
+  const row = store.getTicket(ticket.id)
+  assert.equal(row.title, 'fixed up')
+  assert.equal(row.workspaceCwd, '/srv/work/dsh-plugins')
+  assert.equal(row.budgetUsd, 3)
+  assert.deepEqual(store.listAcceptance(ticket.id).map((entry) => entry.statement), ['first', 'second'])
+  assert.deepEqual(answer.acceptance.map((entry) => entry.statement), ['first', 'second'])
+  const event = store.listEvents(ticket.id).find((entry) => entry.kind === 'ticket_updated')
+  assert.equal(event.actor, 'orchestrator', 'the audit trail says who changed it')
+  assert.deepEqual([...event.payload.fields].sort(), ['budgetUsd', 'title', 'workspaceCwd'])
+
+  // A replacement means a replacement: dropping a line drops it.
+  await runOrchestratorTool('kanban_edit', { ticket: ticket.key, acceptance: ['only'] }, api)
+  assert.deepEqual(store.listAcceptance(ticket.id).map((entry) => entry.statement), ['only'])
+  await runOrchestratorTool('kanban_edit', { ticket: ticket.key, workspace: null }, api)
+  assert.equal(store.getTicket(ticket.id).workspaceCwd, null, 'null is the engine default, not the string "null"')
+})
+
+test('an edit of a ticket the engine has touched is refused before the store sees it', { skip: needsPeers }, async () => {
+  const { store, api } = hostHarness()
+  const ticket = store.createTicket({ title: 'started', body: 'b' })
+  store.updateTicket(ticket.id, { title: 'engine wrote it' }, { actor: 'engine' })
+  store.setNeedsAttention(ticket.id, 'parked in implement: it is not pristine any more')
+  await assert.rejects(
+    () => runOrchestratorTool('kanban_edit', { ticket: ticket.key, workspace: '/srv/x' }, api),
+    /already started; it can no longer be edited/,
+  )
+  assert.equal(store.getTicket(ticket.id).workspaceCwd, null, 'the refusal wrote nothing')
 })

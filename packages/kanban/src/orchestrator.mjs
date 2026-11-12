@@ -21,14 +21,16 @@
 // for a question that genuinely needs a human — a worker question that does
 // not need one is answered with `kanban_message`. What it can do is
 // create, read, move, start, retry, kick, message, edit, configure and discard —
-// where create files a new ticket into Backlog with the settings its build needs,
-// edit only touches the title or body of a ticket nothing has started yet, under
+// where create files a new ticket with every field the human new-ticket form has
+// (workspace, acceptance, budget and the settings its build needs), edit changes
+// any field of the human edit screen on a ticket nothing has started yet, under
 // the same pristine lock as the human edit boundary, configure changes the
-// *settings* of an open ticket (preset, write mode, worktree, priority, plan
-// timing, budget) through the same store validation the human create form goes
-// through, and discard needs a reason and refuses a ticket that is already Done or
-// Discarded. Completion stays a human call: the board owner moved discard over to
-// the orchestrator on 2026-11-04, and kept approve and close.
+// *settings* of an open ticket (workspace, preset, write mode, worktree,
+// priority, plan timing, budget) through the same store validation the human
+// create form goes through, and discard needs a reason and refuses a ticket that
+// is already Done or Discarded. Completion stays a human call: the board owner
+// moved discard over to the orchestrator on 2026-11-04, and kept approve and
+// close.
 //
 // A read also has to be answerable: the standing directive tells the
 // orchestrator to read a parked question before deciding whether it needs a
@@ -392,6 +394,10 @@ function settingsFacts(ticket) {
     planTiming: ticket.planTiming,
     planQuestions: ticket.planQuestions,
     allowPaid: ticket.allowPaid === true,
+    // KAN-93: the workspace is a filed setting like the rest, and the case that
+    // prompted this ticket is a batch of cards filed into the wrong one. A lever
+    // you cannot see the current value of is a guess.
+    workspaceCwd: ticket.workspaceCwd ?? null,
   }
 }
 
@@ -512,38 +518,90 @@ function requireField(value) {
 }
 
 /**
- * The ticket settings `kanban_configure` may change after creation (KAN-66).
- * These are the fields the human create form sets and nothing else could reach:
- * frozen for the orchestrator until now. Column, phase and the plan are not on
- * the list — moving and planning have their own tools, and a plan belongs to the
- * phase that produces it.
+ * The ticket settings `kanban_configure` may change after creation (KAN-66), plus
+ * the workspace KAN-93 added: these are the fields the human create form sets and
+ * nothing else could reach. Column, phase and the plan are not on the list —
+ * moving and planning have their own tools, and a plan belongs to the phase that
+ * produces it.
  */
-const CONFIGURE_KEYS = ['preset', 'writeMode', 'worktree', 'priority', 'planTiming', 'planQuestions', 'allowPaid', 'budgetUsd']
+const CONFIGURE_KEYS = ['preset', 'writeMode', 'worktree', 'priority', 'planTiming', 'planQuestions', 'allowPaid', 'budgetUsd', 'workspace']
+
+/**
+ * The settings `kanban_edit` may carry (KAN-93): the edit screen's fields, which
+ * are the configure list minus the worktree switch — the human editor has no
+ * worktree control on an existing card, only the create form does.
+ */
+const EDIT_SETTING_KEYS = CONFIGURE_KEYS.filter((key) => key !== 'worktree')
 
 /** The nullable pair: an id (or mode) to set, or null to fall back to the default. */
 const NULLABLE_STRING = { oneOf: [{ type: 'string' }, { type: 'null' }] }
 
 /**
- * `kanban_configure`: the settings patch, checked key by key.
+ * The acceptance statements as the human form produces them: a list of non-empty
+ * lines, checked before anything is written so a bad line can never leave a
+ * half-applied create or edit (the same rule `src/edit.mjs` applies).
  *
- * The same vocabulary the create form applies, checked here so the model gets a
- * sentence it can correct rather than a store error: `WRITE_MODES`,
- * `PLAN_TIMINGS` and `PLAN_QUESTIONS` are the very lists the store validates
- * against, and the mode pair and the paid-needs-budget rule are re-run on the
- * *resulting* ticket, not just on what was sent — turning a ticket paid without
- * giving it a budget is as invalid as filing one that way.
+ * @param {unknown} value
+ * @returns {{ok: true, statements: string[]}|{ok: false, message: string}}
+ */
+function normalizeAcceptance(value) {
+  if (!Array.isArray(value)) return { ok: false, message: 'acceptance must be an array of statements, one per line' }
+  const statements = []
+  for (const statement of value) {
+    if (typeof statement !== 'string' || statement.trim() === '') {
+      return { ok: false, message: 'every acceptance statement must be a non-empty string' }
+    }
+    statements.push(statement.trim())
+  }
+  return { ok: true, statements }
+}
+
+/**
+ * A workspace path as the form's field holds it: trimmed, or null for "no
+ * opinion" — which is not the same as an empty string the model forgot to fill.
  *
- * @param {object} ticket the resolved ticket row
+ * @param {unknown} value
+ * @param {boolean} nullable - whether `null` is an answer (clear it) or junk.
+ * @returns {{ok: true, workspaceCwd: string|null}|{ok: false, message: string}}
+ */
+function normalizeWorkspace(value, nullable = true) {
+  if (value === null) {
+    return nullable ? { ok: true, workspaceCwd: null } : { ok: false, message: 'workspace must be a directory path; leave it out for the engine default' }
+  }
+  const path = requireField(value)
+  if (path === null) {
+    return { ok: false, message: 'workspace must be a non-empty directory path when given' }
+  }
+  return { ok: true, workspaceCwd: path }
+}
+
+/**
+ * The settings patch shared by `kanban_configure` and `kanban_edit` (KAN-93):
+ * every listed key is checked with the create form's rules, and the two rules
+ * that depend on the whole ticket — the plan-mode pair and paid-needs-a-budget —
+ * are re-run on the *resulting* ticket, not just on what was sent. Turning a
+ * ticket paid without giving it a budget is as invalid as filing one that way.
+ *
+ * `workspace` is the model-facing name; the store field is `workspaceCwd`, and
+ * `null` clears it back to the engine default.
+ *
+ * @param {object} ticket the resolved ticket row (its current values complete a
+ *   half-given pair)
  * @param {object} args the raw tool arguments
+ * @param {string[]} keys the keys this tool may carry
  * @returns {{ok: true, patch: object}|{ok: false, message: string}}
  */
-function configurePatch(ticket, args) {
+function settingsPatch(ticket, args, keys = CONFIGURE_KEYS) {
   const patch = {}
-  for (const key of CONFIGURE_KEYS) {
-    if (args[key] !== undefined) patch[key] = args[key]
-  }
-  if (Object.keys(patch).length === 0) {
-    return { ok: false, message: `nothing to configure: give at least one of ${CONFIGURE_KEYS.join(', ')}` }
+  for (const key of keys) {
+    if (args[key] === undefined) continue
+    if (key === 'workspace') {
+      const workspace = normalizeWorkspace(args.workspace)
+      if (workspace.ok !== true) return workspace
+      patch.workspaceCwd = workspace.workspaceCwd
+      continue
+    }
+    patch[key] = args[key]
   }
   if (patch.preset !== undefined && patch.preset !== null) {
     if (typeof patch.preset !== 'string' || patch.preset.trim() === '') {
@@ -571,12 +629,34 @@ function configurePatch(ticket, args) {
   if (patch.planQuestions !== undefined && !PLAN_QUESTIONS.includes(patch.planQuestions)) {
     return { ok: false, message: `planQuestions must be one of ${PLAN_QUESTIONS.join(', ')}` }
   }
-  const modes = validateTicketModes(patch.planTiming ?? ticket.planTiming, patch.planQuestions ?? ticket.planQuestions)
-  if (!modes.ok) return { ok: false, message: modes.reason }
+  // The pair is only the caller's business when the caller touched it — the same
+  // rule `store.updateTicket` applies, which re-validates only when one of the
+  // two arrives in the patch.
+  if (patch.planTiming !== undefined || patch.planQuestions !== undefined) {
+    const modes = validateTicketModes(patch.planTiming ?? ticket.planTiming, patch.planQuestions ?? ticket.planQuestions)
+    if (!modes.ok) return { ok: false, message: modes.reason }
+  }
   if (patch.allowPaid === true && !((patch.budgetUsd ?? ticket.budgetUsd) > 0)) {
     return { ok: false, message: 'a paid ticket needs a positive budgetUsd — send budgetUsd with allowPaid' }
   }
   return { ok: true, patch }
+}
+
+/**
+ * `kanban_configure`: the settings patch, checked key by key, with the one extra
+ * rule that a call must actually name something to change.
+ *
+ * @param {object} ticket the resolved ticket row
+ * @param {object} args the raw tool arguments
+ * @returns {{ok: true, patch: object}|{ok: false, message: string}}
+ */
+function configurePatch(ticket, args) {
+  const checked = settingsPatch(ticket, args)
+  if (checked.ok !== true) return checked
+  if (Object.keys(checked.patch).length === 0) {
+    return { ok: false, message: `nothing to configure: give at least one of ${CONFIGURE_KEYS.join(', ')}` }
+  }
+  return checked
 }
 
 /**
@@ -619,6 +699,40 @@ function createSettings(args) {
     if (!modes.ok) return { ok: false, message: modes.reason }
     settings.planTiming = planTiming
     settings.planQuestions = planQuestions
+  }
+  // KAN-93: the rest of the new-ticket screen. The workspace is the one that was
+  // missing entirely — a batch of cards filed into the wrong checkout could not
+  // even be reported correctly, let alone fixed.
+  if (args.workspace !== undefined && args.workspace !== null) {
+    const workspace = normalizeWorkspace(args.workspace, false)
+    if (workspace.ok !== true) return workspace
+    settings.workspaceCwd = workspace.workspaceCwd
+  }
+  if (args.acceptance !== undefined) {
+    const acceptance = normalizeAcceptance(args.acceptance)
+    if (acceptance.ok !== true) return acceptance
+    // An empty list is what "no acceptance criteria" looks like on the form too;
+    // writing nothing is the same store outcome, so the key stays out.
+    if (acceptance.statements.length > 0) settings.acceptance = acceptance.statements
+  }
+  if (args.allowPaid !== undefined) {
+    if (typeof args.allowPaid !== 'boolean') return { ok: false, message: 'allowPaid must be true or false when given' }
+    settings.allowPaid = args.allowPaid
+  }
+  if (args.budgetUsd !== undefined) {
+    if (!Number.isFinite(args.budgetUsd) || args.budgetUsd < 0) {
+      return { ok: false, message: 'budgetUsd must be a finite number of dollars, 0 or more' }
+    }
+    settings.budgetUsd = args.budgetUsd
+  }
+  if (settings.allowPaid === true && !(settings.budgetUsd > 0)) {
+    return { ok: false, message: 'a paid ticket needs a positive budgetUsd — send budgetUsd with allowPaid' }
+  }
+  if (args.column !== undefined && args.column !== null) {
+    if (args.column !== 'backlog' && args.column !== 'working') {
+      return { ok: false, message: 'column must be "backlog" or "working" — Done and Discarded are a human’s calls' }
+    }
+    settings.column = args.column
   }
   return { ok: true, settings }
 }
@@ -694,16 +808,25 @@ const KANBAN_TOOL_SPECS = [
   {
     name: 'kanban_create',
     description:
-      'File a new ticket into Backlog: a title, a markdown body, an optional integer priority, and the settings its build session runs under — `preset`, `writeMode`, `worktree`, `planTiming` and `planQuestions`. This is how work you discover gets onto the board — including a rule about how the board itself should be run — instead of waiting for a person to type it. Use the settings when the work cannot be done without them: a build of dsh-deploy or dsh-plugins needs `preset: "cordis"`, `writeMode: "danger-full-access"` and `worktree: true` or every install, lab and git push it attempts is denied. The ticket lands exactly where a human files one: Backlog, unstarted, waiting to be planned. It cannot attach images, and filing it starts nothing.',
+      'File a new ticket with every field the human new-ticket form has: a title, a markdown body, the acceptance statements a review is measured against, and the settings its build sessions run under — `workspace` (the checkout the work lives in), `priority`, `preset`, `writeMode`, `worktree`, `planTiming`, `planQuestions`, `allowPaid` with `budgetUsd`, and the starting `column`. This is how work you discover gets onto the board — including a rule about how the board itself should be run — instead of waiting for a person to type it. Name the `workspace` whenever the work has a home repo: a card filed without one lands in the engine default and its sessions then run in the wrong checkout. Use the settings when the work cannot be done without them: a build of dsh-deploy or dsh-plugins needs `preset: "cordis"`, `writeMode: "danger-full-access"` and `worktree: true` or every install, lab and git push it attempts is denied. A filed ticket is unstarted and waits to be planned, exactly like a human’s; `column: "working"` asks the engine to drive it now, and at the Working cap it is filed into Backlog with the queue notice instead. It cannot attach images.',
     parameters: {
       title: { type: 'string', required: true, description: 'One line naming the work.' },
       body: { type: 'string', required: true, description: 'The body in markdown: what you found, why it matters, and what done looks like.' },
+      acceptance: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional acceptance statements, one per entry: what a review measures the finished work against. Every entry must be a non-empty string. Omit for none.',
+      },
       priority: { type: 'integer', description: 'Optional sort priority, higher first. Defaults to 0.' },
+      workspace: { type: 'string', description: 'The absolute path of the working directory the ticket’s sessions run in — the checkout the work lives in. Omit to leave it at the engine default.' },
       preset: { type: 'string', description: 'Agent preset id for the ticket’s build session, e.g. "cordis" for Creator mode. Omit for the harness default.' },
       writeMode: { type: 'string', description: `Sandbox write mode for the build session: one of ${WRITE_MODES.join(', ')}. Omit for the purpose default.` },
-      worktree: { type: 'boolean', description: 'Whether the ticket gets its own git worktree. Omit to mirror the human form, which turns it on whenever the worktree service is available.' },
+      worktree: { type: 'boolean', description: 'Whether the ticket gets its own git worktree. Omit to mirror the human form, which turns it on whenever the workspace is a git checkout.' },
       planTiming: { type: 'string', description: '"at_pickup" (plan when the engine takes it) or "now" (plan on creation). Defaults to "at_pickup".' },
       planQuestions: { type: 'string', description: '"interactive" (the planner may ask a person) or "autonomous" (it decides alone). Defaults to "interactive".' },
+      allowPaid: { type: 'boolean', description: 'Whether paid providers may work this ticket. Needs a positive budgetUsd beside it.' },
+      budgetUsd: { type: 'number', description: 'Spend cap in dollars, 0 or more.' },
+      column: { type: 'string', description: 'Where to file it: "backlog" (the default) or "working". Done and Discarded are a human’s calls.' },
     },
     guard: (args) => {
       const title = requireField(args.title)
@@ -735,11 +858,24 @@ const KANBAN_TOOL_SPECS = [
   {
     name: 'kanban_edit',
     description:
-      'Fix the title and/or the body of a ticket that has not started — a Backlog or Working card no session has touched. Use it when the record is wrong or thin: a garbled title, a body missing the detail you just learned. It cannot touch a plan, conditions, review or verdicts (those belong to the phases that produce them), and a ticket anything has started answers that it can no longer be edited.',
+      'Fix a ticket that has not started — a Backlog or Working card no session has touched — using every field the human edit screen has: the title, the body, the whole acceptance list, the workspace it works in, its priority, preset, write mode, plan timing and plan questions, and its paid budget. Use it when the record is wrong or thin: a garbled title, a body missing the detail you just learned, acceptance nobody wrote down, a card filed against the wrong checkout. Only what you send changes; `null` clears preset, writeMode or workspace back to its default. It cannot touch a plan, conditions, review or verdicts (those belong to the phases that produce them), and a ticket anything has started answers that it can no longer be edited.',
     parameters: {
       ticket: TICKET_ARG,
       title: { type: 'string', description: 'The new title. Leave it out to keep the current one.' },
       body: { type: 'string', description: 'The new body, in markdown. Leave it out to keep the current one.' },
+      acceptance: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'The whole acceptance list, replacing what is stored: edit a line to change it, omit a line to remove it. Every entry must be a non-empty string; an empty array clears the list.',
+      },
+      workspace: { ...NULLABLE_STRING, description: 'The absolute path of the working directory its sessions run in, or null for the engine default.' },
+      priority: { type: 'integer', description: 'Sort priority, higher first.' },
+      preset: { ...NULLABLE_STRING, description: 'An agent preset id the sessions mount, or null for the harness default.' },
+      writeMode: { ...NULLABLE_STRING, description: `The build sandbox mode: ${WRITE_MODES.join(', ')}, or null for the purpose default.` },
+      planTiming: { type: 'string', description: '"at_pickup" or "now". Leave it out to keep the current one.' },
+      planQuestions: { type: 'string', description: '"interactive" or "autonomous". Leave it out to keep the current one.' },
+      allowPaid: { type: 'boolean', description: 'Whether paid providers may work the ticket. Needs a positive budget on the resulting ticket.' },
+      budgetUsd: { type: 'number', description: 'Spend cap in dollars, 0 or more.' },
     },
     guard: (args, api) => {
       const found = requireTicket(api, args.ticket)
@@ -766,8 +902,19 @@ const KANBAN_TOOL_SPECS = [
         if (imageRef !== null) return imageRef
         patch.body = body
       }
+      if (args.acceptance !== undefined) {
+        const acceptance = normalizeAcceptance(args.acceptance)
+        if (acceptance.ok !== true) return acceptance
+        patch.acceptance = acceptance.statements
+      }
+      // KAN-93: the settings half of the edit screen goes through the very check
+      // `kanban_configure` applies, so one rule set governs both paths and a
+      // refusal reads the same whichever tool produced it.
+      const settings = settingsPatch(ticket, args, EDIT_SETTING_KEYS)
+      if (settings.ok !== true) return settings
+      Object.assign(patch, settings.patch)
       if (Object.keys(patch).length === 0) {
-        return { ok: false, message: 'nothing to edit: give a title, a body, or both' }
+        return { ok: false, message: 'nothing to edit: give at least one of title, body, acceptance, workspace, priority, preset, writeMode, planTiming, planQuestions, allowPaid, budgetUsd' }
       }
       return { ok: true, ticket, patch }
     },
@@ -776,9 +923,10 @@ const KANBAN_TOOL_SPECS = [
   {
     name: 'kanban_configure',
     description:
-      'Change the settings of an open ticket that were filed wrong: which agent preset its sessions mount, the build write mode, whether it gets its own git worktree, its priority, when planning runs, whether it asks or decides autonomously, and its paid budget. This is the lever for the case where you discover a card was created with the wrong combination — a change to the harness filed without the Creator preset, Full Access or a worktree — instead of asking a person to flip it in the UI. Every value goes through the same validation the create form applies, and a closed ticket refuses: Done and Discarded belong to the human. Name the reason; it is recorded on the ticket.',
+      'Change the settings of an open ticket that were filed wrong: the workspace its sessions work in, which agent preset they mount, the build write mode, whether it gets its own git worktree, its priority, when planning runs, whether it asks or decides autonomously, and its paid budget. This is the lever for the case where you discover a card was created with the wrong combination — a change to the harness filed without the Creator preset, Full Access or a worktree, or a batch of cards pointed at the wrong checkout — instead of asking a person to flip it in the UI. Every value goes through the same validation the create form applies, and a closed ticket refuses: Done and Discarded belong to the human. Name the reason; it is recorded on the ticket.',
     parameters: {
       ticket: TICKET_ARG,
+      workspace: { ...NULLABLE_STRING, description: 'The working directory its sessions run in — an absolute path, or null for the engine default.' },
       preset: { ...NULLABLE_STRING, description: 'An agent preset id the sessions mount, or null for the harness default.' },
       writeMode: { ...NULLABLE_STRING, description: `The build sandbox mode: ${WRITE_MODES.join(', ')}, or null for the purpose default.` },
       worktree: { type: 'boolean', description: 'Whether the ticket gets its own git worktree.' },
