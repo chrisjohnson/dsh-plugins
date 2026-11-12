@@ -626,10 +626,10 @@ you. The one thing that can interrupt a worker is a `kanban_message` sent with
 `mode: 'steer'` — never board traffic.
 
 **What it can do.** `kanban_board`, `kanban_ticket` and `kanban_sessions` to read;
-`kanban_create` (file a new ticket into Backlog — work it discovers, including a
-rule about how the board should be run) and `kanban_edit` (fix the title or body
-of a ticket nothing has started) to author; `kanban_configure` (change the
-settings of an open ticket — see below); `kanban_move` (Backlog ⇄ Working),
+`kanban_create` (file a new ticket — work it discovers, including a rule about how
+the board should be run) and `kanban_edit` (fix a ticket nothing has started) to
+author; `kanban_configure` (change the settings of an open ticket — see below);
+`kanban_move` (Backlog ⇄ Working),
 `kanban_start` (planning or build), `kanban_retry` (a parked ticket, with an
 instruction and a fresh attempt budget), `kanban_kick` (continue a ticket session
 that halted mid-turn), `kanban_message` (a note into a ticket's live session,
@@ -640,18 +640,15 @@ closes a ticket as done, and none for a question that genuinely needs a human �
 worker question that does not need one is answered with `kanban_message` — while
 the session runs under a read-only sandbox with `write` and `edit` restricted
 away. A filed ticket goes through the same store path a human
-that halted mid-turn), `kanban_message` (a note into a ticket's live session) and
-`kanban_discard` (end an open ticket, with a reason) to act. That is the whole
-menu, and it is enforced in code, not in prose: there is no tool that approves or
-closes a ticket as done, and none for a question that genuinely needs a human — a
-worker question that does not need one is answered with `kanban_message` — while
-the session runs under a read-only sandbox with `write` and `edit` restricted
-away. A filed ticket goes through the same store path a human
-creation uses and its `created` event carries `actor: 'orchestrator'`; an edit
-takes title and body only, and is locked by the same pristine rule as the human
-edit boundary — once anything has touched a ticket, it can no longer be edited. A
-call that crosses a boundary is refused at the tool with a sentence explaining
-whose call it was instead.
+creation uses and its `created` event carries `actor: 'orchestrator'`. Since
+0.44.0 the two authoring tools carry the human screens field for field: create
+takes the workspace, the acceptance list, the priority, the paid budget and the
+starting column beside the settings it already had, and an edit takes every field
+the edit screen has — title, body, acceptance, workspace, priority, preset, write
+mode, plan timing and questions, budget — and is locked by the same pristine rule
+as the human edit boundary: once anything has touched a ticket, it can no longer be
+edited. A call that crosses a boundary is refused at the tool with a sentence
+explaining whose call it was instead.
 
 **A message can interrupt (0.33.0).** `kanban_message` takes `mode`: `queue` (the
 default, and every message before this) waits for the turn in flight and arrives
@@ -689,6 +686,27 @@ defaults: those tickets are filed with the Creator preset (`cordis`), Full Acces
 so. A ticket on any other project gets what that project needs — see the prompt's
 "Dsh-specific vs generic kanban work".
 
+**The whole ticket schema from an agent (0.44.0).** The two authoring tools covered
+some of the new-ticket screen and none of the edit screen, so an agent that
+discovered work it could not describe had to leave it out — the case that prompted
+this was a batch of cards filed into the wrong workspace, with no field to name
+the right one and no tool to correct it afterwards. `kanban_create` now takes
+every field the human form has: `workspace` (the directory its sessions run in;
+omitted means the engine default, and the worktree default is decided from *that*
+directory), `acceptance` (a list of statements, each non-empty, stored as the
+human's own words), `allowPaid` with `budgetUsd`, and `column` for a card that
+should go straight to Working — which obeys the same WIP cap a human filing into
+Working does, so at the cap it is filed into Backlog wearing the queue notice.
+`kanban_edit` takes the edit screen's fields beside title and body — `acceptance`,
+`workspace`, `priority`, `preset`, `writeMode`, `planTiming`, `planQuestions`,
+`allowPaid`, `budgetUsd` — through the same validation `kanban_configure` applies,
+with acceptance routed to `store.setAcceptance` exactly as the human boundary
+routes it (a replacement, so dropping a line drops it). The pristine lock is
+unchanged and is asked first: a ticket any session has touched cannot be edited,
+whatever field the patch carries. `null` clears `workspace`, `preset` or
+`writeMode` back to its default on both tools, and every read's `settings` block
+now carries `workspaceCwd`, so a mis-filed card is visible before it is corrected.
+
 **Restarting the session without restarting the service (0.32.0).** A session's
 tools and system prompt are decorated when it is created, so a tool shipped by a
 plugin release does not exist in the live orchestrator until the service
@@ -717,12 +735,14 @@ implement session: …`) with the question read back out of it — text only, no
 options, because that is all a park preserves. `null` means nothing is waiting.
 Approval prompts are a separate wait and are not questions.
 
-**`kanban_configure` (0.30.0).** The settings a ticket is filed with used to be
-frozen for the orchestrator, so a card created with the wrong combination — a
-harness change with no Creator preset, the wrong write mode, no worktree of its
-own — could only be fixed by a person in the UI. `kanban_configure` changes them
-on an **open** ticket: `preset`, `writeMode`, `worktree`, `priority`,
-`planTiming`, `planQuestions`, `allowPaid`, `budgetUsd`, plus a `reason` that
+**`kanban_configure` (0.30.0, workspace added in 0.44.0).** The settings a ticket
+is filed with used to be frozen for the orchestrator, so a card created with the
+wrong combination — a harness change with no Creator preset, the wrong write mode,
+no worktree of its own, or a batch pointed at the wrong checkout — could only be
+fixed by a person in the UI. `kanban_configure` changes them
+on an **open** ticket: `workspace`, `preset`, `writeMode`, `worktree`,
+`priority`, `planTiming`, `planQuestions`, `allowPaid`, `budgetUsd`, plus a
+`reason` that
 goes into the ticket's event log. At least one setting must be named. The values
 are validated exactly where the create form validates them — the `WRITE_MODES`
 vocabulary, the `now`/`at_pickup` and `interactive`/`autonomous` enums, an
@@ -731,11 +751,13 @@ budget checked against the *resulting* ticket — and then written through
 `store.updateTicket` with `actor: 'orchestrator'`, so the `ticket_updated` event
 naming the changed fields is the audit trail. A `preset` is resolved against the
 live preset registry before anything is written (the store cannot know it; an
-unknown id would mount nothing at session start), and `null` clears `preset` or
-`writeMode` back to the default. A Done or Discarded ticket refuses: closing
+unknown id would mount nothing at session start), and `null` clears `preset`,
+`writeMode` or `workspace` back to the default. A Done or Discarded ticket
+refuses: closing
 belongs to a person, and a closed card is frozen. Every read shows the current
-`settings` block, so the orchestrator can see what it is looking at before it
-changes it.
+`settings` block — including `workspaceCwd`, so the wrong-workspace case is
+visible before it is corrected — so the orchestrator can see what it is looking at
+before it changes it.
 
 **Why it has its own preset.** The orchestrator must stay answerable, and a
 session that can hold a turn for a minute is not. The bundle declares
@@ -772,8 +794,8 @@ every session `switch_model`:
 | --- | --- |
 | `kanban_board` | Read the open board: every Working and Backlog ticket with its column, phase, park reason, pending question and the WIP state. No gate — read it as often as you like. |
 | `kanban_ticket` | Read one ticket in full: body, plan and conditions, last review, sessions, recent events. |
-| `kanban_create` | File a new ticket into Backlog: title, markdown body, optional priority, plus the settings its build session needs (`preset`, `writeMode`, `worktree`, `planTiming`, `planQuestions`). |
-| `kanban_edit` | Fix the title and/or body of a ticket nothing has started. |
+| `kanban_create` | File a new ticket: title, markdown body, acceptance, **workspace**, priority, and the settings its build session needs (`preset`, `writeMode`, `worktree`, `planTiming`, `planQuestions`), plus `allowPaid`/`budgetUsd` and the starting `column`. |
+| `kanban_edit` | Fix any field of the edit screen — title, body, acceptance, workspace, priority, preset, write mode, plan timing and questions, budget — on a ticket nothing has started. |
 | `kanban_discard` | Close an open ticket without approval, **with a required reason**. |
 
 These are the orchestrator's own specs, imported rather than paraphrased, so every

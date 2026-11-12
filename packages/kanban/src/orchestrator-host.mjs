@@ -22,12 +22,13 @@
 //     queues: a digest never interrupts a turn, so it never interrupts the human.
 //   - It is a reader with levers, not a worker. Read-only sandbox mode, the
 //     write and edit tools restricted away, and a tool set with no approve and no
-//     close in it. It can file a new ticket into Backlog — with the preset, write
-//     mode and worktree settings its build will need — fix the title or body of
-//     one nothing has started, on the same pristine lock the human edit boundary
-//     uses, change the settings of an open one (preset, write mode, worktree,
-//     priority, plan timing, budget) through the store's own validation, and
-//     discard an open one with a reason. Approving and closing stay with a person.
+//     close in it. It can file a new ticket with every field the human new-ticket
+//     form has — workspace, acceptance, budget and the settings its build will
+//     need — change any field of the edit screen on one nothing has started, on
+//     the same pristine lock the human edit boundary uses, change the settings of
+//     an open one (workspace, preset, write mode, worktree, priority, plan
+//     timing, budget) through the store's own validation, and discard an open one
+//     with a reason. Approving and closing stay with a person.
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -718,8 +719,17 @@ export class KanbanOrchestrator {
        * default is mirrored from that path — intent is ON whenever the workspace
        * is a git checkout, because a ticket without its own worktree would plan
        * inside a live checkout. An omitted setting stays the store default.
+       *
+       * KAN-93 brought the rest of the new-ticket screen across on the same
+       * terms: `workspaceCwd` and `acceptance` go straight to `createTicket`,
+       * and filing straight into `working` obeys the same cap a drag or a human
+       * filing meets — at the cap the ticket is created in Backlog wearing the
+       * queue notice, because the intent is recorded and nothing is lost.
        */
-      create: async ({ title, body, priority, preset, writeMode, worktree, planTiming, planQuestions }) => {
+      create: async ({
+        title, body, priority, preset, writeMode, worktree, planTiming, planQuestions,
+        workspaceCwd, acceptance, allowPaid, budgetUsd, column,
+      }) => {
         if (preset !== undefined && preset !== null) {
           const presets = this.ctx.get('agentPresets')
           if (typeof presets?.resolve !== 'function') {
@@ -731,6 +741,8 @@ export class KanbanOrchestrator {
             return { created: false, reason: `unknown agent preset: ${preset}` }
           }
         }
+        const defaultWorkspace = () => this.getConfig()?.defaultWorkspaceCwd ?? process.cwd()
+        const queued = column === 'working' ? engine?.wip?.arrivalRefusal?.() ?? null : null
         const ticket = store.createTicket(
           {
             title,
@@ -740,30 +752,53 @@ export class KanbanOrchestrator {
             ...(writeMode === undefined ? {} : { writeMode }),
             ...(planTiming === undefined ? {} : { planTiming }),
             ...(planQuestions === undefined ? {} : { planQuestions }),
-            column: 'backlog',
+            ...(acceptance === undefined ? {} : { acceptance }),
+            ...(allowPaid === undefined ? {} : { allowPaid }),
+            ...(budgetUsd === undefined ? {} : { budgetUsd }),
+            ...(workspaceCwd === undefined ? {} : { workspaceCwd }),
+            column: queued === null ? (column === 'working' ? 'working' : 'backlog') : 'backlog',
             // The same rule the human form follows (src/host.mjs): kanban cuts
             // the copy itself, so an omitted answer means "yes" wherever there
-            // is a git checkout to cut one from.
+            // is a git checkout to cut one from — and the checkout that decides
+            // it is the one this ticket names, not the board's default.
             worktree: worktree === undefined
-              ? await isGitCheckout(this.getConfig()?.defaultWorkspaceCwd ?? process.cwd())
+              ? await isGitCheckout(workspaceCwd || defaultWorkspace())
               : worktree === true,
           },
           { actor },
         )
+        // A queued card reads as queued: the notice is what tells the next read
+        // (and the engine's own promotion) that Backlog is not the end of it.
+        const shown = queued === null
+          ? ticket
+          : store.setNeedsAttention(ticket.id, queued.reason, { queued: true, cap: queued.cap, position: queued.position })
         void engine?.tick()
-        return { created: true, ticket: this.#ticketLine(ticket) }
+        return queued === null
+          ? { created: true, ticket: this.#ticketLine(shown) }
+          : { created: true, queued, ticket: this.#ticketLine(shown) }
       },
 
       /**
-       * `kanban_edit`: the patch carries title and body keys only — the guard in
-       * src/orchestrator.mjs built it and checked the pristine lock through
-       * `ticketEditable`. The store writes the `ticket_updated` event with this
-       * actor and the list of fields that actually changed.
+       * `kanban_edit`: the patch the guard in src/orchestrator.mjs built — the
+       * edit screen's fields, checked against the pristine lock through
+       * `ticketEditable`. Acceptance is pulled out and routed to
+       * `setAcceptance` exactly as the human boundary does it (src/edit.mjs);
+       * the remaining fields go to `updateTicket` untouched, which is what keeps
+       * the store's own validation in one place. The store writes the
+       * `ticket_updated` event with this actor and the fields that changed.
        */
       edit: (ticket, patch) => {
-        const updated = store.updateTicket(ticket.id, patch, { actor, reason: `${actor} edit` })
+        const { acceptance, ...fields } = patch
+        const updated = Object.keys(fields).length > 0
+          ? store.updateTicket(ticket.id, fields, { actor, reason: `${actor} edit` })
+          : ticket
+        if (Array.isArray(acceptance)) store.setAcceptance(ticket.id, acceptance, { reason: `${actor} edit` })
         void engine?.tick()
-        return { edited: true, ticket: this.#ticketLine(updated) }
+        return {
+          edited: true,
+          ticket: this.#ticketLine(store.getTicket(ticket.id) ?? updated),
+          acceptance: store.listAcceptance(ticket.id),
+        }
       },
 
       /** The human edit boundary's lock (src/edit.mjs), asked of the store. */

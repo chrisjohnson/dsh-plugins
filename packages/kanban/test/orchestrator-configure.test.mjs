@@ -23,7 +23,7 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 
 import { migrate } from '../src/db.mjs'
-import { ORCHESTRATOR_TOOL_SPECS, runOrchestratorTool } from '../src/orchestrator.mjs'
+import { ORCHESTRATOR_TOOL_SPECS, runOrchestratorTool, ticketLineFacts } from '../src/orchestrator.mjs'
 import { KanbanStore, WRITE_MODES } from '../src/store.mjs'
 
 const spec = ORCHESTRATOR_TOOL_SPECS.find((candidate) => candidate.name === 'kanban_configure')
@@ -62,6 +62,10 @@ function fakeApi(over = {}) {
 }
 
 const configure = async (args, api = fakeApi().api) => runOrchestratorTool('kanban_configure', args, api)
+
+/** The "nothing to configure" sentence, read off the tool rather than copied. */
+const CONFIGURE_KEYS_SENTENCE = await runOrchestratorTool('kanban_configure', { ticket: 'KAN-65' }, fakeApi().api)
+  .then(() => '', (error) => error.message)
 
 // ------------------------------------------------------------ what it accepts --
 
@@ -250,4 +254,68 @@ test('clearing a preset through configure lands as null, not as the string "null
   assert.equal(updated.preset, null)
   assert.equal(updated.writeMode, null)
   assert.equal(store.getTicket(store.listTickets({ columns: ['backlog'] })[0].id).preset, null)
+})
+
+// ---------------------------------------------------------------- KAN-93 ---
+//
+// The workspace joins the configurable settings. The case is the whole point of
+// the ticket: an agent filed a batch of cards against the wrong checkout — or
+// none, which is the engine default — and there was no tool on the board that
+// could say which directory a ticket works in. `null` matters as much as a path:
+// "I do not know, use the default" has to be an answer the model can give.
+
+test('workspace is a configurable setting, and null clears it', async () => {
+  assert.ok(spec.parameters.workspace, 'kanban_configure must declare workspace')
+  assert.deepEqual(spec.parameters.workspace.oneOf, [{ type: 'string' }, { type: 'null' }])
+  assert.match(spec.parameters.workspace.description, /engine default/)
+
+  const { api, calls } = fakeApi()
+  await configure({ ticket: 'KAN-65', workspace: '/srv/work/dsh-deploy' }, api)
+  assert.deepEqual(calls[0][2], { workspaceCwd: '/srv/work/dsh-deploy' }, 'the model-facing name is workspace; the store field is workspaceCwd')
+  await configure({ ticket: 'KAN-65', workspace: '  /srv/trimmed  ' }, api)
+  assert.deepEqual(calls.at(-1)[2], { workspaceCwd: '/srv/trimmed' })
+  await configure({ ticket: 'KAN-65', workspace: null }, api)
+  assert.deepEqual(calls.at(-1)[2], { workspaceCwd: null }, 'null is an answer: fall back to the engine default')
+})
+
+test('a workspace that is not a path is refused before anything is written', async () => {
+  const { api, calls } = fakeApi()
+  for (const bad of ['', '   ', 7, true, {}]) {
+    await assert.rejects(() => configure({ ticket: 'KAN-65', workspace: bad }, api), /workspace must be/)
+  }
+  assert.equal(calls.length, 0)
+})
+
+test('workspace counts as naming a setting, and appears in the refusal sentence', async () => {
+  assert.match(CONFIGURE_KEYS_SENTENCE, /workspace/, 'the "nothing to configure" answer has to list the lever it just refused')
+  const { api, calls } = fakeApi()
+  await configure({ ticket: 'KAN-65', workspace: '/srv/x', priority: 5 }, api)
+  assert.deepEqual(calls[0][2], { workspaceCwd: '/srv/x', priority: 5 })
+})
+
+function storeHarnessWithWorkspace(over = {}) {
+  const harness = storeHarness(over)
+  return {
+    ...harness,
+    configureWorkspace: async (value) => harness.api.configure(harness.created, value === null ? { workspaceCwd: null } : { workspaceCwd: value }, 'KAN-93 workspace fix'),
+  }
+}
+
+test('a configured workspace lands on the row, and clearing it lands as null', async () => {
+  const { store, created, configureWorkspace } = storeHarnessWithWorkspace()
+  assert.equal(created.workspaceCwd, null, 'a ticket filed without one has no opinion stored')
+  await configureWorkspace('/srv/work/dsh-plugins')
+  assert.equal(store.getTicket(created.id).workspaceCwd, '/srv/work/dsh-plugins')
+  await configureWorkspace(null)
+  assert.equal(store.getTicket(created.id).workspaceCwd, null)
+  const event = store.listEvents(created.id).find((row) => row.kind === 'ticket_updated')
+  assert.equal(event.actor, 'orchestrator')
+  assert.deepEqual(event.payload.fields, ['workspaceCwd'])
+})
+
+test('the settings block a read carries names the workspace', async () => {
+  const { store, created, configureWorkspace } = storeHarnessWithWorkspace()
+  await configureWorkspace('/srv/work/dsh-deploy')
+  const row = store.getTicket(created.id)
+  assert.equal(ticketLineFacts(row).settings.workspaceCwd, '/srv/work/dsh-deploy')
 })

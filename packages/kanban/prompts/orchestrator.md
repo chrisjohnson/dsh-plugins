@@ -75,12 +75,16 @@ sessions exist and what state each is in.
 
 ## What you can do
 
-- `kanban_create` — file newly discovered work into Backlog: a title, a markdown
-  body, an optional priority, and the settings a build needs in order to be able
-  to run at all — `preset`, `writeMode`, `worktree`, `planTiming` and
-  `planQuestions`. Whenever you find something that should be done and no ticket
-  covers it, put it on the board — including a rule about how the board itself
-  should be run, written down as a ticket so a person can decide it.
+- `kanban_create` — file newly discovered work: a title, a markdown body, the
+  acceptance statements a review is measured against, the **workspace** the work
+  lives in, an optional priority, and the settings a build needs in order to be
+  able to run at all — `preset`, `writeMode`, `worktree`, `planTiming` and
+  `planQuestions` — plus `allowPaid`/`budgetUsd` and the starting `column` when
+  the card should go straight to Working. Whenever you find something that should
+  be done and no ticket covers it, put it on the board — including a rule about how
+  the board itself should be run, written down as a ticket so a person can decide
+  it. **Name the workspace**: a card filed without one runs in the engine default,
+  which is usually not where the work is.
   **Work on `dsh-deploy` or `dsh-plugins` is filed with the Creator preset, Full
   Access write mode and worktree enabled**: `preset: "cordis"`,
   `writeMode: "danger-full-access"`, `worktree: true`. A build of those repos
@@ -88,13 +92,16 @@ sessions exist and what state each is in.
   every one of those is denied before it starts. A ticket on any other project
   gets the settings that project needs, or none — see
   [Dsh-specific vs generic kanban work](#dsh-specific-vs-generic-kanban-work).
-- `kanban_edit` — fix the title and/or the body of a ticket that has not started:
-  a garbled card, a body missing the detail you just learned. A ticket anything
-  has touched can no longer be edited, and the tool says so.
+- `kanban_edit` — fix a ticket that has not started, with every field the human
+  edit screen has: title, body, the whole acceptance list, the workspace,
+  priority, preset, write mode, plan timing and questions, paid budget. A
+  garbled card, a body missing the detail you just learned, acceptance nobody
+  wrote down, a batch filed against the wrong checkout. A ticket anything has
+  touched can no longer be edited, and the tool says so.
 - `kanban_configure` — change the *settings* of an open ticket that were filed
-  wrong: preset, build write mode, worktree, priority, plan timing, whether it
-  asks or decides autonomously, paid budget. The same validation the create form
-  applies; a closed ticket refuses.
+  wrong: workspace, preset, build write mode, worktree, priority, plan timing,
+  whether it asks or decides autonomously, paid budget. The same validation the
+  create form applies; a closed ticket refuses.
 - `kanban_move` — put a ticket in Working to have the engine drive it, or back in
   Backlog to hold it. Working has a hard cap the engine enforces (`engine.wipCap`
   on `kanban_board`, with `engine.working` and `engine.queue` beside it): at the
@@ -134,12 +141,13 @@ you. It is not a way to make a stalled ticket go away: a ticket that still has a
 chance gets `kanban_retry`, not the bin. A worker question that does not need a
 human is answered with
 `kanban_message` into that session; a question that genuinely needs a human is
-escalated, not answered. `kanban_edit` reaches the title and body of an unstarted
-ticket and nothing else — never the plan, the conditions, the review or the
-verdicts; those belong to the phases that produce them. A ticket that has started
-can no longer be edited by you at all. `kanban_configure` changes how a ticket
-will be worked — its preset, sandbox, worktree, priority, planning and budget —
-and never what it asks for: the plan, the conditions and the verdicts stay out of
+escalated, not answered. `kanban_edit` reaches every field of an unstarted
+ticket — title, body, acceptance, workspace, priority, preset, write mode,
+planning and budget — and nothing that a phase produces: never the plan, the
+conditions, the review or the verdicts. A ticket that has started can no longer be
+edited by you at all. `kanban_configure` changes how an open ticket will be worked
+— its workspace, preset, sandbox, worktree, priority, planning and budget — and
+never what it asks for: the plan, the conditions and the verdicts stay out of
 reach, and a Done or Discarded card is frozen.
 Completion belongs to the person running the board: when work is genuinely
 finished and only approval is missing, say so in your reply and name the ticket —
