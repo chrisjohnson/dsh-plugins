@@ -5,6 +5,45 @@
 
 ## Unreleased
 
+## 0.44.0
+
+### Added
+
+- **`kanban_create` and `kanban_edit` now cover the whole ticket schema (KAN-93).**
+  The two tools an agent uses to author a card carried part of the human new-ticket
+  form and none of the edit form, so work that could not be described correctly was
+  work a person had to type in by hand — the case here was a batch of tickets filed
+  into the wrong workspace, with no field to name the right one at creation and no
+  tool that could change it afterwards.
+  - `kanban_create` takes the rest of the new-ticket screen: `workspace` (the
+    directory the ticket's sessions run in — omitted means the engine default, and
+    the worktree default is now decided from the workspace the card names, exactly
+    as the human form decides it), `acceptance` (a list of non-empty statements,
+    stored as rows like the form's), `allowPaid` with `budgetUsd`, and `column`
+    (`backlog` or `working`) for a card that should be driven now. Filing into
+    `working` obeys the same WIP cap a human filing meets: at the cap the ticket is
+    created in Backlog wearing the queue notice, and the answer carries the `queued`
+    block.
+  - `kanban_edit` takes every field the edit screen has beside the title and body —
+    `acceptance`, `workspace`, `priority`, `preset`, `writeMode`, `planTiming`,
+    `planQuestions`, `allowPaid`, `budgetUsd` — validated by the same rules
+    `kanban_configure` applies and written through the same store paths
+    (`setAcceptance` replaces the list, as it does for a human). The pristine lock
+    is unchanged and asked first: a ticket any session has touched still cannot be
+    edited at all, and `null` clears `workspace`, `preset` or `writeMode`.
+  - `kanban_configure` gained `workspace` too, nullable, so a card that has already
+    been planned or is sitting in Working can be pointed at the right checkout
+    without anyone opening the page.
+  - Every read's `settings` block now carries `workspaceCwd`, so the wrong-workspace
+    case is visible on `kanban_board` and `kanban_ticket` before anything is
+    changed.
+
+### Changed
+
+- The orchestrator's prompt and the package README describe the authoring tools by
+  the fields they now carry, including the instruction to name a workspace when the
+  work has a home repo.
+
 ## 0.43.0
 
 ### Added
