@@ -45,6 +45,20 @@ A provider with no `queues` entry is **not gated** — its calls pass through, e
 an unmapped model on the daemon. Queue limits and the queue→GPU mapping live in the
 daemon's own config (`/etc/take-a-number/config.json`), not here.
 
+## Kind mapping
+
+The daemon tags every lease with a `kind`. This plugin maps dsh's
+`llm/stream` `options.purpose` onto the canonical kinds in `KIND_MAP`
+(`src/gate.mjs`): `turn`/`interactive-turn` → `interactive-chat`, `subagent`, `judge`,
+`title`/`set-title`, `compaction`/`compact`, `generate`, `image-gen`; anything absent or
+unrecognized falls back to `call`.
+
+**Observed on dsh 0.2.2-rc.1:** `llm/stream` does not pass a `purpose` (or any sibling
+field carrying the call's intent) — every call, including interactive turns, titles and
+compactions, arrives with none, so today **all acquires are `kind: "call"`**. The
+description still carries the session title and turn number, which is what the dashboard
+surfaces; the map is the seam for when dsh starts distinguishing call kinds.
+
 The daemon's loopback defaults (`/run/take-a-number/tan.sock`, `127.0.0.1:4100`) are a
 deliberate universal default for the box this plugin was built for; override with `sock`/
 `tcp` (or `TAN_SOCK`/`TAN_TCP`) anywhere else.
