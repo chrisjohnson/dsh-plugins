@@ -1,0 +1,57 @@
+{
+  "name": "dsh-take-a-number",
+  "version": "0.1.0",
+  "description": "Global model-call queue for DeepSeek Harness: every model call takes a number in its GPU's FIFO queue (the take-a-number daemon), runs under a per-process identity lease, and the host exposes a live box-wide activity panel plus a composer dock for queued sessions.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./src/client.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "take-a-number",
+    "queue",
+    "lease",
+    "concurrency",
+    "gpu"
+  ],
+  "engines": {
+    "node": ">=22.5.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisjohnson/dsh-plugins.git",
+    "directory": "packages/take-a-number"
+  },
+  "homepage": "https://github.com/chrisjohnson/dsh-plugins/tree/main/packages/take-a-number#readme",
+  "bugs": {
+    "url": "https://github.com/chrisjohnson/dsh-plugins/issues"
+  },
+  "dependencies": {
+    "take-a-number": "git+https://github.com/chrisjohnson/take-a-number.git#v0.1.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
