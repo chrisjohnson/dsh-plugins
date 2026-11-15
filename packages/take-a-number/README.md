@@ -14,7 +14,7 @@ standalone dashboard live in [`chrisjohnson/take-a-number`](https://github.com/c
 ## Install
 
 ```sh
-dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-take-a-number-v0.1.0&path:/packages/take-a-number"
+dsh plugin --profile web add "git+https://github.com/chrisjohnson/dsh-plugins.git#dsh-take-a-number-v0.1.1&path:/packages/take-a-number"
 ```
 
 ## Configuration
