@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-11-16
+
+### Fixed
+
+- The browser-facing config accessor is now `browserConfig()`, not `config()`.
+  The instance stores the resolved config object on `this.config`, and an own
+  property shadows a same-named prototype method, so the config RPC called the
+  object and threw `not a function`; the Activity panel then showed its
+  "URL not configured" notice even with `dashboardUrl` set. Regression test
+  added.
+
+## [0.1.7] - 2026-11-16
+
+### Changed
+
+- The Activity panel iframes the daemon's standard dashboard, served at the new
+  `dashboardUrl` config key, instead of re-rendering the queue cards, graph and
+  animations in the browser half (782 → 365 lines). The in-chat `SessionWaitDock`
+  and the sidebar queue badges stay dsh's own.
+- Dead code removed: the `dsh-model-capacity` coexistence check (that plugin is
+  gone) and the `forceRelease`/`setLimits` host endpoints (the standard
+  dashboard calls the daemon's own `/api/*`). A `config` RPC endpoint was added
+  so the browser half learns `dashboardUrl`.
+
+## [0.1.6] - 2026-11-16
+
+### Changed
+
+- Depend on `take-a-number` v0.4.1, which fixes `withLease` holding a
+  model-call stream's lease only until the stream object was created — the lease
+  freed before the first token, so the admission proxy hard-queued the request
+  under its own identity. No plugin code changes.
+
 ## [0.1.5] - 2026-11-16
 
 ### Changed
