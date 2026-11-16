@@ -109,21 +109,6 @@ test('gatedStream: a gate rejection propagates to the caller', async () => {
   await assert.rejects(collect(gatedStream({ enabled: true, queueId: 'q', client: 'c', withLease }, { provider: 'p' }, next)), (error) => error.code === 'NO_SLOT');
 });
 
-test('gatedStream: stamps clientToken on the acquire fields when set, omits when empty', async () => {
-  const withLease = fakeWithLease();
-  const next = async function* () { yield 'a'; };
-  const base = { enabled: true, queueId: 'q', client: 'c', withLease };
-
-  await collect(gatedStream({ ...base, clientToken: 'tok-123' }, { provider: 'p' }, next));
-  assert.equal(withLease.calls[0].fields.clientToken, 'tok-123');
-
-  await collect(gatedStream({ ...base, clientToken: '' }, { provider: 'p' }, next));
-  assert.equal(withLease.calls[1].fields.clientToken, undefined);
-
-  await collect(gatedStream(base, { provider: 'p' }, next));
-  assert.equal(withLease.calls[2].fields.clientToken, undefined);
-});
-
 test('gatedStream: describe() failures are swallowed', async () => {
   const withLease = fakeWithLease();
   const next = async function* () { yield 'a'; };

@@ -5,21 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-11-16
+
+### Changed
+
+- Depend on `take-a-number` v0.3.0 (adds the admission proxy and the daemon
+  `checkout` op).
+
+**No plugin code change.** The admission proxy's compliant path keys on the
+client's **self-identity** — the instance name this plugin already registers
+with the daemon (`web`, `lab-<name>`) — not a secret. The deployment only adds
+a static `x-tan-client: <instance-name>` header to the litellm provider routes
+so the proxy can check this instance's held lease out for its matching request.
+This supersedes the 0.1.3 `clientToken` approach, which is not used.
+
 ## [0.1.3] - 2026-11-16
 
 ### Added
 
 - `clientToken` config (or `TAN_CLIENT_TOKEN` env): a per-instance token stamped
-  on every reservation so the take-a-number **admission proxy** can claim this
-  instance's held lease for its matching HTTP request — the compliant path, where
-  dsh idles in its own queue and forwards without double-queueing. Must match the
-  static `x-tan-client` header in this instance's litellm provider config. Empty
-  (default) leaves the previous hard-queue-only behavior.
+  on every reservation for the admission proxy to claim the matching lease.
 
-### Changed
-
-- Depend on `take-a-number` v0.3.0 (adds the daemon `checkout` op and
-  `TanClient.checkout()`).
+> Superseded by 0.1.4, which drops the token in favor of self-identity. Do not
+> deploy 0.1.3.
 
 ## [0.1.2] - 2026-11-15
 

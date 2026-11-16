@@ -78,7 +78,6 @@ export default class TakeANumber extends Service {
           client: this.client,
           withLease,
           describe: (sessionId) => this.describe(sessionId),
-          clientToken: this.config.clientToken,
         },
         options,
         next,

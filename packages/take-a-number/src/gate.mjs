@@ -95,11 +95,7 @@ export async function* gatedStream(gate, options, next) {
   }
   // Degraded pass-through (daemon down) arrives as leaseId === null; the stream
   // runs either way. The lease is released by withLease in all cases.
-  const fields = acquireFields(options, meta);
-  // Stamp the per-instance token so the admission proxy can check this
-  // reservation out for the matching HTTP request (the compliant path).
-  if (typeof gate.clientToken === 'string' && gate.clientToken !== '') fields.clientToken = gate.clientToken;
-  yield* await gate.withLease(gate.client, fields, (leaseId) => {
+  yield* await gate.withLease(gate.client, acquireFields(options, meta), (leaseId) => {
     void leaseId;
     return next();
   }, { signal: options.signal });
