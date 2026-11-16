@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-11-16
+
+### Changed
+
+- Depend on `take-a-number` v0.4.0 (capability-aware admission: one-time claim
+  tokens for dynamic clients + a 30 s grant TTL).
+- Register this instance's capability as **`static`** explicitly. dsh cannot
+  inject a per-call header (`GenerateOptions` has no `headers` field), so it is
+  admitted by self-identity alone — one request per grant. No behavior change
+  for dsh; the field makes the contract explicit.
+
 ## [0.1.4] - 2026-11-16
 
 ### Changed

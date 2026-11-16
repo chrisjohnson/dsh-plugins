@@ -65,6 +65,9 @@ export default class TakeANumber extends Service {
       tcp: this.config.tcp,
       harness: 'dsh',
       instance: deriveInstance(process.env),
+      // dsh cannot inject a per-call header (GenerateOptions has no `headers`
+      // field), so it admits by self-identity alone — one request per grant.
+      capability: 'static',
     });
     this.client.on('degraded', () => this.log.warn('take-a-number daemon unreachable — passing model calls through (fail-open)'));
     this.client.on('restored', () => this.log.info('take-a-number daemon restored — gating resumed'));
