@@ -1,6 +1,6 @@
 {
   "name": "dsh-take-a-number",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Global model-call queue for DeepSeek Harness: every model call takes a number in its GPU's FIFO queue (the take-a-number daemon), runs under a per-process identity lease, and the host exposes a live box-wide activity panel plus a composer dock for queued sessions.",
   "type": "module",
   "license": "MIT",
@@ -41,7 +41,7 @@
     "url": "https://github.com/chrisjohnson/dsh-plugins/issues"
   },
   "dependencies": {
-    "take-a-number": "git+https://github.com/chrisjohnson/take-a-number.git#v0.4.0"
+    "take-a-number": "git+https://github.com/chrisjohnson/take-a-number.git#v0.4.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=0.2.0-rc.2 <0.3.0-0 || >=0.3.0-0"
