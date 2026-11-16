@@ -181,7 +181,7 @@ export default class TakeANumber extends Service {
   }
 
   /** Browser-facing config: the dashboard URL the Activity panel iframes. */
-  config() {
+  browserConfig() {
     return { dashboardUrl: this.config.dashboardUrl };
   }
 
@@ -204,7 +204,7 @@ export default class TakeANumber extends Service {
               if (typeof p.waiterId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'waiterId is required', details: {} } };
               return { ok: true, value: await this.cancelWaiter(p.waiterId) };
             case 'config':
-              return { ok: true, value: this.config() };
+              return { ok: true, value: this.browserConfig() };
             default:
               return { ok: false, error: { code: 'unknown_endpoint', message: `unknown endpoint ${endpoint}`, details: {} } };
           }
