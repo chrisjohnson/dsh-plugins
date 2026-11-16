@@ -5,6 +5,40 @@
 
 ## Unreleased
 
+## 0.45.0
+
+### Added
+
+- **Two HTTP endpoints for the two things a person does on a running ticket
+  (KAN-94).** External tooling could already create, move, plan-approve, approve
+  and discard tickets over `POST /api/kanban/*`, but the moment a ticket was
+  *running* it could do neither of the two things the page does: say something to
+  the session working on it, and answer the question that session had stopped
+  on. The only fallback was `retry` with an instruction, which throws away the
+  turn the answer was meant to correct.
+  - `POST /api/kanban/message {id, text, mode?}` is the orchestrator's own
+    `kanban_message` path — `managementApi('api').message(...)`, the same
+    `planMessageDelivery` decision, the same steer-or-queue seams — so a note
+    posted from outside lands exactly like one the board's driver posts. The
+    answer reports what actually happened (`injected`, `queued` or
+    `session-gone`, with the `reason` when a steer degraded or the session is
+    gone), and the ticket carries a `note_sent` event with `actor: 'api'` so it
+    is distinguishable from an orchestrator note.
+  - `POST /api/kanban/answerQuestion {id, answers}` answers the ticket session's
+    live `ask_user_question` through core's `userQuestions.answer` service — the
+    call the browser card makes — after refusing, in readable `bad_request`s, a
+    closed ticket, a ticket whose wait is the *approval* prompt (that one stays
+    `approve`/`discard`), a batch whose ids are not the pending ones, and a
+    session that is no longer live. Like the auto-answer path, it writes the
+    `question_answered_by_api` event with the call id and the exact answers
+    **before** claiming the wait, and refuses if that write fails.
+  - The decisions are pure and tested in `src/questions.mjs`
+    (`questionIdsFromCallArgs`, `validateQuestionAnswers`); the host only wires.
+    The driver now carries the ask's raw `arguments` on the human wait
+    (`callArgs`), so the ids an answer is checked against are the ones the model
+    used — after a restart as well as live.
+  - No new config keys, no schema change.
+
 ## 0.44.0
 
 ### Added

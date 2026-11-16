@@ -19,8 +19,9 @@ import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
 import { KanbanOrchestrator, TOOL_OUTPUT } from './orchestrator-host.mjs';
-import { MANAGEMENT_TOOL_SPECS, runManagementTool } from './orchestrator.mjs';
+import { MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES } from './orchestrator.mjs';
 import { managementActor, managementToolWhen } from './agent-tools.mjs';
+import { questionIdsFromCallArgs, validateQuestionAnswers } from './questions.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
 import { TICKET_COLUMNS, SPAN_COLUMNS, USAGE_COLUMNS, toCsv, toJsonl, usageRows } from './export.mjs';
 import { canMarkDone, canRerunReview } from './lifecycle.mjs';
@@ -64,6 +65,11 @@ const ENDPOINTS = [
   'orchestratorSetPaused',
   'orchestratorDetach',
   'setWipCap',
+  // KAN-94: the two things a person does on the ticket page while a ticket is
+  // running — say something to its session, and answer what that session is
+  // waiting on — now reachable by a caller that is not the page.
+  'message',
+  'answerQuestion',
 ];
 
 const message = (error) => (error && error.message ? error.message : String(error));
@@ -790,6 +796,114 @@ export default async function kanban(ctx, config = {}) {
               return { ok: true, value: { ticket: requireTicket(ticket.id) } };
             }
             return fail('bad_request', `unknown action ${action}`);
+          }
+          case 'message': {
+            // KAN-94: the note a person types into a running ticket's session,
+            // posted from outside the page. The delivery decision and every seam
+            // it uses are the orchestrator's own — `managementApi('api')` is the
+            // same `kanban_message` path, so a note posted here lands exactly
+            // like one the board's driver posts, and the only difference is who
+            // the ticket event names.
+            const ticket = requireTicket(String(p.id));
+            const text = typeof p.text === 'string' ? p.text : '';
+            if (text.trim() === '') return fail('bad_request', 'text is required: say what to send to that session');
+            const mode = p.mode === undefined || p.mode === null ? 'queue' : String(p.mode);
+            if (!MESSAGE_MODES.includes(mode)) {
+              return fail('bad_request', `mode must be one of ${MESSAGE_MODES.join(' or ')}`);
+            }
+            const orchestrator = orchestratorRef.current;
+            if (orchestrator === null || orchestrator === undefined) {
+              return fail('unavailable', 'the kanban orchestrator is not running in this host');
+            }
+            const delivery = orchestrator.managementApi('api').message(ticket, text, null, mode);
+            try {
+              store.appendEvent(ticket.id, 'note_sent', {
+                actor: 'api',
+                phaseFrom: ticket.phase,
+                phaseTo: ticket.phase,
+                payload: {
+                  text,
+                  mode,
+                  delivery: delivery.delivery,
+                  sessionId: delivery.sessionId ?? null,
+                  purpose: delivery.purpose ?? null,
+                  ...(delivery.reason === undefined ? {} : { reason: delivery.reason }),
+                },
+              });
+            } catch (error) {
+              // The note is already in the session by now; refusing the call
+              // would only invite a resend. The gap in the log is reported.
+              log.warn('kanban message: could not record note_sent for %s: %s', ticket.id, message(error));
+            }
+            boardFeedRef.current?.notify();
+            return { ok: true, value: delivery };
+          }
+          case 'answerQuestion': {
+            // KAN-94: answer the ask a ticket's session is sitting on. The wait
+            // is the driver's, the ids are the ones the model asked with, and
+            // the answer goes through the same core service the browser card
+            // calls — so this is the card's answer, not a second mechanism that
+            // can drift from it.
+            const ticket = requireTicket(String(p.id));
+            if (ticket.column === 'done' || ticket.column === 'discarded') {
+              return fail('bad_request', `${ticket.key} is ${ticket.column}; a closed ticket has nothing to answer`);
+            }
+            const wait = driver.pendingQuestionFor(ticket.id);
+            if (wait === null) {
+              // The approval prompt is the other thing a card waits on, and it
+              // is answered by `approve`/`discard`, not here.
+              return fail('bad_request', isAwaitingApproval(ticket)
+                ? `${ticket.key} is waiting on an approval prompt, not a question — that one is answered with approve or discard`
+                : `${ticket.key} has no question pending`);
+            }
+            if (wait.id === null || wait.id === undefined) {
+              return fail('bad_request', 'the pending ask carries no call id, so there is nothing to answer it against');
+            }
+            const decision = validateQuestionAnswers({
+              pendingIds: questionIdsFromCallArgs(wait.callArgs),
+              answers: p.answers,
+            });
+            if (!decision.ok) return fail('bad_request', decision.reason);
+            const agent = ctx.get('agents')?.get?.(wait.sessionId);
+            if (agent === undefined || agent === null) {
+              return fail('bad_request', `the session holding the question (${wait.sessionId}) is no longer live in this process`);
+            }
+            const service = ctx.get('userQuestions');
+            if (typeof service?.answer !== 'function') {
+              return fail('unavailable', 'the user-questions service is not mounted, so a pending question cannot be answered over HTTP');
+            }
+            // The audit trail is written before the wait is claimed, exactly as
+            // the auto-answer path does it: an unlogged answer is an answer
+            // nobody can review. What it cannot undo is a claim the service then
+            // refuses — a reply already queued, or a question the session has
+            // settled in the meantime — and that event stands as the record of
+            // the attempt.
+            try {
+              store.appendEvent(ticket.id, 'question_answered_by_api', {
+                actor: 'api',
+                phaseFrom: ticket.phase,
+                phaseTo: ticket.phase,
+                payload: { callId: wait.id, answers: decision.answers },
+              });
+            } catch (error) {
+              return fail('internal', `the answer was not recorded, so it was not sent: ${message(error)}`);
+            }
+            try {
+              if (service.answer(agent, wait.id, { answers: decision.answers }) !== true) {
+                return fail('bad_request', 'the question is no longer pending');
+              }
+            } catch (error) {
+              const code = error?.code;
+              if (code === 'REPLY_QUEUED') {
+                return fail('bad_request', 'an answer for that question is already queued; the session has not admitted it yet');
+              }
+              if (code === 'BAD_ANSWER') {
+                return fail('bad_request', `the answer does not match the pending question: ${message(error)}`);
+              }
+              return fail('bad_request', message(error));
+            }
+            boardFeedRef.current?.notify();
+            return { ok: true, value: { answered: true, callId: wait.id, sessionId: wait.sessionId } };
           }
           case 'reorder': {
             // Drop a ticket before another one of its column (or at the end when

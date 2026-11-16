@@ -13,9 +13,11 @@ import assert from 'node:assert/strict'
 import {
   askUserToolDefinition,
   makeQuestionAnswerer,
+  questionIdsFromCallArgs,
   questionsFromCallArgs,
   recommendedAnswer,
   sanitizeQuestions,
+  validateQuestionAnswers,
 } from '../src/questions.mjs'
 
 // ------------------------------------------------------- recommendedAnswer --
@@ -438,4 +440,146 @@ test('a batch with one usable entry among junk still shows that one', () => {
   assert.deepEqual(questionsFromCallArgs({ questions: [null, { question: 'Real?' }, { id: 'x' }] }), [
     { question: 'Real?', options: [] },
   ])
+})
+
+// ------------------------------------------------ questionIdsFromCallArgs --
+//
+// KAN-94: the same `tool/call` arguments, read for their ids instead of their
+// text. This one is an authorisation path — an answer posted over HTTP is only
+// accepted when it names the pending batch — so where the display reader skips
+// what it cannot read, this one refuses the whole batch: a partial id list would
+// turn a complete answer into an "extra id" refusal, or worse, let an answer
+// through that missed a question nobody is holding an id for.
+
+const IDS_ARGS = JSON.stringify({
+  questions: [
+    { id: 'restart', question: 'Is the restart owed now?', options: [{ label: 'Yes (Recommended)' }] },
+    { id: 'scope', question: 'Which packages?', options: [{ label: 'kanban' }] },
+  ],
+})
+
+test('the ids of a well-formed batch come back in the order they were asked', () => {
+  assert.deepEqual(questionIdsFromCallArgs(IDS_ARGS), ['restart', 'scope'])
+  assert.deepEqual(questionIdsFromCallArgs({ questions: [{ id: 'a', question: 'a?' }] }), ['a'])
+})
+
+test('an already-parsed arguments object and a bare array read the same way', () => {
+  assert.deepEqual(questionIdsFromCallArgs({ questions: [{ id: 'a' }, { id: 'b' }] }), ['a', 'b'])
+  assert.deepEqual(questionIdsFromCallArgs([{ id: 'a' }, { id: 'b' }]), ['a', 'b'])
+})
+
+test('a batch whose ids the model left out or repeated is not a batch to check against', () => {
+  // `sanitizeQuestions` assigns these ids itself, so the service is holding ids
+  // that are not in the call — answering against the call would be a guess.
+  assert.equal(questionIdsFromCallArgs({ questions: [{ question: 'a?' }, { id: 'b', question: 'b?' }] }), null)
+  assert.equal(questionIdsFromCallArgs({ questions: [{ id: 'dup' }, { id: 'dup' }] }), null)
+  assert.equal(questionIdsFromCallArgs({ questions: [{ id: '  ', question: 'a?' }] }), null)
+})
+
+test('anything unreadable is null, never a throw and never a partial id list', () => {
+  assert.equal(questionIdsFromCallArgs(undefined), null)
+  assert.equal(questionIdsFromCallArgs(null), null)
+  assert.equal(questionIdsFromCallArgs('not json at all'), null)
+  assert.equal(questionIdsFromCallArgs('{}'), null, 'no questions key')
+  assert.equal(questionIdsFromCallArgs('{"questions":[]}'), null, 'an empty batch')
+  assert.equal(questionIdsFromCallArgs({ questions: [null] }), null, 'a junk entry voids the batch')
+  assert.equal(questionIdsFromCallArgs({ questions: ['nope'] }), null)
+  assert.equal(questionIdsFromCallArgs(42), null)
+  assert.equal(questionIdsFromCallArgs('[]'), null)
+})
+
+// ------------------------------------------------- validateQuestionAnswers --
+//
+// KAN-94: is this answer batch the answer to that pending question? The core
+// service checks the same thing, but only after the ticket event has been
+// written — and the board's rule is that the log describes answers that
+// happened. So the shape and the ids are settled here, before anything is
+// claimed, and a refusal costs nothing.
+
+const PENDING = ['restart', 'scope']
+
+test('a batch that names every pending question once is accepted as written', () => {
+  assert.deepEqual(
+    validateQuestionAnswers({
+      pendingIds: PENDING,
+      answers: [
+        { id: 'restart', selected: ['Yes (Recommended)'] },
+        { id: 'scope', selected: [], custom: 'just the kanban package' },
+      ],
+    }),
+    {
+      ok: true,
+      answers: [
+        { id: 'restart', selected: ['Yes (Recommended)'] },
+        { id: 'scope', selected: [], custom: 'just the kanban package' },
+      ],
+    },
+  )
+})
+
+test('an answer that misses a pending question is refused by name', () => {
+  const out = validateQuestionAnswers({ pendingIds: PENDING, answers: [{ id: 'restart', selected: ['Yes'] }] })
+  assert.equal(out.ok, false)
+  assert.match(out.reason, /does not cover the pending question\(s\): scope/)
+})
+
+test('an answer that names a question nobody asked is refused by name', () => {
+  const out = validateQuestionAnswers({
+    pendingIds: PENDING,
+    answers: [
+      { id: 'restart', selected: ['Yes'] },
+      { id: 'scope', selected: ['kanban'] },
+      { id: 'made-up', selected: ['x'] },
+    ],
+  })
+  assert.equal(out.ok, false)
+  assert.match(out.reason, /not pending: made-up/)
+})
+
+test('an answer that names one question twice is refused', () => {
+  const out = validateQuestionAnswers({
+    pendingIds: ['restart'],
+    answers: [{ id: 'restart', selected: ['Yes'] }, { id: 'restart', selected: ['No'] }],
+  })
+  assert.equal(out.ok, false)
+  assert.match(out.reason, /names "restart" twice/)
+})
+
+test('answers that are not a batch of entries are refused', () => {
+  for (const bad of [undefined, null, 'restart=Yes', {}, [], 42]) {
+    assert.equal(validateQuestionAnswers({ pendingIds: PENDING, answers: bad }).ok, false, JSON.stringify(bad))
+  }
+})
+
+test('a malformed entry says which one and why', () => {
+  const cases = [
+    [{ id: 'restart' }, /answers\[0\]\.selected/],
+    [{ id: 'restart', selected: 'Yes' }, /answers\[0\]\.selected must be an array/],
+    [{ id: 'restart', selected: [7] }, /must hold only strings/],
+    [{ id: 'restart', selected: ['Yes'], custom: 7 }, /custom must be a string/],
+    [{ selected: ['Yes'] }, /answers\[0\] has no id/],
+    ['restart', /answers\[0\] must be an object/],
+    [null, /answers\[0\] must be an object/],
+  ]
+  for (const [entry, pattern] of cases) {
+    const out = validateQuestionAnswers({ pendingIds: ['restart'], answers: [entry] })
+    assert.equal(out.ok, false, JSON.stringify(entry))
+    assert.match(out.reason, pattern)
+  }
+})
+
+test('a pending batch with no readable ids is a refusal, not a guess', () => {
+  for (const pendingIds of [null, undefined, [], 'restart']) {
+    const out = validateQuestionAnswers({ pendingIds, answers: [{ id: 'restart', selected: ['Yes'] }] })
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /no readable ids/)
+  }
+})
+
+test('the accepted answers are copies, so a caller cannot change the log after the fact', () => {
+  const answers = [{ id: 'restart', selected: ['Yes'] }]
+  const out = validateQuestionAnswers({ pendingIds: ['restart'], answers })
+  assert.equal(out.ok, true)
+  out.answers[0].selected.push('tampered')
+  assert.deepEqual(answers[0].selected, ['Yes'])
 })

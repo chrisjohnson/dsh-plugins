@@ -872,7 +872,7 @@ test('the five management tools are registered globally, hidden from board sessi
   const host = files['host.mjs']
   // One shared spec list, not a paraphrase: the guards and refusals an ordinary
   // session meets are the orchestrator's.
-  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool \} from '\.\/orchestrator\.mjs'/)
+  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool[^}]*\} from '\.\/orchestrator\.mjs'/)
   assert.match(host, /for \(const spec of MANAGEMENT_TOOL_SPECS\)/)
   assert.match(host, /runManagementTool\(spec\.name/)
   // Registered on the tools service for every scope, the same way dsh-model-switch
@@ -890,4 +890,124 @@ test('the five management tools are registered globally, hidden from board sessi
   // The decision module stays pure so it is testable on a bare clone.
   assert.equal(/^\s*import[^\n]*@deepseek-ai/m.test(files['agent-tools.mjs']), false, 'agent-tools.mjs must import nothing from the harness')
   assert.equal(/store\.findSession/.test(files['agent-tools.mjs']), true)
+})
+
+// ------------------------------------------------------------------- KAN-94 --
+//
+// The two endpoints an outside caller needs to behave like the person standing at
+// the ticket page: post a note into the ticket's live session, and answer the
+// question that session is waiting on. What is pinned here is the wiring — that
+// each one goes through the path the board already owns rather than a second
+// implementation of it, that every refusal is a readable `bad_request`, and that
+// the audit event is written before the answer is claimed. The decisions
+// themselves (which ids are pending, whether an answer matches them) are pure
+// and tested in questions.test.mjs.
+
+/** The body of one `case '<name>': { ... }` of the host's endpoint handler. */
+function endpointCase(host, name) {
+  const start = host.indexOf(`case '${name}': {`)
+  assert.ok(start >= 0, `host.mjs has no case '${name}'`)
+  const end = host.indexOf('\n          case ', start + 1)
+  return host.slice(start, end === -1 ? host.length : end)
+}
+
+test('message and answerQuestion are registered endpoints', async () => {
+  const host = (await sources())['host.mjs']
+  assert.match(host, /'message',/, 'message must be in ENDPOINTS so the route is registered')
+  assert.match(host, /'answerQuestion',/, 'answerQuestion must be in ENDPOINTS so the route is registered')
+  assert.match(host, /for \(const endpoint of ENDPOINTS\)/, 'registration stays the loop over ENDPOINTS')
+})
+
+test('message is the orchestrator kanban_message path, credited to the caller', async () => {
+  const host = (await sources())['host.mjs']
+  const body = endpointCase(host, 'message')
+  // One ticket id, one text, an optional mode — and the same closed vocabulary
+  // the tool guards with, imported rather than restated.
+  assert.match(body, /requireTicket\(String\(p\.id\)\)/)
+  assert.match(body, /text is required/)
+  assert.match(body, /MESSAGE_MODES\.includes\(mode\)/)
+  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES \} from '\.\/orchestrator\.mjs'/)
+  assert.match(body, /mode === undefined \|\| p\.mode === null \? 'queue'/, 'the default is queue, like the tool')
+  // The delivery decision is the orchestrator's own seam, with the caller as
+  // its actor — not a re-implementation of steer/followup in the host.
+  assert.match(body, /orchestratorRef\.current/)
+  assert.match(body, /managementApi\('api'\)\.message\(ticket, text, null, mode\)/)
+  assert.equal(/\.steer\(|\.followup\(/.test(body), false, 'the host must not pick the delivery seam itself')
+  // The answer is what the delivery decision said, so the caller learns
+  // injected | queued | session-gone instead of a bare ok.
+  assert.match(body, /return \{ ok: true, value: delivery \}/)
+  // And the ticket log says the api said it, with the outcome attached.
+  assert.match(body, /'note_sent'/)
+  assert.match(body, /actor: 'api'/)
+  assert.match(body, /delivery: delivery\.delivery/)
+  assert.match(body, /sessionId: delivery\.sessionId \?\? null/)
+  assert.match(body, /purpose: delivery\.purpose \?\? null/)
+  // A failed audit write never claims the note was not sent: it is already in
+  // the session, so the gap is logged, not thrown back at the caller.
+  assert.match(body, /could not record note_sent/)
+})
+
+test('answerQuestion refuses everything it cannot honestly answer', async () => {
+  const host = (await sources())['host.mjs']
+  const body = endpointCase(host, 'answerQuestion')
+  assert.match(body, /requireTicket\(String\(p\.id\)\)/)
+  // A closed ticket is refused before anything is read: its session is gone and
+  // an answer would resurrect a turn nobody is driving.
+  assert.match(body, /ticket\.column === 'done' \|\| ticket\.column === 'discarded'/)
+  assert.match(body, /a closed ticket has nothing to answer/)
+  // The wait is the driver's live one, so a ticket with nothing pending says so
+  // — and names the approval prompt as the other thing a card waits on, because
+  // that one is `approve`/`discard` and no amount of retrying here will answer
+  // it.
+  assert.match(body, /driver\.pendingQuestionFor\(ticket\.id\)/)
+  assert.match(body, /isAwaitingApproval\(ticket\)/)
+  assert.match(body, /approval prompt, not a question/)
+  assert.match(body, /has no question pending/)
+  assert.match(body, /no call id/, 'an ask with no callId cannot be keyed to an answer')
+  // The id check is the pure module's, not a paraphrase in the wiring.
+  assert.match(host, /import \{ questionIdsFromCallArgs, validateQuestionAnswers \} from '\.\/questions\.mjs'/)
+  assert.match(body, /questionIdsFromCallArgs\(wait\.callArgs\)/)
+  assert.match(body, /validateQuestionAnswers\(\{/)
+  assert.match(body, /if \(!decision\.ok\) return fail\('bad_request', decision\.reason\)/)
+  // The session must still be here, and the service must be mounted, before
+  // anything is written down: a refusal must not leave an event claiming an
+  // answer that never happened.
+  assert.match(body, /ctx\.get\('agents'\)\?\.get\?\.\(wait\.sessionId\)/)
+  assert.match(body, /no longer live in this process/)
+  assert.match(body, /ctx\.get\('userQuestions'\)/)
+  assert.match(body, /user-questions service is not mounted/)
+  const order = [
+    body.indexOf("'question_answered_by_api'"),
+    body.indexOf('service.answer('),
+  ]
+  assert.ok(order[0] > 0 && order[1] > order[0], 'the answer is logged before the wait is claimed')
+  assert.match(body, /payload: \{ callId: wait\.id, answers: decision\.answers \}/)
+  assert.match(body, /the answer was not recorded, so it was not sent/)
+  // The claim is core's own service call, the one the UI card makes; its
+  // refusals come back as readable messages, and a question that settled in the
+  // meantime is not reported as answered.
+  assert.match(body, /service\.answer\(agent, wait\.id, \{ answers: decision\.answers \}\)/)
+  assert.match(body, /!== true/)
+  assert.match(body, /the question is no longer pending/)
+  assert.match(body, /REPLY_QUEUED/)
+  assert.match(body, /BAD_ANSWER/)
+  assert.match(body, /return \{ ok: true, value: \{ answered: true, callId: wait\.id, sessionId: wait\.sessionId \} \}/)
+})
+
+test('the question id and answer checks stay in the pure module', async () => {
+  const questions = (await sources())['questions.mjs']
+  assert.match(questions, /export function questionIdsFromCallArgs/)
+  assert.match(questions, /export function validateQuestionAnswers/)
+  assert.equal(/from '@deepseek-ai\//.test(questions), false, 'questions.mjs must import nothing from dsh')
+  assert.equal(/from 'node:/.test(questions), false, 'and nothing from node either')
+})
+
+test('the driver carries the raw ask arguments so an answer can be checked against them', async () => {
+  const dispatch = (await sources())['dispatch.mjs']
+  // Both paths that open a question wait — the live event and the restart scan —
+  // must keep the arguments, or an answer posted after a restart has nothing to
+  // be matched against.
+  assert.equal((dispatch.match(/callArgs: /g) || []).length, 2, 'one on the live wait, one on the seeded wait')
+  assert.match(dispatch, /callArgs: event\.data\?\.arguments \?\? null/)
+  assert.match(dispatch, /callArgs: question\.arguments \?\? null/)
 })

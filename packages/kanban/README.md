@@ -492,6 +492,13 @@ show an "Opening…" state while they work and print the failure (the session is
 not in the list, the session view is unavailable, or the open threw) next to the
 button instead of doing nothing.
 
+A *live* ask — the session genuinely paused inside `ask_user_question` — can also
+be answered without opening the page at all, and a running session can be sent a
+note: `POST /api/kanban/answerQuestion` and `POST /api/kanban/message`, under
+**Talking to a running ticket from outside the page** below. A parked one (the
+turn ended on the question) is not a live wait, and is lifted by a retry or a
+note.
+
 ### Permission prompts are not stalls
 
 A turn waiting on a permission prompt or a question is paused on a person, not
@@ -1113,6 +1120,63 @@ It answers `bad_request` for any ticket that is not in Backlog at the build
 phase; `{"id": ..., "column": "working"}` on `move` is the unguarded equivalent.
 `reorder` takes `{id, beforeId}`; an absent or null `beforeId` means the end of
 the column, and the dropped ticket adopts the priority of the tier it lands in.
+
+### Talking to a running ticket from outside the page (0.45.0)
+
+Two things a person does on the ticket page while a ticket is running are now
+reachable over HTTP, on the same authenticated `/api/kanban` fence, for a caller
+that is not the browser — a script, or another agent driving the board.
+
+**Say something to the session.** `message` is the orchestrator's own
+`kanban_message` path with the caller credited instead of the orchestrator:
+
+```text
+POST /api/kanban/message  {"id": "<ticket id>", "text": "<the note>", "mode": "queue"}
+```
+
+`mode` is optional and defaults to `queue` — the note arrives as that session's
+next input, after the turn in flight. `"steer"` interrupts the turn in flight
+through the same seam a human steering a session in the GUI uses, and degrades to
+a queue when nothing is mid-turn. The answer reports what actually happened
+rather than a bare `ok`: `{"delivery": "injected" | "queued" | "session-gone",
+"sessionId": ..., "purpose": "plan" | "build" | "verify", "reason": ...}`, where
+`reason` explains a degrade or a session that is no longer there. An unknown
+`mode` or an empty `text` is `bad_request`; an id that is not on the board is
+`not_found`, as on every other ticket endpoint. The note is recorded on the
+ticket as a `note_sent` event with `actor: "api"`, carrying the
+text, the mode and the delivery it got, so a note sent from outside is
+distinguishable from one the orchestrator sent. Inside the session it still
+arrives under the `[orchestrator]` label the board's own notes carry — who typed
+it is on the ticket, not in the transcript.
+
+**Answer what the session is waiting on.** When a ticket's card says **Waiting on
+you**, its session is paused mid-turn on an `ask_user_question`; until now the
+only way to answer it was the browser card, and the fallback for anything else
+was a `retry`, which throws the turn away. `answerQuestion` posts the answer
+through the same core service the card calls:
+
+```text
+POST /api/kanban/answerQuestion  {"id": "<ticket id>", "answers": [
+  {"id": "<question id>", "selected": ["<option label>"]},
+  {"id": "<question id>", "selected": [], "custom": "<free text>"}
+]}
+```
+
+One entry per question of the pending batch, keyed by the `id` the model gave it.
+A refused batch names the ids it expected, so a first call that does not know
+them learns them from the refusal. An empty `selected` with a `custom` is how the
+card sends free text or a skip, and it is accepted here the same way. The answer
+is written to the ticket as a `question_answered_by_api` event with
+`actor: "api"`, carrying the call id and the exact answers, **before** the wait
+is claimed — an answer nobody can review is an answer that should not have been
+given. Every refusal answers `bad_request` with a reason that says what to do
+instead — the ticket is Done or Discarded; no question is pending; the ticket is
+waiting on an *approval* prompt (that one is `approve` or `discard`, never this);
+the batch does not name the pending questions exactly once; the session holding
+it is no longer live. An id that is not on the board is `not_found`, as on every
+other ticket endpoint. A question the session settled in the meantime is refused
+as no longer pending rather than reported as answered. `unavailable` says the
+harness has no user-questions service mounted at all.
 
 A card with a session carries a small jump icon that opens its active session,
 else its latest. On the ticket page the progress steps link the same way: Plan to
