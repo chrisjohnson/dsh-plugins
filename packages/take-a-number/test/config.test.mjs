@@ -28,6 +28,16 @@ test('non-loopback tcp is refused', () => {
   assert.equal(config.tcp, '127.0.0.1:9999');
 });
 
+test('clientToken: defaults empty, accepts a string, env override wins', () => {
+  const { config } = resolveConfig({}, {});
+  assert.equal(config.clientToken, '');
+  const { config: withToken } = resolveConfig({ clientToken: 'tok-abc' }, {});
+  assert.equal(withToken.clientToken, 'tok-abc');
+  const { config: envToken } = resolveConfig({ clientToken: 'deploy' }, { TAN_CLIENT_TOKEN: 'from-env' });
+  assert.equal(envToken.clientToken, 'from-env');
+  assert.throws(() => resolveConfig({ clientToken: 123 }, {}), ConfigError);
+});
+
 test('environment overrides TAN_SOCK and TAN_TCP', () => {
   const { config } = resolveConfig({}, { TAN_SOCK: '/tmp/tan.sock', TAN_TCP: '127.0.0.1:4200' });
   assert.equal(config.sock, '/tmp/tan.sock');

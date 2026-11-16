@@ -14,6 +14,13 @@ export const DEFAULT_CONFIG = {
   tcp: '127.0.0.1:4100',
   /** `{provider, queue}` entries: which take-a-number queue a provider route uses. */
   queues: [],
+  /**
+   * Per-instance token stamped on every reservation so the admission proxy can
+   * claim this instance's held lease for its matching HTTP request (the
+   * compliant path). Must match the static `x-tan-client` header in this
+   * instance's litellm provider config. Empty = no token (hard-queue only).
+   */
+  clientToken: '',
 };
 
 const TOP_LEVEL = new Set(Object.keys(DEFAULT_CONFIG));
@@ -63,6 +70,7 @@ export function resolveConfig(input = {}, env = process.env) {
     throw new ConfigError('must be a loopback address (127.0.0.1[:port] or localhost[:port])', 'tcp');
   }
   if (!Array.isArray(config.queues)) throw new ConfigError('must be an array', 'queues');
+  if (typeof config.clientToken !== 'string') throw new ConfigError('must be a string (empty = none)', 'clientToken');
 
   const seen = new Set();
   config.queues = config.queues.map((entry, index) => {
@@ -81,6 +89,7 @@ export function resolveConfig(input = {}, env = process.env) {
   // Environment overrides, then the deployment config (already merged in).
   if (isNonEmptyString(env.TAN_SOCK)) config.sock = env.TAN_SOCK;
   if (isNonEmptyString(env.TAN_TCP)) config.tcp = env.TAN_TCP;
+  if (isNonEmptyString(env.TAN_CLIENT_TOKEN)) config.clientToken = env.TAN_CLIENT_TOKEN;
 
   return { config, warnings };
 }

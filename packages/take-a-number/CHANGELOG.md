@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-11-16
+
+### Added
+
+- `clientToken` config (or `TAN_CLIENT_TOKEN` env): a per-instance token stamped
+  on every reservation so the take-a-number **admission proxy** can claim this
+  instance's held lease for its matching HTTP request — the compliant path, where
+  dsh idles in its own queue and forwards without double-queueing. Must match the
+  static `x-tan-client` header in this instance's litellm provider config. Empty
+  (default) leaves the previous hard-queue-only behavior.
+
+### Changed
+
+- Depend on `take-a-number` v0.3.0 (adds the daemon `checkout` op and
+  `TanClient.checkout()`).
+
 ## [0.1.2] - 2026-11-15
 
 ### Changed
