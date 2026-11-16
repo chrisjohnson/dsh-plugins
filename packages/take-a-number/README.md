@@ -28,6 +28,7 @@ The bundle layer ships an empty `config:` block; the plugin resolves
 | `sock`     | `TAN_SOCK`  | `/run/take-a-number/tan.sock` | UDS path of the take-a-number daemon.                          |
 | `tcp`      | `TAN_TCP`   | `127.0.0.1:4100`              | TCP fallback; must be loopback.                                |
 | `queues`   | —           | `[]`                          | `[{provider, queue}]` — which daemon queue a provider route uses. |
+| `dashboardUrl` | —       | `""`                          | Public URL of the daemon's **standard dashboard**. The Activity page iframes it instead of re-rendering the queue. Must be an `http(s)` URL; empty (the default) leaves the page with a notice naming this key instead of a dashboard. |
 
 Example (the local-ai-machine deployment):
 
