@@ -1141,8 +1141,9 @@ a queue when nothing is mid-turn. The answer reports what actually happened
 rather than a bare `ok`: `{"delivery": "injected" | "queued" | "session-gone",
 "sessionId": ..., "purpose": "plan" | "build" | "verify", "reason": ...}`, where
 `reason` explains a degrade or a session that is no longer there. An unknown
-`mode`, an empty `text` or an unknown ticket is `bad_request`. The note is
-recorded on the ticket as a `note_sent` event with `actor: "api"`, carrying the
+`mode` or an empty `text` is `bad_request`; an id that is not on the board is
+`not_found`, as on every other ticket endpoint. The note is recorded on the
+ticket as a `note_sent` event with `actor: "api"`, carrying the
 text, the mode and the delivery it got, so a note sent from outside is
 distinguishable from one the orchestrator sent. Inside the session it still
 arrives under the `[orchestrator]` label the board's own notes carry — who typed
@@ -1168,13 +1169,14 @@ card sends free text or a skip, and it is accepted here the same way. The answer
 is written to the ticket as a `question_answered_by_api` event with
 `actor: "api"`, carrying the call id and the exact answers, **before** the wait
 is claimed — an answer nobody can review is an answer that should not have been
-given. Refusals are all `bad_request` with a reason that says what to do instead:
-the ticket is Done or Discarded; no question is pending; the ticket is waiting on
-an *approval* prompt (that one is `approve` or `discard`, never this); the batch
-does not name the pending questions exactly once; the session holding it is no
-longer live. A question the session settled in the meantime is refused as no
-longer pending rather than reported as answered. `unavailable` says the harness
-has no user-questions service mounted at all.
+given. Every refusal answers `bad_request` with a reason that says what to do
+instead — the ticket is Done or Discarded; no question is pending; the ticket is
+waiting on an *approval* prompt (that one is `approve` or `discard`, never this);
+the batch does not name the pending questions exactly once; the session holding
+it is no longer live. An id that is not on the board is `not_found`, as on every
+other ticket endpoint. A question the session settled in the meantime is refused
+as no longer pending rather than reported as answered. `unavailable` says the
+harness has no user-questions service mounted at all.
 
 A card with a session carries a small jump icon that opens its active session,
 else its latest. On the ticket page the progress steps link the same way: Plan to
