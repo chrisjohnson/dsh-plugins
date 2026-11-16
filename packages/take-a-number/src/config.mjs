@@ -14,6 +14,12 @@ export const DEFAULT_CONFIG = {
   tcp: '127.0.0.1:4100',
   /** `{provider, queue}` entries: which take-a-number queue a provider route uses. */
   queues: [],
+  /**
+   * Public URL of the standard take-a-number dashboard (served by the daemon,
+   * fronted by Caddy). The Activity panel iframes this instead of re-rendering
+   * the queue itself. Empty = the panel shows a plain link fallback.
+   */
+  dashboardUrl: '',
 };
 
 const TOP_LEVEL = new Set(Object.keys(DEFAULT_CONFIG));
@@ -63,6 +69,10 @@ export function resolveConfig(input = {}, env = process.env) {
     throw new ConfigError('must be a loopback address (127.0.0.1[:port] or localhost[:port])', 'tcp');
   }
   if (!Array.isArray(config.queues)) throw new ConfigError('must be an array', 'queues');
+  if (typeof config.dashboardUrl !== 'string') throw new ConfigError('must be a string', 'dashboardUrl');
+  if (config.dashboardUrl !== '' && !/^https?:\/\/\S+$/.test(config.dashboardUrl)) {
+    throw new ConfigError('must be an http(s) URL', 'dashboardUrl');
+  }
 
   const seen = new Set();
   config.queues = config.queues.map((entry, index) => {

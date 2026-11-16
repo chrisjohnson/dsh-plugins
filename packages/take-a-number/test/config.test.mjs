@@ -30,6 +30,13 @@ test('non-loopback tcp is refused', () => {
 
 
 
+test('dashboardUrl: empty by default, http(s) accepted, bare string rejected', () => {
+  assert.equal(resolveConfig({}, {}).config.dashboardUrl, '');
+  assert.equal(resolveConfig({ dashboardUrl: 'https://take-a-number.local-ai-machine.johnsonlab.dev' }, {}).config.dashboardUrl, 'https://take-a-number.local-ai-machine.johnsonlab.dev');
+  assert.throws(() => resolveConfig({ dashboardUrl: 'not a url' }, {}), ConfigError);
+  assert.throws(() => resolveConfig({ dashboardUrl: 123 }, {}), ConfigError);
+});
+
 test('environment overrides TAN_SOCK and TAN_TCP', () => {
   const { config } = resolveConfig({}, { TAN_SOCK: '/tmp/tan.sock', TAN_TCP: '127.0.0.1:4200' });
   assert.equal(config.sock, '/tmp/tan.sock');

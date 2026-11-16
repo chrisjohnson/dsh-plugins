@@ -4,11 +4,7 @@
 // every `llm/stream` call: mapped provider routes take a number in their GPU's
 // queue, unmapped routes pass through. The daemon is the single source of
 // truth for the whole box (every dsh instance, opencode, …), so the panel this
-// plugin serves shows box-wide activity, not just this process.
-//
-// Coexistence: if dsh-model-capacity is also mounted (its `capacity` service
-// is present), this plugin refuses to gate — two gates on the same call would
-// double-queue it. The panel still works.
+ // plugin serves shows box-wide activity, not just this process.
 
 import { Service } from '@deepseek-ai/cordis';
 import { TanClient, withLease } from 'take-a-number/client';
@@ -19,7 +15,7 @@ import { gatedStream } from './gate.mjs';
 const PLUGIN_NAME = 'dsh-take-a-number';
 const API_BASE = '/api/takeANumber';
 const STREAM_ENDPOINT = 'stream';
-const ENDPOINTS = ['snapshot', 'cancelWaiter', 'forceRelease', 'setLimits'];
+const ENDPOINTS = ['snapshot', 'cancelWaiter', 'config'];
 const META_MAX_AGE_MS = 10000;
 
 export default class TakeANumber extends Service {
@@ -30,7 +26,6 @@ export default class TakeANumber extends Service {
     for (const warning of warnings) this.log.warn(warning);
     this.config = resolved;
     this.client = null;
-    this.coexisting = false;
     this.sessionMeta = new Map();
     this.metaError = null;
     this.metaUpdatedAt = null;
@@ -45,21 +40,9 @@ export default class TakeANumber extends Service {
     }, `${PLUGIN_NAME}: lifecycle`);
   }
 
-  #reportCoexistence() {
-    const capacity = this.ctx.get('capacity');
-    this.coexisting = capacity !== undefined && capacity !== null;
-    if (this.coexisting) {
-      this.log.error(
-        'dsh-model-capacity is also mounted; take-a-number will NOT gate model calls to avoid double-queueing. ' +
-        'Remove the model-capacity row from the profile to hand gating to the machine-wide queue.',
-      );
-    }
-  }
-
   async start() {
     if (this.started) return;
     this.started = true;
-    this.#reportCoexistence();
     this.client = new TanClient({
       sock: this.config.sock,
       tcp: this.config.tcp,
@@ -93,7 +76,7 @@ export default class TakeANumber extends Service {
   }
 
   #gatingEnabled() {
-    return isEnabled(this.config) && !this.coexisting;
+    return isEnabled(this.config);
   }
 
   stop() {
@@ -197,13 +180,9 @@ export default class TakeANumber extends Service {
     return { cancelled: (await this.client?.cancel(waiterId))?.cancelled === true };
   }
 
-  async forceRelease(leaseId) {
-    return { released: (await this.client?.forceRelease(leaseId))?.released === true };
-  }
-
-  async setLimits(payload) {
-    const result = await this.client?.setLimits(payload);
-    return result === null ? { ok: false, error: 'daemon unreachable' } : { ok: true };
+  /** Browser-facing config: the dashboard URL the Activity panel iframes. */
+  config() {
+    return { dashboardUrl: this.config.dashboardUrl };
   }
 
   // -------------------------------------------------------------------- routes
@@ -224,13 +203,8 @@ export default class TakeANumber extends Service {
             case 'cancelWaiter':
               if (typeof p.waiterId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'waiterId is required', details: {} } };
               return { ok: true, value: await this.cancelWaiter(p.waiterId) };
-            case 'forceRelease':
-              if (typeof p.leaseId !== 'string') return { ok: false, error: { code: 'bad_request', message: 'leaseId is required', details: {} } };
-              return { ok: true, value: await this.forceRelease(p.leaseId) };
-            case 'setLimits': {
-              if (!Array.isArray(p.queues)) return { ok: false, error: { code: 'bad_request', message: 'queues array is required', details: {} } };
-              return { ok: true, value: await this.setLimits(p) };
-            }
+            case 'config':
+              return { ok: true, value: this.config() };
             default:
               return { ok: false, error: { code: 'unknown_endpoint', message: `unknown endpoint ${endpoint}`, details: {} } };
           }
