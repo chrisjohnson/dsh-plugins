@@ -47,6 +47,12 @@
 //
 // The module imports nothing from `@deepseek-ai/*`, so the whole matrix is
 // testable on a bare clone.
+//
+// KAN-94 added the other half of what a waiting question needs, and it lives
+// here for the same reason: `questionIdsFromCallArgs` reads the ids of the batch
+// a session is stopped on, and `validateQuestionAnswers` decides whether a
+// posted answer is that batch's answer. The HTTP endpoint that uses them is
+// `POST /api/kanban/answerQuestion` in src/host.mjs — wiring, no decisions.
 
 /** The ticket phases whose questions this module may ever answer. */
 const ANSWERABLE_PHASES = new Set(['plan', 'implement', 'review']);
@@ -322,6 +328,116 @@ export function questionsFromCallArgs(argumentsText) {
     });
   }
   return questions.length > 0 ? questions : null;
+}
+
+/**
+ * The question ids of an `ask_user_question` call, read back out of the raw
+ * `arguments` of its `tool/call` event (KAN-94).
+ *
+ * `questionsFromCallArgs` above is the *display* path: it keeps the text and
+ * skips whatever it cannot read, because showing three of four questions is
+ * better than showing none. This is the *authorisation* path for
+ * `POST /api/kanban/answerQuestion`: an answer is only accepted when it names
+ * the pending batch exactly, so a batch whose ids cannot be read completely is
+ * not a batch to check an answer against — it returns null and the caller
+ * refuses instead of guessing. Guessing here would mean answering a question
+ * nobody asked, or claiming a pending ask is not there.
+ *
+ * The same never-throws bar applies: a JSON string, an already-parsed object,
+ * or a bare array all read the same way, and junk returns null. Unlike the
+ * display path, an entry that is not an object or that carries no usable `id`
+ * voids the whole batch rather than being skipped: the tolerant ask tool assigns
+ * missing ids itself (`sanitizeQuestions`), so the ids the service is holding
+ * for that call are not the ones written here, and a duplicate id means the
+ * same thing.
+ *
+ * @param {unknown} argumentsText - the `arguments` of the ask's `tool/call` event
+ * @returns {string[]|null} the ids in the order they were asked, or null when
+ *   the batch cannot be read exactly
+ */
+export function questionIdsFromCallArgs(argumentsText) {
+  let parsed = argumentsText;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const batch = Array.isArray(parsed) ? parsed : Array.isArray(parsed.questions) ? parsed.questions : null;
+  if (batch === null || batch.length === 0) return null;
+  const ids = [];
+  for (const entry of batch) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+    if (id === '' || ids.includes(id)) return null;
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Is this answer batch the answer to that pending question?
+ *
+ * The service itself refuses a batch that does not name each question of the
+ * call exactly once, but it refuses *after* the ticket event has been written,
+ * and the board's rule is that the audit trail describes answers that happened.
+ * So the shape and the ids are checked here, against the ids read out of the
+ * ask, and a refusal costs nothing.
+ *
+ * The accepted shape is what the UI card submits: one entry per question, each
+ * `{id, selected: string[], custom?: string}`. An empty `selected` is allowed —
+ * that is how the card sends a skipped question — but an entry must say which
+ * question it answers, and nothing may answer one twice or invent one.
+ *
+ * @param {{pendingIds: string[]|null, answers: unknown}} input
+ * @returns {{ok: true, answers: Array<{id: string, selected: string[], custom?: string}>}
+ *   | {ok: false, reason: string}}
+ */
+export function validateQuestionAnswers({ pendingIds, answers } = {}) {
+  if (!Array.isArray(pendingIds) || pendingIds.length === 0) {
+    return {
+      ok: false,
+      reason: 'the pending question carries no readable ids, so an answer cannot be checked against it — open the ticket page to answer it',
+    };
+  }
+  if (!Array.isArray(answers) || answers.length === 0) {
+    return { ok: false, reason: 'answers must be a non-empty array, one entry per pending question' };
+  }
+  const out = [];
+  const seen = new Set();
+  for (let index = 0; index < answers.length; index += 1) {
+    const entry = answers[index];
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { ok: false, reason: `answers[${index}] must be an object with an id and a selected list` };
+    }
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+    if (id === '') return { ok: false, reason: `answers[${index}] has no id` };
+    if (!Array.isArray(entry.selected)) {
+      return { ok: false, reason: `answers[${index}].selected must be an array of option labels; use [] for no selection` };
+    }
+    if (entry.selected.some((label) => typeof label !== 'string')) {
+      return { ok: false, reason: `answers[${index}].selected must hold only strings` };
+    }
+    const custom = entry.custom === undefined || entry.custom === null ? null : entry.custom;
+    if (custom !== null && typeof custom !== 'string') {
+      return { ok: false, reason: `answers[${index}].custom must be a string when given` };
+    }
+    if (seen.has(id)) return { ok: false, reason: `answers names "${id}" twice; each pending question is answered exactly once` };
+    seen.add(id);
+    out.push({ id, selected: [...entry.selected], ...(custom === null ? {} : { custom }) });
+  }
+  const missing = pendingIds.filter((id) => !seen.has(id));
+  if (missing.length > 0) {
+    return { ok: false, reason: `the answer does not cover the pending question(s): ${missing.join(', ')}` };
+  }
+  const pending = new Set(pendingIds);
+  const extra = [...seen].filter((id) => !pending.has(id));
+  if (extra.length > 0) {
+    return { ok: false, reason: `the answer names question(s) that are not pending: ${extra.join(', ')}` };
+  }
+  return { ok: true, answers: out };
 }
 
 /**

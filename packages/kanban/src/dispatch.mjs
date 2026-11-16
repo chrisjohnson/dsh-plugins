@@ -221,7 +221,7 @@ export class SessionDriver {
     this.waiters = new Map();
     /**
      * Sessions paused mid-turn on a human, KAN-17: sessionId ->
-     * `{kind: 'approval' | 'question', id, toolName?, reason?, questions?}`.
+     * `{kind: 'approval' | 'question', id, toolName?, reason?, questions?, callArgs?}`.
      *
      * A harness approval prompt (`approval/asked` ... `approval/decided`) and
      * an unanswered `ask_user_question` call are both pauses *inside* a turn:
@@ -232,7 +232,9 @@ export class SessionDriver {
      *
      * For a question, `questions` carries the batch as the model wrote it
      * (KAN-66), so a surface can show what is being asked and not merely that
-     * something is.
+     * something is, and `callArgs` carries those arguments verbatim (KAN-94) so
+     * an answer posted from outside the page can be checked against the ids the
+     * ask actually used.
      */
     this.humanWaits = new WaitLedger((sessionId, wait, started) => this.#recordWait(sessionId, wait, started));
     /** sessionId -> {handle, role, purpose, ticketId} */
@@ -389,6 +391,10 @@ export class SessionDriver {
           kind: 'question',
           id: event.data?.callId ?? null,
           questions: questionsFromCallArgs(event.data?.arguments) ?? [],
+          // KAN-94: the raw arguments too, not only the readable text. An
+          // answer posted over HTTP is checked against the ids the model
+          // actually asked with, and those only exist here.
+          callArgs: event.data?.arguments ?? null,
         });
         return;
       }
@@ -446,9 +452,13 @@ export class SessionDriver {
 
   /**
    * The live question wait of this ticket, question text included, or null
-   * (KAN-66). `{sessionId, kind, id, questions}` — `questions` is the batch the
-   * model wrote, as parsed from the ask's `tool/call` arguments. The orchestrator
-   * reads it to answer a worker question it can decide itself.
+   * (KAN-66). `{sessionId, kind, id, questions, callArgs}` — `questions` is the
+   * batch the model wrote, as parsed from the ask's `tool/call` arguments, and
+   * `callArgs` is those arguments exactly as the event carried them (KAN-94), so
+   * a surface can check an answer against the ids that were actually asked. The
+   * orchestrator reads the wait to answer a worker question it can decide
+   * itself; `POST /api/kanban/answerQuestion` reads it to answer one for a
+   * person.
    */
   pendingQuestionFor(ticketId) {
     const wait = this.#findHumanWait(ticketId, 'question');
@@ -502,6 +512,9 @@ export class SessionDriver {
           kind: 'question',
           id: question.callId ?? null,
           questions: questionsFromCallArgs(question.arguments) ?? [],
+          // KAN-94: the durable log is the only place the ids still exist after
+          // a restart, and an HTTP answer is checked against them.
+          callArgs: question.arguments ?? null,
         });
       }
     } catch (error) {
