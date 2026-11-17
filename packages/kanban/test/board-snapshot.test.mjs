@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { migrate } from '../src/db.mjs'
 import { KanbanStore } from '../src/store.mjs'
 import { attentionFacts } from '../src/attention.mjs'
-import { isQuestionPark } from '../src/recovery.mjs'
+import { isQuestionPark, questionParkReason } from '../src/recovery.mjs'
 import { attemptLabel, closedNewestFirst, jumpSession, phaseSegments, workingMs } from '../src/board-view.mjs'
 import { compactBoard, createBoardSnapshots, digest, stableJson } from '../src/board-snapshot.mjs'
 import { wipQueueReason } from '../src/wip.mjs'
@@ -29,11 +29,20 @@ function fakeDriver() {
     busy: new Set(),
     plans: new Map(),
     active: new Map(),
+    // KAN-98: the live question batch, as the real driver hands it over
+    // (`pendingQuestionFor`) — ticketId -> {kind, id, questions}.
+    waits: new Map(),
     isAwaitingQuestion: (id) => driver.questions.has(id),
     isAwaitingApproval: (id) => driver.approvals.has(id),
     isTicketBusy: (id) => driver.busy.has(id),
     liveTicketSession: (id, purpose) => (purpose === 'plan' ? driver.plans.get(id) : undefined),
     activeSessionIds: (id) => driver.active.get(id) ?? [],
+    pendingQuestionFor: (id) => driver.waits.get(id) ?? null,
+    /** What a session pausing mid-turn on an ask looks like from the board's side. */
+    ask(ticketId, questions) {
+      driver.questions.add(ticketId)
+      driver.waits.set(ticketId, { kind: 'question', id: 'call-1', questions })
+    },
   }
   return driver
 }
@@ -99,6 +108,13 @@ function seeded() {
     .run(at(-8 * 60 * MIN), at(-1 * MIN))
 
   driver.questions.add(t.asking.id)
+  // KAN-98: the same ticket's live batch, so the card can be checked against the
+  // text and option labels the session is actually sitting on.
+  driver.waits.set(t.asking.id, {
+    kind: 'question',
+    id: 'call-ask',
+    questions: [{ id: 'db', question: 'Which database?', options: ['sqlite (Recommended)', 'postgres'], header: 'Storage' }],
+  })
   driver.approvals.add(t.approving.id)
   driver.busy.add(t.running.id)
   engine.active.set(t.running.id, Promise.resolve())
@@ -154,11 +170,12 @@ function reference({ store, driver, engine }, nowMs) {
   return { counts: store.counts(), columns: byColumn, closed: closedNewestFirst([...byColumn.done, ...byColumn.discarded]) }
 }
 
-/** The snapshot's board, without the field the reference never had. */
+/** The snapshot's board, without the fields the reference never had. */
 function plain(board) {
   const strip = (card) => {
-    const { accruing, ...rest } = card
+    const { accruing, pendingQuestion, ...rest } = card
     void accruing
+    void pendingQuestion
     return rest
   }
   const columns = {}
@@ -204,6 +221,45 @@ test('the facts a card shows: attention states, working time, ordering, phase pa
   assert.deepEqual(board.columns.backlog.map((c) => c.title), ['second backlog', 'plain backlog', 'plans now'], 'priority first, then queue order')
   assert.deepEqual(board.closed.map((c) => c.title), ['discarded', 'finished', 'finished earlier'], 'newest closed first')
   assert.deepEqual(board.counts, { backlog: 3, working: 5, done: 2, discarded: 1 })
+})
+
+// KAN-98: the card says *what* is being waited on, not only that something is.
+// The board answer is the HTTP caller's read of the board, so the question text,
+// its option labels and the ids an answer has to be keyed by belong on the card —
+// the same object the orchestrator's `kanban_board` row carries, built by the
+// same function, so the two cannot drift.
+
+test('a card names the pending question: live batch with ids and options, park with text only', () => {
+  const world = seeded()
+  const { t } = world
+  const board = createBoardSnapshots({ ...world, now: () => NOW }).build().board
+  const card = (ticket) => Object.values(board.columns).flat().find((c) => c.id === ticket.id)
+
+  const live = card(t.asking).pendingQuestion
+  assert.equal(live.source, 'live', 'a session paused inside its ask is the live account')
+  assert.deepEqual(live.questions, [
+    { id: 'db', question: 'Which database?', options: ['sqlite (Recommended)', 'postgres'], header: 'Storage' },
+  ], 'id, text and option labels, exactly as the driver holds them')
+
+  const parked = card(t.questionPark).pendingQuestion
+  assert.equal(parked.source, 'park', 'a turn that ended on the question falls back to the park reason')
+  assert.equal(parked.questions.length, 1)
+  assert.equal(parked.questions[0].question, 'which db?', 'the text read back out of the park reason')
+  assert.deepEqual(parked.questions[0].options, [], 'a park preserves the text and nothing else')
+  assert.equal(parked.questions[0].id, null, 'and has no id to name')
+
+  assert.equal(card(t.plain).pendingQuestion, null, 'nothing waiting says null, not an empty shape')
+  assert.equal(card(t.parked).pendingQuestion, null, 'an ordinary park is not a question')
+  assert.equal(card(t.approving).pendingQuestion, null, 'an approval prompt is not a question either')
+  assert.equal(card(t.done).pendingQuestion, null, 'a closed card carries it too, as null')
+})
+
+test('the compact board and the page stream carry the pending question on each card', () => {
+  const world = seeded()
+  const { board } = createBoardSnapshots({ ...world, now: () => NOW }).build()
+  const compact = compactBoard(board)
+  const asking = [...Object.values(compact.columns).flat(), ...compact.closed].find((c) => c.id === world.t.asking.id)
+  assert.equal(asking.pendingQuestion.source, 'live', 'the compact payload the page polls is the same build')
 })
 
 test('a second build is the same board and does not read closed tickets again', () => {
@@ -257,11 +313,20 @@ test('the change token holds while nothing moves and moves with a write, a wait,
   const afterWrite = snapshots.token()
   assert.notEqual(afterWrite, base, 'a stored change')
   world.driver.questions.delete(world.t.asking.id)
+  world.driver.waits.delete(world.t.asking.id)
   const afterAnswer = snapshots.token()
   assert.notEqual(afterAnswer, afterWrite, 'an answered question')
+  // KAN-98: a question appearing is a board change. A polling client holding the
+  // previous token has to be handed the fresh board, because the card now says
+  // what is being asked and the ids an answer must name.
+  world.driver.ask(world.t.later.id, [{ id: 'which', question: 'Which now?', options: ['a', 'b'] }])
+  const afterAsk = snapshots.token()
+  assert.notEqual(afterAsk, afterAnswer, 'a new live question appearing on a quiet ticket')
+  world.store.setNeedsAttention(world.t.plain.id, questionParkReason('plan', 'Which preset?'))
+  assert.notEqual(snapshots.token(), afterAsk, 'a question park written to the store')
   world.driver.approvals.add(world.t.plain.id)
   const afterApproval = snapshots.token()
-  assert.notEqual(afterApproval, afterAnswer, 'a new approval prompt')
+  assert.notEqual(afterApproval, afterAsk, 'a new approval prompt')
   world.driver.busy.add(world.t.later.id)
   const afterBusy = snapshots.token()
   assert.notEqual(afterBusy, afterApproval, 'a turn starting on a ticket')

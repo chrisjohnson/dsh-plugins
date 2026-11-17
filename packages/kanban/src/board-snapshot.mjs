@@ -22,6 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { attentionFacts } from './attention.mjs';
 import { attemptLabel, closedNewestFirst, isAccruing, jumpSession, phaseSegments, workingMs } from './board-view.mjs';
 import { TERMINAL_COLUMNS } from './lifecycle.mjs';
+import { pendingQuestionFacts } from './orchestrator.mjs';
 import { isQuestionPark } from './recovery.mjs';
 import { queueSummary, wipQueue, workingOccupancy } from './wip.mjs';
 
@@ -191,6 +192,11 @@ export function createBoardSnapshots({
       // on the person's answer, and the card, chip and next-action say so.
       item.parkedOnQuestion = isQuestionPark(ticket.needsAttentionReason);
       item.awaitingQuestion = driver.isAwaitingQuestion(ticket.id) || item.parkedOnQuestion;
+      // KAN-98: the question itself, beside the fact that one waits, in the one
+      // shape the orchestrator's reads use — so an HTTP caller can read the ids
+      // and option labels it has to answer with instead of opening the session.
+      // Optional chaining: a fake or minimal driver need not implement the read.
+      item.pendingQuestion = pendingQuestionFacts(ticket, driver.pendingQuestionFor?.(ticket.id) ?? null);
       item.awaitingApproval = driver.isAwaitingApproval(ticket.id);
       item.status = attentionFacts(ticket, { engine, driver }).status;
       // Attention without an engine park is a mid-turn human wait: say which

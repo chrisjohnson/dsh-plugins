@@ -49,10 +49,17 @@ function workspace({ git = false } = {}) {
   return dir
 }
 
-async function boot({ workspaceCwd = workspace() } = {}) {
+async function boot({ workspaceCwd = workspace(), live = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-host-rpc-'))
   const dbPath = join(dir, 'kanban.db')
   const routes = new Map()
+  // KAN-98: a live boot runs the host's effects (so the engine and the driver
+  // start, and the driver subscribes to the session event stream) and captures
+  // those subscriptions, so a test can put a real mid-turn ask in front of the
+  // read paths. A plain boot leaves both inert, which is what every other test
+  // here wants: no tick, no launched session, nothing but the routes.
+  const handlers = new Map()
+  const cleanups = []
   const ctx = {
     logger: () => LOG,
     get(name) {
@@ -61,7 +68,21 @@ async function boot({ workspaceCwd = workspace() } = {}) {
       }
       return undefined
     },
-    effect() {},
+    effect(fn) {
+      if (!live) return
+      const cleanup = fn()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+    },
+    on(name, fn) {
+      if (!live) return () => {}
+      if (!handlers.has(name)) handlers.set(name, [])
+      handlers.get(name).push(fn)
+      return () => {
+        const list = handlers.get(name) ?? []
+        const at = list.indexOf(fn)
+        if (at >= 0) list.splice(at, 1)
+      }
+    },
     inject(_deps, callback) {
       callback({ connection: { fetch: { register: (definition) => routes.set(definition.path, definition.fetch) } } })
     },
@@ -69,6 +90,10 @@ async function boot({ workspaceCwd = workspace() } = {}) {
   await kanban(ctx, {
     dbPath,
     defaultWorkspaceCwd: workspaceCwd,
+    // The board's permanent orchestrator session is not what these tests are
+    // about, and a live boot would otherwise have it trying to start one against
+    // a stub host with no agents service.
+    orchestratorEnabled: false,
     providers: [{ name: 'local' }],
     roles: {
       planner: { provider: 'local', model: 'm' },
@@ -77,6 +102,14 @@ async function boot({ workspaceCwd = workspace() } = {}) {
       approver: { provider: 'local', model: 'm' },
     },
   })
+  /** Hand one session event to whatever is subscribed, exactly as the harness does. */
+  const emit = (sessionId, event) => {
+    for (const fn of [...(handlers.get('session/event') ?? [])]) fn({ id: sessionId }, event)
+  }
+  /** Undo the effects: stops the engine's tick and closes the host's store. */
+  const close = () => {
+    for (const cleanup of cleanups.splice(0).reverse()) cleanup()
+  }
   const rpc = async (endpoint, payload = {}) => {
     const route = routes.get(`/api/kanban/${endpoint}`)
     assert.ok(route, `no route for ${endpoint}`)
@@ -91,7 +124,7 @@ async function boot({ workspaceCwd = workspace() } = {}) {
     assert.equal(created.ok, true, JSON.stringify(created))
     return created.value.ticket.id
   }
-  return { rpc, store, create }
+  return { rpc, store, create, emit, close }
 }
 
 /** Put a ticket where the engine leaves it after planning: plan on record, phase implement. */
@@ -248,16 +281,84 @@ test('a ticket parked on a question reads as waiting on the answer on the board 
   assert.equal(card.status, 'attention')
   assert.equal(card.parkedOnQuestion, true)
   assert.equal(card.awaitingQuestion, true, 'the card says Waiting on you, like a paused ask')
+  // KAN-98: the HTTP read says what is being waited on, not only that something
+  // is — the same object the orchestrator's tools return, unchanged in shape.
+  assert.deepEqual(card.pendingQuestion, {
+    source: 'park',
+    questions: [{ id: null, question: 'Which database?', options: [] }],
+  })
   const shown = await detail(rpc, id)
   assert.equal(shown.parkedOnQuestion, true)
   assert.equal(shown.status, 'attention')
   assert.equal(shown.ticket.needsAttentionReason, 'Waiting on your answer in the plan session: Which database?')
+  assert.deepEqual(shown.pendingQuestion, card.pendingQuestion, 'the detail and the card say the same thing')
 
   const ordinary = await create({ column: 'backlog' })
   store.setNeedsAttention(ordinary, 'attempt budget exhausted (3)')
   const plain = (await rpc('board')).value.columns.backlog.find((t) => t.id === ordinary)
   assert.equal(plain.parkedOnQuestion, false)
   assert.equal(plain.awaitingQuestion, false)
+  assert.equal(plain.pendingQuestion, null, 'a ticket waiting on nothing carries null')
+  assert.equal((await detail(rpc, ordinary)).pendingQuestion, null)
+})
+
+// KAN-98: the live half of the same contract, through the real driver. The park
+// above is a string the engine wrote; this is a session paused inside its turn on
+// an `ask_user_question`, so the batch — ids, text, option labels — comes out of
+// the call's own arguments on the event stream. It is also the case the ticket
+// was filed for: a caller that sees `awaitingQuestion: true` over HTTP could read
+// neither kind of question, and `answerQuestion` only accepts an answer keyed by
+// ids nobody hands out.
+
+test('a session paused mid-turn on a question reads its batch on the ticket detail and the board card', { skip }, async () => {
+  const { rpc, store, create, emit, close } = await boot({ live: true })
+  try {
+    // Backlog, default planTiming: the engine's tick has no reason to launch it,
+    // so the only thing moving here is the wait the driver is told about.
+    const id = await create({ column: 'backlog' })
+    store.attachSession({ ticketId: id, dshSessionId: 'sess-live-ask', role: 'planner', purpose: 'plan', provider: 'local', model: 'm' })
+    emit('sess-live-ask', { type: 'turn/start', data: { turn: 1 } })
+
+    const before = (await rpc('board')).value
+    assert.equal(before.columns.backlog.find((c) => c.id === id).awaitingQuestion, false, 'nothing waits yet')
+    assert.equal(before.columns.backlog.find((c) => c.id === id).pendingQuestion, null)
+    assert.equal((await detail(rpc, id)).pendingQuestion, null)
+
+    const args = JSON.stringify({
+      questions: [
+        { id: 'db', question: 'Which database?', header: 'Storage', options: [{ label: 'sqlite (Recommended)' }, { label: 'postgres' }] },
+        { id: 'restart', question: 'Restart after the swap?', options: ['Yes', 'No'] },
+      ],
+    })
+    emit('sess-live-ask', { type: 'tool/call', data: { turn: 1, step: 0, callId: 'call-ask', name: 'ask_user_question', arguments: args } })
+
+    const shown = await detail(rpc, id)
+    assert.equal(shown.awaitingQuestion, true)
+    assert.equal(shown.parkedOnQuestion, false, 'a live ask is not a park')
+    assert.deepEqual(shown.pendingQuestion, {
+      source: 'live',
+      questions: [
+        { id: 'db', question: 'Which database?', options: ['sqlite (Recommended)', 'postgres'], header: 'Storage' },
+        { id: 'restart', question: 'Restart after the swap?', options: ['Yes', 'No'] },
+      ],
+    })
+
+    const after = (await rpc('board')).value
+    const card = after.columns.backlog.find((c) => c.id === id)
+    assert.deepEqual(card.pendingQuestion, shown.pendingQuestion, 'the card and the detail agree')
+    assert.deepEqual(card.pendingQuestion.questions.map((q) => q.id), ['db', 'restart'], 'the ids an answer must name are on the card')
+    assert.deepEqual(card.pendingQuestion.questions[0].options, ['sqlite (Recommended)', 'postgres'], 'option labels too')
+    assert.notEqual(after.token, before.token, 'a polling client holding the old token gets the new board')
+
+    // Answering it clears the wait on both reads, and the token moves again.
+    emit('sess-live-ask', { type: 'tool/result', data: { callId: 'call-ask', name: 'ask_user_question' } })
+    const cleared = (await rpc('board')).value
+    assert.equal(cleared.columns.backlog.find((c) => c.id === id).pendingQuestion, null)
+    assert.equal((await detail(rpc, id)).pendingQuestion, null)
+    assert.notEqual(cleared.token, after.token)
+  } finally {
+    close()
+  }
 })
 
 test('a retry over RPC resets the budget and records the instruction for the next prompt', { skip }, async () => {

@@ -19,7 +19,7 @@ import { openDatabase } from './db.mjs';
 import { SessionDriver } from './dispatch.mjs';
 import { Engine } from './engine.mjs';
 import { KanbanOrchestrator, TOOL_OUTPUT } from './orchestrator-host.mjs';
-import { MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES } from './orchestrator.mjs';
+import { MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES, pendingQuestionFacts } from './orchestrator.mjs';
 import { managementActor, managementToolWhen } from './agent-tools.mjs';
 import { questionIdsFromCallArgs, validateQuestionAnswers } from './questions.mjs';
 import { hashText, loadPrompts, shortHash } from './prompts.mjs';
@@ -388,6 +388,13 @@ export default async function kanban(ctx, config = {}) {
         maxAttempts: getConfig().maxAttempts,
         awaitingQuestion,
         parkedOnQuestion,
+        // KAN-98: the question behind the boolean, in the same shape the
+        // orchestrator's reads and the board cards use — ids included, so an
+        // outside caller can answer it with `answerQuestion` without opening the
+        // session. Built from the stored row, not the display-patched copy above:
+        // that patch writes a synthetic wait reason for a live ask, and a park
+        // read must only fire on a park the engine actually wrote.
+        pendingQuestion: pendingQuestionFacts(ticket, driver.pendingQuestionFor(ticket.id) ?? null),
         awaitingApproval,
         status: statusOf(ticket),
         // What the human may do right now. The engine owns every rule; the

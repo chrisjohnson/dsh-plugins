@@ -362,15 +362,21 @@ export function createDigestWindow({
  * A live batch wins when both exist: it is the current turn's ask, and it carries
  * the options the orchestrator needs in order to answer it itself.
  *
+ * Every entry is `{id, question, options, header?}`, and the same shape is what
+ * the HTTP `board` and `ticket` answers now carry (KAN-98), so a caller that has
+ * to answer the question can name its ids. A live entry's id is the one the model
+ * wrote (`questionsFromCallArgs`), and a park has none to give — the park reason
+ * preserves the text only — so its single entry says `id: null`.
+ *
  * @param {object} ticket the ticket row (its `needsAttentionReason` is the park)
  * @param {{questions?: Array<object>}|null} [liveWait] the driver's pending question wait
- * @returns {{questions: Array<object>, source: 'live'|'park'}|null}
+ * @returns {{questions: Array<{id: string|null, question: string, options: string[]}>, source: 'live'|'park'}|null}
  */
 export function pendingQuestionFacts(ticket, liveWait = null) {
   const live = Array.isArray(liveWait?.questions) ? liveWait.questions : []
   if (live.length > 0) return { questions: live, source: 'live' }
   const parked = questionFromParkReason(ticket?.needsAttentionReason)
-  if (parked !== null) return { questions: [{ question: parked, options: [] }], source: 'park' }
+  if (parked !== null) return { questions: [{ id: null, question: parked, options: [] }], source: 'park' }
   return null
 }
 
