@@ -45,6 +45,15 @@ asserts the bundle's layer and rows appear in `--dump-config`. This is the tier 
 catches a peer range nobody could install against, a bad `exports`, or a patch file
 that points at a directory.
 
+A package with its own runtime `dependencies` (for example `dsh-take-a-number`, which
+imports `take-a-number/client`) gets them installed into its directory with `pnpm` first,
+because `plugin add <directory>` links the package in place and installs none of them.
+An install from a git tag, which is what consumers do, brings them along. The smoke needs
+`pnpm` on `PATH` for this, as `plugin add` already does, and removes the directory
+afterwards if it created it. Without this step the import works only on a machine where
+someone once ran `pnpm install` in that package, which is how this passed locally and
+failed on a clean CI runner.
+
 **What it cannot catch:** anything that needs a configured host — tool dispatch,
 service injection, the browser half, the shape of a real refusal message. For that:
 tier 3.

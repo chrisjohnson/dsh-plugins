@@ -103,8 +103,37 @@ for (const dir of packages) {
     return output;
   };
 
+  // `plugin add <directory>` links the package in place and installs none of its own
+  // `dependencies`, so a plugin with a real runtime dependency (dsh-take-a-number
+  // imports `take-a-number/client`) cannot be imported from its real path: Node walks
+  // up from packages/<name>/src and finds nothing. An install from a git tag, which is
+  // what a consumer does, brings those dependencies along, so the smoke has to as well.
+  // Peer dependencies are the harness's own and stay off (the harness supplies them).
+  // The directory is removed afterwards when this run created it.
+  const ownDeps = Object.keys(manifest.dependencies ?? {});
+  const depsDir = join(dir, 'node_modules');
+  const createdDepsDir = ownDeps.length > 0 && !existsSync(depsDir);
+  if (ownDeps.length > 0) {
+    const installed = spawnSync(
+      'pnpm',
+      ['install', '--prod', '--ignore-scripts', '--ignore-workspace', '--lockfile=false', '--config.auto-install-peers=false'],
+      { cwd: dir, encoding: 'utf8', timeout: 180000 },
+    );
+    if (installed.status !== 0) {
+      console.error(`FAIL  ${name} [install dependencies] exit ${installed.status}\n${`${installed.stdout ?? ''}${installed.stderr ?? ''}`.split('\n').slice(0, 15).join('\n')}`);
+      failures += 1;
+      continue;
+    }
+  }
+  const dropOwnDeps = () => {
+    if (createdDepsDir && !keep) rmSync(depsDir, { recursive: true, force: true });
+  };
+
   const added = run(['plugin', '--profile', 'web', 'add', dir], 'plugin add');
-  if (added === null) continue;
+  if (added === null) {
+    dropOwnDeps();
+    continue;
+  }
 
   // Import the plugin the way the Cordis loader will: as a bare package name,
   // resolved from the profile directory. This is the step that catches a bad
@@ -127,11 +156,15 @@ for (const dir of packages) {
     failures += 1;
     console.error(`FAIL  ${name} [import]\n${(imported.stderr ?? '').split('\n').slice(0, 12).join('\n')}`);
     if (!keep) rmSync(home, { recursive: true, force: true });
+    dropOwnDeps();
     continue;
   }
 
   const composed = run(['--profile', 'web', '--dump-config'], 'dump-config');
-  if (composed === null) continue;
+  if (composed === null) {
+    dropOwnDeps();
+    continue;
+  }
 
   // 0. the harness did not skip the bundle. A peer range that misses the
   //    runtime does not get this far on dsh 0.2: `plugin add` rejects the
@@ -172,6 +205,7 @@ for (const dir of packages) {
   if (keep && composed) writeFileSync(join(home, 'dump-config.txt'), composed);
 
   if (!keep) rmSync(home, { recursive: true, force: true });
+  dropOwnDeps();
 }
 
 // Every failure path above counts once and moves on to the next package, so
