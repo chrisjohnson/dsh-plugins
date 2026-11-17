@@ -728,18 +728,23 @@ new id is recorded in the board db (`kv` table, migration v8), so every later bo
 resumes the rotated session instead of the configured one. The archived session
 keeps its whole transcript and appears in the session list.
 
-**A read says what is being asked (0.30.0).** The standing directive is that a
-ticket parked on a worker question gets *read* first, and answered by the
-orchestrator when the answer does not need a human. That needs the question, not
+**A read says what is being asked (0.30.0, ids and HTTP in 0.46.0).** The standing
+directive is that a ticket parked on a worker question gets *read* first, and
+answered by the orchestrator when the answer does not need a human. That needs
+the question, not
 just the fact that something waits, so every read carries it: `kanban_board` rows
 and the `kanban_ticket` read return `pendingQuestion` —
-`{questions: [{question, options, header?}], source: 'live'|'park'}` — and the
+`{questions: [{id, question, options, header?}], source: 'live'|'park'}` — and the
 snapshot line shows it as `ASKING: <question> [opt | opt]`. `live` is a session
 paused inside its turn on an unanswered `ask_user_question`: the driver keeps the
 batch from the call's own `arguments`, options included, and it wins when both
 exist. `park` is the engine's park reason (`Waiting on your answer in the
 implement session: …`) with the question read back out of it — text only, no
 options, because that is all a park preserves. `null` means nothing is waiting.
+Each question names its `id` — the one the model wrote it with, or `null` when it
+supplied none or the account is a park — so a caller reading a question can also
+answer it. The HTTP `ticket` detail and every `board` card carry this same object
+(see **Talking to a running ticket from outside the page**).
 Approval prompts are a separate wait and are not questions.
 
 **`kanban_configure` (0.30.0, workspace added in 0.44.0).** The settings a ticket
@@ -1162,11 +1167,13 @@ POST /api/kanban/answerQuestion  {"id": "<ticket id>", "answers": [
 ]}
 ```
 
-One entry per question of the pending batch, keyed by the `id` the model gave it.
-A refused batch names the ids it expected, so a first call that does not know
-them learns them from the refusal. An empty `selected` with a `custom` is how the
-card sends free text or a skip, and it is accepted here the same way. The answer
-is written to the ticket as a `question_answered_by_api` event with
+One entry per question of the pending batch, keyed by the `id` the model gave it —
+which is what `pendingQuestion`, read below, hands out, so a caller does not have
+to learn the ids from a refusal. A refused batch still names the ids it expected,
+for the case where the question appeared and was answered between two reads. An
+empty `selected` with a `custom` is how the card sends free text or a skip, and it
+is accepted here the same way. The answer is written to the ticket as a
+`question_answered_by_api` event with
 `actor: "api"`, carrying the call id and the exact answers, **before** the wait
 is claimed — an answer nobody can review is an answer that should not have been
 given. Every refusal answers `bad_request` with a reason that says what to do
@@ -1177,6 +1184,32 @@ it is no longer live. An id that is not on the board is `not_found`, as on every
 other ticket endpoint. A question the session settled in the meantime is refused
 as no longer pending rather than reported as answered. `unavailable` says the
 harness has no user-questions service mounted at all.
+
+**Read what it is waiting on (0.46.0).** `awaitingQuestion: true` on a `board`
+card or a `ticket` detail says a person is needed; `pendingQuestion` on the same
+answers says *what for*, so an outside caller never has to open the session in
+the browser to find out. Both carry the object the orchestrator's own
+`kanban_board` and `kanban_ticket` reads return, unchanged in shape, and `null`
+when nothing is waiting:
+
+```text
+{"pendingQuestion": {"source": "live", "questions": [
+  {"id": "db", "question": "Which database?", "options": ["sqlite (Recommended)", "postgres"], "header": "Storage"}
+]}}
+```
+
+`source: "live"` is a session paused inside its turn on an unanswered
+`ask_user_question`: `questions` is the batch the model wrote, with its option
+labels and the `id` each question was asked with — the ids `answerQuestion` has
+to be keyed by. `source: "park"` is the engine's park reason for a turn that
+*ended* on a question: only the text survives a park, so that entry carries
+`options: []` and `id: null`, and answering it is a `retry` or a `message`, not
+this. A question the model asked without an id also says `id: null` rather than a
+stand-in: the ids shown are the ones the pending call actually holds. The field
+rides the compact board and the `stream` frames as well, and a question appearing
+or being answered moves the board's change `token` — so a client polling with
+`since` is handed the fresh board instead of an `unchanged`, and learns about the
+ask without waiting for a human to notice it.
 
 A card with a session carries a small jump icon that opens its active session,
 else its latest. On the ticket page the progress steps link the same way: Plan to

@@ -76,18 +76,25 @@ test('a parked-on-question ticket exposes its question, marked as a park', () =>
   assert.equal(facts.questions.length, 1)
   assert.equal(facts.questions[0].question, QUESTION)
   assert.deepEqual(facts.questions[0].options, [])
+  // KAN-98: a park preserves the text and nothing else, so the one thing an
+  // answer needs — the id the question was asked with — is not there to give.
+  // It says null rather than making one up, and the shape stays uniform.
+  assert.equal(facts.questions[0].id, null)
 })
 
 test('a live batch wins over the park text, options and all', () => {
   const live = {
     kind: 'question',
     id: 'c1',
-    questions: [{ question: 'Which tag should the pin name?', options: ['v0.29.0', 'v0.30.0'] }],
+    questions: [{ id: 'pin', question: 'Which tag should the pin name?', options: ['v0.29.0', 'v0.30.0'] }],
   }
   const facts = pendingQuestionFacts(parkedTicket(), live)
   assert.equal(facts.source, 'live')
   assert.equal(facts.questions[0].question, 'Which tag should the pin name?')
   assert.deepEqual(facts.questions[0].options, ['v0.29.0', 'v0.30.0'])
+  // The driver's entries pass through untouched, so the ids the model wrote are
+  // what every surface that shows this batch shows (KAN-98).
+  assert.equal(facts.questions[0].id, 'pin')
 })
 
 test('a live wait that carried no readable text falls back to the park', () => {
@@ -124,9 +131,10 @@ test('the ticket line takes the driver live wait into the same shape', () => {
   const line = ticketLineFacts(parkedTicket({ needsAttentionReason: null }), {
     running: true,
     waitingOnHuman: true,
-    liveWait: { questions: [{ question: 'Pin 0.29.0 or 0.30.0?', options: ['0.29.0'] }] },
+    liveWait: { questions: [{ id: 'pin', question: 'Pin 0.29.0 or 0.30.0?', options: ['0.29.0'] }] },
   })
   assert.equal(line.pendingQuestion.source, 'live')
+  assert.equal(line.pendingQuestion.questions[0].id, 'pin', 'the board row names the id as well as the text')
   assert.equal(line.running, true)
   assert.equal(line.waitingOnHuman, true)
 })
@@ -196,15 +204,17 @@ test('kanban_ticket returns the question text a parked ticket waits on', async (
   const read = await runOrchestratorTool('kanban_ticket', { ticket: 'KAN-61' }, fakeApi({ ticket: parkedTicket() }))
   assert.equal(read.pendingQuestion.source, 'park')
   assert.equal(read.pendingQuestion.questions[0].question, QUESTION)
+  assert.equal(read.pendingQuestion.questions[0].id, null, 'a park has no id to name')
 })
 
 test('kanban_ticket returns the live batch with its options when a turn is mid-ask', async () => {
   const read = await runOrchestratorTool('kanban_ticket', { ticket: 'KAN-61' }, fakeApi({
     ticket: parkedTicket({ needsAttentionReason: null }),
-    liveWait: { questions: [{ question: 'Answer now or wait?', options: ['Now (Recommended)', 'Wait'] }] },
+    liveWait: { questions: [{ id: 'answer-now', question: 'Answer now or wait?', options: ['Now (Recommended)', 'Wait'] }] },
   }))
   assert.equal(read.pendingQuestion.source, 'live')
   assert.deepEqual(read.pendingQuestion.questions[0].options, ['Now (Recommended)', 'Wait'])
+  assert.equal(read.pendingQuestion.questions[0].id, 'answer-now', 'the read names the id an answer has to be keyed by')
 })
 
 test('kanban_ticket on a ticket with no open question says nothing is pending', async () => {

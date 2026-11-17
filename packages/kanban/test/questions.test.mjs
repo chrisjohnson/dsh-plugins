@@ -409,15 +409,34 @@ test('the question batch is recovered from a tool-call arguments string', () => 
     ],
   })
   assert.deepEqual(questionsFromCallArgs(args), [
-    { question: 'Is the restart owed now?', options: ['Yes (Recommended)', 'No'], header: 'Restart' },
-    { question: 'Which packages?', options: ['dsh-kanban', 'everything'] },
+    { id: 'restart', question: 'Is the restart owed now?', options: ['Yes (Recommended)', 'No'], header: 'Restart' },
+    { id: 'scope', question: 'Which packages?', options: ['dsh-kanban', 'everything'] },
   ])
 })
 
 test('an already-parsed arguments object reads the same way', () => {
   assert.deepEqual(questionsFromCallArgs({ questions: [{ question: 'Which tag?' }] }), [
-    { question: 'Which tag?', options: [] },
+    { id: null, question: 'Which tag?', options: [] },
   ])
+})
+
+// KAN-98: the ids are part of what a read shows, because the caller that reads a
+// pending question is often the one that has to answer it — and `answerQuestion`
+// only accepts a batch keyed by the ids the model asked with. A question the
+// model gave no id for says `id: null`: the tolerant tool assigns its own at
+// execution time, and a display path that invented one would name an id nothing
+// is waiting on.
+test('each question carries the id it was asked with, or null when it had none', () => {
+  const [named, blank, missing] = questionsFromCallArgs({
+    questions: [
+      { id: '  pin  ', question: 'Which pin?' },
+      { id: '   ', question: 'Restart now?' },
+      { question: 'No id at all?' },
+    ],
+  })
+  assert.equal(named.id, 'pin', 'the id is trimmed like the text')
+  assert.equal(blank.id, null, 'an id that is only whitespace is no id')
+  assert.equal(missing.id, null, 'an absent id is null, not an empty string')
 })
 
 test('whitespace in the question text is folded onto one line', () => {
@@ -438,7 +457,7 @@ test('anything unreadable is null, never a throw and never a made-up question', 
 
 test('a batch with one usable entry among junk still shows that one', () => {
   assert.deepEqual(questionsFromCallArgs({ questions: [null, { question: 'Real?' }, { id: 'x' }] }), [
-    { question: 'Real?', options: [] },
+    { id: null, question: 'Real?', options: [] },
   ])
 })
 

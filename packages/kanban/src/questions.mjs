@@ -296,8 +296,16 @@ function optionLabel(option) {
  * park reason. It never throws into an event stream, and it never invents a
  * question the model did not ask — an entry with no question text is skipped.
  *
+ * Each entry carries the `id` the model wrote it with (KAN-98), because the
+ * surfaces that show this batch — the orchestrator's reads and the HTTP
+ * `board`/`ticket` answers — are read by callers that then have to *answer* it,
+ * and `answerQuestion` only accepts a batch keyed by those ids. A question asked
+ * without one says `id: null` rather than inventing a stand-in: the tolerant tool
+ * assigns its own ids at execution time, and a display path that guessed one
+ * would hand out an id nothing is waiting on.
+ *
  * @param {unknown} argumentsText - the `arguments` of the ask's `tool/call` event
- * @returns {Array<{question: string, options: string[], header?: string}>|null}
+ * @returns {Array<{id: string|null, question: string, options: string[], header?: string}>|null}
  *   the batch, option labels only, or null when nothing usable was found
  */
 export function questionsFromCallArgs(argumentsText) {
@@ -321,7 +329,9 @@ export function questionsFromCallArgs(argumentsText) {
       ? entry.options.map(optionLabel).filter((label) => label !== '')
       : [];
     const header = typeof entry.header === 'string' ? entry.header.replace(/\s+/g, ' ').trim() : '';
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
     questions.push({
+      id: id === '' ? null : id,
       question: text,
       options,
       ...(header === '' ? {} : { header }),

@@ -926,7 +926,7 @@ test('message is the orchestrator kanban_message path, credited to the caller', 
   assert.match(body, /requireTicket\(String\(p\.id\)\)/)
   assert.match(body, /text is required/)
   assert.match(body, /MESSAGE_MODES\.includes\(mode\)/)
-  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES \} from '\.\/orchestrator\.mjs'/)
+  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES[^}]*\} from '\.\/orchestrator\.mjs'/)
   assert.match(body, /mode === undefined \|\| p\.mode === null \? 'queue'/, 'the default is queue, like the tool')
   // The delivery decision is the orchestrator's own seam, with the caller as
   // its actor — not a re-implementation of steer/followup in the host.
@@ -1010,4 +1010,32 @@ test('the driver carries the raw ask arguments so an answer can be checked again
   assert.equal((dispatch.match(/callArgs: /g) || []).length, 2, 'one on the live wait, one on the seeded wait')
   assert.match(dispatch, /callArgs: event\.data\?\.arguments \?\? null/)
   assert.match(dispatch, /callArgs: question\.arguments \?\? null/)
+})
+
+// KAN-98: the HTTP reads show the pending question, and they show it because they
+// ask the one function the orchestrator's tools ask. A second builder of the same
+// fact is a second fact: the board card and the ticket detail would be free to
+// disagree with `kanban_board`, and the whole point of the field is that a caller
+// can read the ids it has to answer with. So the wiring is pinned, not just the
+// behaviour.
+
+test('the HTTP board card and ticket detail build pendingQuestion from pendingQuestionFacts', async () => {
+  const files = await sources()
+  const host = files['host.mjs']
+  const snapshot = files['board-snapshot.mjs']
+  // One decision module, imported by both read surfaces — not a paraphrase of it
+  // in the wiring, and not a third copy in the client.
+  assert.match(host, /import \{ MANAGEMENT_TOOL_SPECS, runManagementTool, MESSAGE_MODES, pendingQuestionFacts \} from '\.\/orchestrator\.mjs'/)
+  assert.match(snapshot, /import \{ pendingQuestionFacts \} from '\.\/orchestrator\.mjs'/)
+  // The detail: the stored row plus the driver's live wait, beside the booleans
+  // that used to be the only account of it.
+  assert.match(host, /pendingQuestion: pendingQuestionFacts\(ticket, driver\.pendingQuestionFor\(ticket\.id\) \?\? null\)/)
+  // The card: same call, tolerant of a driver that does not implement the read.
+  assert.match(snapshot, /item\.pendingQuestion = pendingQuestionFacts\(ticket, driver\.pendingQuestionFor\?\.\(ticket\.id\) \?\? null\)/)
+  // And it rides the compact board and the stream frame because both reuse this
+  // one build — there is no second card builder to update.
+  assert.equal((snapshot.match(/pendingQuestionFacts\(/g) || []).length, 1, 'one call site builds it; the compact payload and the stream reuse the build')
+  // The orchestrator's own read path is the same function, so the shapes cannot
+  // drift apart.
+  assert.match(files['orchestrator.mjs'], /pendingQuestion: pendingQuestionFacts\(ticket, live\.liveWait \?\? null\)/)
 })

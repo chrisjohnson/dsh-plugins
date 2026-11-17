@@ -5,6 +5,34 @@
 
 ## Unreleased
 
+### Added
+
+- **The HTTP board and ticket reads now say what the question is (KAN-98).**
+  `answerQuestion` (0.45.0) lets an outside caller answer a ticket session's
+  pending `ask_user_question`, but nothing on the HTTP surface would show it the
+  question: a caller saw `awaitingQuestion: true` and had to open the session in
+  the browser to learn what it was waiting on, and a refusal named only the ids it
+  expected. The `ticket` detail and every `board` card now carry `pendingQuestion`
+  — the same object `kanban_board` and `kanban_ticket` return, built by the same
+  `pendingQuestionFacts`, and `null` when nothing is waiting:
+  `{questions: [{id, question, options, header?}], source: 'live' | 'park'}`.
+  - Each question entry gained the `id` it was asked with (`null` when the model
+    supplied none, and always `null` for a park, which preserves the text only),
+    so every surface that names a pending question can name the ids
+    `answerQuestion` has to be keyed by. The shape is unchanged otherwise, and
+    additive for the orchestrator's tools.
+  - `source: 'live'` is the driver's wait — a session paused inside its turn, with
+    the batch and option labels read out of the call's own `arguments`;
+    `source: 'park'` is the engine's park reason read back apart. The live batch
+    wins when both exist, exactly as it does on the orchestrator's reads.
+  - The field rides the compact board and the `stream` frames, since both reuse
+    the one card build. No new endpoint, no config key, no schema change.
+  - The board change token already moved when a question appeared or was answered
+    (the live wait is a bit in the driver signature; a park is a stored write), and
+    the ticket detail's token is a digest of the whole payload, so a polling client
+    holding `since` gets the fresh board rather than an `unchanged`. Tests pin that
+    behaviour on both surfaces rather than adding token code.
+
 ## 0.45.0
 
 ### Added
