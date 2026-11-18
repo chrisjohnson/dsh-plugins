@@ -53,6 +53,24 @@
 // a session is stopped on, and `validateQuestionAnswers` decides whether a
 // posted answer is that batch's answer. The HTTP endpoint that uses them is
 // `POST /api/kanban/answerQuestion` in src/host.mjs — wiring, no decisions.
+//
+// KAN-103 is the deferral half, and it is here for the same reason. Core answers
+// a question two ways, and only one of them is a method: once the ask's tool call
+// has returned pending (or the process that owned it ended) the question is
+// `continued` and `userQuestions.answer()` steers the reply in; while the call is
+// still *open* the only answer path is the `user-questions/request` waterfall the
+// ask is itself waiting on. So an outside caller that is not the browser card had
+// no way to answer a fresh ask at all — the common case, a session paused on a
+// question the board is showing it.
+//
+// `OpenQuestionRegistry` is that way. When the listener below decides a question
+// is a human's, it does not simply hand the ask to the card and forget it: it
+// registers the open wait, and waits on `Promise.race([next(), entry.answered])`.
+// The card is still reached (`next()`) and still answers whenever a person at the
+// page is first; `POST /api/kanban/answerQuestion` settles the entry, and the ask
+// resolves through the same seam the card uses. First settlement wins, and the
+// loser sees a question that is no longer pending — which is what keeps this from
+// ever being two competing answer mechanisms.
 
 /** The ticket phases whose questions this module may ever answer. */
 const ANSWERABLE_PHASES = new Set(['plan', 'implement', 'review']);
@@ -98,13 +116,148 @@ export function recommendedAnswer(questions) {
 }
 
 /**
+ * The open asks the board is holding for a human, keyed by the wait they belong
+ * to (KAN-103).
+ *
+ * An `ask_user_question` call that is still in flight is answered by settling
+ * the waterfall request it is waiting on, and only the ask itself holds that
+ * resolution. So the listener registers the wait here and parks on its
+ * `answered` promise; `POST /api/kanban/answerQuestion` looks the entry up by
+ * the same `{sessionId, callId}` the driver reports as the ticket's pending
+ * question and settles it. The entry is gone the moment either side settles it,
+ * which is what makes the second answerer's attempt a plain "not open" instead
+ * of a second answer.
+ *
+ * The key is a private separator rather than a join a caller could reproduce by
+ * accident: a session id and a call id are both opaque strings, and `answered`
+ * must never be reachable from a pair that was not registered here.
+ */
+export class OpenQuestionRegistry {
+  #entries = new Map();
+
+  /** @param {string} sessionId @param {string} callId */
+  static key(sessionId, callId) {
+    return `${sessionId}\u0000${callId}`;
+  }
+
+  /**
+   * Park an open ask.
+   *
+   * @param {{sessionId: string, callId: string, ticketId: string}} wait
+   * @returns {{key: string, sessionId: string, callId: string, ticketId: string,
+   *   answered: Promise<{answers: object[]}>, settle: (answers: object[]) => boolean}}
+   */
+  register({ sessionId, callId, ticketId }) {
+    const key = OpenQuestionRegistry.key(sessionId, callId);
+    let resolveAnswered;
+    const answered = new Promise((resolve) => {
+      resolveAnswered = resolve;
+    });
+    let settled = false;
+    const entry = {
+      key,
+      sessionId,
+      callId,
+      ticketId,
+      answered,
+      /**
+       * Deliver an answer to the ask. Exactly once: the first settle wins, and
+       * every later one is a no-op returning false, because the question that
+       * was asked has already been answered.
+       */
+      settle: (answers) => {
+        if (settled) return false;
+        settled = true;
+        this.#entries.delete(key);
+        resolveAnswered({ answers });
+        return true;
+      },
+    };
+    this.#entries.set(key, entry);
+    return entry;
+  }
+
+  /** The parked wait for that session and call, or null when nothing is open. */
+  get(sessionId, callId) {
+    const found = this.#entries.get(OpenQuestionRegistry.key(sessionId, callId));
+    return found === undefined ? null : found;
+  }
+
+  /** Stop holding an ask for a human: it was answered, or its turn ended. */
+  release(key) {
+    if (key === null || key === undefined) return false;
+    return this.#entries.delete(key);
+  }
+
+  /** How many asks are currently parked. */
+  get size() {
+    return this.#entries.size;
+  }
+
+  /** Drop every parked wait (the driver is stopping). */
+  dispose() {
+    this.#entries.clear();
+  }
+}
+
+/**
+ * Answer an ask that is still open, with the audit trail settled first (KAN-103).
+ *
+ * The order is the whole point. `question_answered_by_api` is written *before*
+ * the answer is admitted to the race, so a failed event write admits nothing and
+ * the board never claims an answer it did not record; the entry stays parked, so
+ * the question remains answerable from the card or from a retry. A settle that
+ * finds the ask already answered reports `not-open` and has already deleted its
+ * entry, so no second answer can be admitted at all.
+ *
+ * @param {{openWaits: OpenQuestionRegistry, store: object, log?: object}} deps
+ * @param {{sessionId: string, callId: string, answers: object[]}} ask
+ * @returns {{ok: true} | {ok: false, reason: 'not-open' | 'not-recorded', error?: string}}
+ */
+export function settleOpenWait({ openWaits, store, log }, { sessionId, callId, answers }) {
+  const warn = (fmt, ...args) => {
+    try {
+      log?.warn?.(fmt, ...args);
+    } catch {
+      // A broken logger must never change an answer outcome.
+    }
+  };
+  const entry = openWaits.get(sessionId, callId);
+  if (entry === null || entry === undefined) return { ok: false, reason: 'not-open' };
+  const ticket = store.getTicket(entry.ticketId);
+  const phase = ticket?.phase ?? null;
+  try {
+    store.appendEvent(entry.ticketId, 'question_answered_by_api', {
+      actor: 'api',
+      phaseFrom: phase,
+      phaseTo: phase,
+      payload: { callId, answers },
+    });
+  } catch (error) {
+    const reason = String(error?.message ?? error);
+    warn('kanban questions: could not record question_answered_by_api for %s: %s', entry.ticketId, reason);
+    return { ok: false, reason: 'not-recorded', error: reason };
+  }
+  if (!entry.settle(answers)) return { ok: false, reason: 'not-open' };
+  try {
+    log?.info?.('kanban questions: %s answered an open ask (%s) over HTTP', entry.ticketId, callId);
+  } catch {
+    // A broken logger must never change an answer outcome.
+  }
+  return { ok: true };
+}
+
+/**
  * Build the `user-questions/request` waterfall listener for one workflow
  * session.
  *
- * @param {{store: object, log?: object}} deps - the board store and a logger.
+ * @param {{store: object, log?: object, openWaits?: OpenQuestionRegistry|null}} deps
+ *   the board store, a logger, and the driver's registry of open asks. Without
+ *   a registry the listener is exactly the pre-KAN-103 auto-answerer: a miss
+ *   hands the ask to the browser card and nothing more.
  * @returns {(req: object, next: () => unknown) => unknown}
  */
-export function makeQuestionAnswerer({ store, log }) {
+export function makeQuestionAnswerer({ store, log, openWaits = null }) {
   const warn = (fmt, ...args) => {
     try {
       log?.warn?.(fmt, ...args);
@@ -113,47 +266,99 @@ export function makeQuestionAnswerer({ store, log }) {
     }
   };
   return function questionAnswerer(req, next) {
+    let nextCalled = false;
+    // Cordis throws when a listener calls `next()` twice, so every path that
+    // may have reached the rest of the waterfall goes through here, and the
+    // outer catch only falls through when it is certain `next()` is still
+    // unused.
+    const callNext = () => {
+      nextCalled = true;
+      return next();
+    };
+    /**
+     * KAN-103: this is a human's question, and the human may be the board.
+     *
+     * The browser card is still reached — `next()` runs now, synchronously, so
+     * the card appears and a person at the page can answer exactly as before —
+     * and the ask then settles on whichever answer arrives first. A `next()`
+     * that throws is the ask's own outcome, unchanged: an aborted turn, a
+     * foreground timeout, or no answerer at all still reach the caller as they
+     * would without this listener.
+     */
+    const deferToHuman = (sessionId, ticketId) => {
+      const callId = typeof req?.wait?.callId === 'string' ? req.wait.callId : '';
+      if (openWaits === null || openWaits === undefined || callId === '') return callNext();
+      const entry = openWaits.register({ sessionId, callId, ticketId });
+      let downstream;
+      try {
+        downstream = Promise.resolve(callNext());
+      } catch (error) {
+        openWaits.release(entry.key);
+        throw error;
+      }
+      // The card losing the race is not a failure: the ask has been answered,
+      // and whatever the page decides about a call that already returned is
+      // nobody's business. Swallow it so a dismissed card cannot surface as an
+      // unhandled rejection.
+      downstream.catch(() => {});
+      const raced = Promise.race([downstream, entry.answered]);
+      // Released as the first reaction on the race, not in a `finally` chained
+      // after it: whoever answered, the board stops offering the ask as
+      // answerable before the ask's own continuation runs, so a second
+      // answerer cannot slip into the gap between the two.
+      const release = () => {
+        openWaits.release(entry.key);
+      };
+      raced.then(release, release);
+      return raced;
+    };
     try {
       const agentId = req?.agent?.id;
-      if (typeof agentId !== 'string' || agentId === '') return next();
+      if (typeof agentId !== 'string' || agentId === '') return callNext();
       const session = store.findSession(agentId);
       const ticketId = session?.ticketId ?? null;
-      if (ticketId === null || ticketId === undefined) return next();
+      if (ticketId === null || ticketId === undefined) return callNext();
       const ticket = store.getTicket(ticketId);
-      if (ticket === null || ticket === undefined) return next();
-      if (ticket.column === 'done' || ticket.column === 'discarded') return next();
+      if (ticket === null || ticket === undefined) return callNext();
+      if (ticket.column === 'done' || ticket.column === 'discarded') return callNext();
       const phase = ticket.phase;
-      if (!ANSWERABLE_PHASES.has(phase)) return next();
       // Planning decides option batches for every ticket; the build session
-      // only when the ticket asked to be driven autonomously.
-      if (phase !== 'plan' && ticket.planQuestions !== 'autonomous') return next();
-      const answer = recommendedAnswer(req?.questions);
-      if (answer === null) return next();
-      const callId = typeof req?.wait?.callId === 'string' ? req.wait.callId : null;
-      try {
-        store.appendEvent(ticketId, 'question_answered_autonomously', {
-          actor: 'engine',
-          phaseFrom: phase,
-          phaseTo: phase,
-          payload: { callId, answers: answer.answers },
-        });
-      } catch (error) {
-        // The event is the audit trail of the decision. No event, no decision:
-        // the human answers it instead.
-        warn('kanban questions: could not record question_answered_autonomously for %s: %s', ticketId, String(error?.message ?? error));
-        return next();
+      // only when the ticket asked to be driven autonomously. Anything the
+      // ticket's own choices do not let the board decide is a human's question,
+      // and falls through to the deferral below rather than answering it here.
+      const mayDecide = ANSWERABLE_PHASES.has(phase) && (phase === 'plan' || ticket.planQuestions === 'autonomous');
+      const answer = mayDecide ? recommendedAnswer(req?.questions) : null;
+      if (answer !== null) {
+        const callId = typeof req?.wait?.callId === 'string' ? req.wait.callId : null;
+        try {
+          store.appendEvent(ticketId, 'question_answered_autonomously', {
+            actor: 'engine',
+            phaseFrom: phase,
+            phaseTo: phase,
+            payload: { callId, answers: answer.answers },
+          });
+        } catch (error) {
+          // The event is the audit trail of the decision. No event, no decision:
+          // the human answers it instead.
+          warn('kanban questions: could not record question_answered_autonomously for %s: %s', ticketId, String(error?.message ?? error));
+          return deferToHuman(agentId, ticketId);
+        }
+        warn(
+          'kanban questions: %s auto-answered %s question(s) in %s: %s',
+          ticketId,
+          String(answer.answers.length),
+          phase,
+          answer.answers.map((a) => `${a.id}="${a.selected[0]}"`).join(', '),
+        );
+        return answer;
       }
-      warn(
-        'kanban questions: %s auto-answered %s question(s) in %s: %s',
-        ticketId,
-        String(answer.answers.length),
-        phase,
-        answer.answers.map((a) => `${a.id}="${a.selected[0]}"`).join(', '),
-      );
-      return answer;
+      return deferToHuman(agentId, ticketId);
     } catch (error) {
       warn('kanban questions: answerer failed open to the human: %s', String(error?.stack ?? error));
-      return next();
+      // The waterfall was already entered: re-raising is the ask's outcome, and
+      // calling `next()` again would be the bug cordis names for it.
+      if (nextCalled) throw error;
+      return callNext();
     }
   };
 }

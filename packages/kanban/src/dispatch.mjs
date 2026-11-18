@@ -36,7 +36,7 @@ import { TurnActivity } from './activity.mjs';
 import { sessionTitle } from './board-view.mjs';
 import { makeGrantApprover } from './grants.mjs';
 import { makeGuardApprover, resolveLiveCheckouts, resolveReadOnlyCommands } from './guard.mjs';
-import { askUserToolDefinition, makeQuestionAnswerer, questionsFromCallArgs } from './questions.mjs';
+import { askUserToolDefinition, makeQuestionAnswerer, OpenQuestionRegistry, questionsFromCallArgs, settleOpenWait } from './questions.mjs';
 import * as ticketWorktrees from './worktrees.mjs';
 
 /**
@@ -237,6 +237,16 @@ export class SessionDriver {
      * ask actually used.
      */
     this.humanWaits = new WaitLedger((sessionId, wait, started) => this.#recordWait(sessionId, wait, started));
+    /**
+     * The open asks the board is holding for a human (KAN-103): the asks whose
+     * `ask_user_question` call is still in flight, parked by the question
+     * listener so `POST /api/kanban/answerQuestion` can answer one from outside
+     * the page. Core has no resolver for an open wait — `userQuestions.answer`
+     * only knows `continued` questions, and `attachWait` is a claim-only
+     * countdown stream — so the listener holds the waterfall itself and this
+     * registry is the seam into it. See src/questions.mjs.
+     */
+    this.openQuestions = new OpenQuestionRegistry();
     /** sessionId -> {handle, role, purpose, ticketId} */
     this.live = new Map();
     /** `${ticketId}:${purpose}` -> Set<sessionId> (newest last) */
@@ -315,6 +325,9 @@ export class SessionDriver {
     this.waiters.clear();
     this.actions.clear();
     this.humanWaits.clear();
+    // KAN-103: an ask parked for a human dies with the driver — the waterfall
+    // request it was waiting on belongs to a process that is going away.
+    this.openQuestions.dispose();
     this.activity.clear();
   }
 
@@ -463,6 +476,29 @@ export class SessionDriver {
   pendingQuestionFor(ticketId) {
     const wait = this.#findHumanWait(ticketId, 'question');
     return wait === null ? null : wait;
+  }
+
+  /**
+   * Answer an ask that is still *open* (KAN-103).
+   *
+   * `userQuestions.answer` cannot do this: its first line looks the call up
+   * among the session's `continued` questions, and an ask whose tool call is
+   * still in flight is not one of them — while the call is open the only answer
+   * path core offers is the `user-questions/request` waterfall the ask is
+   * itself waiting on. That waterfall is parked in `this.openQuestions`, so
+   * settling the entry answers the session exactly as the browser card would.
+   *
+   * The decision — audit event first, answer admitted only once the event took,
+   * nothing admitted when it did not — is `settleOpenWait`'s, in the pure module,
+   * where it is testable without a harness.
+   *
+   * @param {string} sessionId the session holding the ask
+   * @param {string} callId the ask's tool call id
+   * @param {object[]} answers the validated answer batch
+   * @returns {{ok: true} | {ok: false, reason: 'not-open' | 'not-recorded', error?: string}}
+   */
+  settleOpenQuestion(sessionId, callId, answers) {
+    return settleOpenWait({ openWaits: this.openQuestions, store: this.store, log: this.log }, { sessionId, callId, answers });
   }
 
   /**
@@ -745,8 +781,13 @@ export class SessionDriver {
         // KAN-32: the Questions decision covers the whole ticket now, so both
         // the planning session and the build session answer what the ticket
         // allows; the phase and mode check lives in questions.mjs.
+        // KAN-103: the listener goes on *every* workflow session, verify
+        // included. Auto-answering stays gated by phase and mode inside
+        // questions.mjs — what the verify session gains is the deferral half:
+        // an approval-phase ask is a human's question, and since KAN-103 the
+        // board can be that human over HTTP, not only the browser card.
+        this.#registerQuestionAnswerer(agentCtx);
         if (purpose === 'plan' || purpose === 'build') {
-          this.#registerQuestionAnswerer(agentCtx);
           liveRef.questionDispose = this.#registerTolerantAskTool(agentCtx);
         }
       },
@@ -849,14 +890,28 @@ export class SessionDriver {
    * on the first listener that does not call `next()`, so prepending here answers
    * that session's asks before the human bridge is reached and nothing else's.
    *
-   * Registered on plan and build sessions alike — the decision of *whether* to
-   * answer is the ticket's phase and mode, and it is made in `questions.mjs`
-   * where it can be tested. A verify session gets no listener: an approval-phase
-   * question is the human's conversation by definition.
+   * Registered on every workflow session — the decision of *whether* the board
+   * may answer is the ticket's phase and mode, and it is made in `questions.mjs`
+   * where it can be tested.
+   *
+   * KAN-103: registered on verify sessions too. A verify session decides
+   * nothing — the phase gate in `questions.mjs` sends every approval-phase ask
+   * to a human — but the listener also carries the deferral half, and that is
+   * what makes an open ask answerable over HTTP. Without it the board can only
+   * answer a question whose tool call has already returned pending, which is
+   * the case that used to refuse with "the question is no longer pending" while
+   * the ticket sat visibly waiting on an answer.
+   *
+   * The registry it hands over is the driver's, so `settleOpenQuestion` reaches
+   * the same entries from the HTTP side.
    */
   #registerQuestionAnswerer(agentCtx) {
     try {
-      agentCtx.on('user-questions/request', makeQuestionAnswerer({ store: this.store, log: this.log }), { prepend: true });
+      agentCtx.on(
+        'user-questions/request',
+        makeQuestionAnswerer({ store: this.store, log: this.log, openWaits: this.openQuestions }),
+        { prepend: true },
+      );
     } catch (error) {
       // Without the listener every ask reaches a human, which is the pre-0.18
       // behavior: a missed auto-answer costs a prompt, never a wrong decision.
@@ -1123,9 +1178,13 @@ export class SessionDriver {
     if (purpose === 'build') this.#registerGrantApprover(agent.ctx);
     // KAN-32: same for the Questions answerer and the tolerant ask tool. A
     // restart used to silently turn an autonomous ticket back into one that
-    // waits for a human on every question.
+    // waits for a human on every question. KAN-103: the answerer is registered
+    // on every purpose, verify included — the deferral half is what lets an
+    // approval-phase ask be answered over HTTP after a restart, and the
+    // auto-answer gate that keeps verify from deciding anything lives in
+    // questions.mjs.
+    this.#registerQuestionAnswerer(agent.ctx);
     if (purpose === 'plan' || purpose === 'build') {
-      this.#registerQuestionAnswerer(agent.ctx);
       liveRef.questionDispose = this.#registerTolerantAskTool(agent.ctx);
     }
     this.#applySandboxMode(liveRef);

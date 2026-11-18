@@ -145,9 +145,14 @@ is a ticket sitting idle. The Questions choice decides who answers:
 - **The mechanism is core's own seam.** `@deepseek-ai/dsh-user-questions` settles
   an ask on the `user-questions/request` waterfall dispatched on the requesting
   agent's scope, and a cordis waterfall settles on the first listener that does
-  not call `next()`. Kanban registers an agent-scoped, prepended listener on plan
-  and build sessions (setup and reattach-after-restart alike), so it answers that
-  session's asks before the human bridge is reached and nobody else's.
+  not call `next()`. Kanban registers an agent-scoped, prepended listener on
+  **every** workflow session — plan, build and verify, on the fresh-session path
+  and the reattach-after-restart one alike — so it sees that session's asks before
+  the human bridge is reached and nobody else's. Auto-*answering* stays gated to
+  the phases and modes the table above allows: what the verify session gains from
+  the registration is not a decision, it is the board remaining reachable while a
+  person decides (see `answerQuestion` under **Talking to a running ticket from
+  outside the page**).
 - **Kanban sessions get a tolerant `ask_user_question`.** Registered in the agent
   scope, where it shadows the preset's copy for that session only. It differs in
   two ways: a question missing its `id` gets one assigned (`q1`, `q2`, …, never
@@ -1172,18 +1177,47 @@ which is what `pendingQuestion`, read below, hands out, so a caller does not hav
 to learn the ids from a refusal. A refused batch still names the ids it expected,
 for the case where the question appeared and was answered between two reads. An
 empty `selected` with a `custom` is how the card sends free text or a skip, and it
-is accepted here the same way. The answer is written to the ticket as a
-`question_answered_by_api` event with
-`actor: "api"`, carrying the call id and the exact answers, **before** the wait
-is claimed — an answer nobody can review is an answer that should not have been
-given. Every refusal answers `bad_request` with a reason that says what to do
-instead — the ticket is Done or Discarded; no question is pending; the ticket is
-waiting on an *approval* prompt (that one is `approve` or `discard`, never this);
-the batch does not name the pending questions exactly once; the session holding
-it is no longer live. An id that is not on the board is `not_found`, as on every
-other ticket endpoint. A question the session settled in the meantime is refused
-as no longer pending rather than reported as answered. `unavailable` says the
-harness has no user-questions service mounted at all.
+is accepted here the same way.
+
+**Which states are answerable (0.46.1).** A question a session is waiting on comes
+in three shapes, and two of them are answerable here:
+
+- an **open foreground ask** — the session is paused *inside* its turn on the
+  `ask_user_question` call, which is what `pendingQuestion.source: "live"` says —
+  is answerable in **any phase, verify and approval included**. This is the common
+  case, and until 0.46.1 it was the case that failed: core's `userQuestions.answer`
+  only knows *continued* questions (its first line looks the call up among them),
+  so the endpoint refused with `the question is no longer pending` while the
+  question sat visibly pending. An open ask is now answered through the same
+  `user-questions/request` waterfall the ask is itself waiting on, which the
+  board's listener holds open for exactly that purpose.
+- a **continued ask** the driver is still tracking — the call returned pending on
+  the unattended foreground timeout, or the process that owned it ended and the
+  session was reattached after a restart — is answered through `userQuestions.answer`,
+  which steers the reply into the agent as a message.
+- a **parked question** (the turn *ended* on the ask, `pendingQuestion.source:
+  "park"`) is **not** answerable here. There is no wait left to settle; that one is
+  a `retry` or a `message`.
+
+The browser card and this endpoint are two answerers of one question, and they
+**race**: whichever settles first is the answer the session takes, and the other
+finds the question no longer pending. A card a person is typing into is never
+overridden by a stale answer, and neither path double-answers.
+
+`question_answered_by_api` is written **only when the answer was actually
+delivered**, with `actor: "api"`, carrying the call id and the exact answers. On
+the open path the event is written before the answer is admitted, so a failed
+write admits nothing and the question stays answerable; on the continued path it
+follows a successful claim. **Every refusal writes no event at all** — the audit
+trail describes answers that happened, never an attempt that did not. Every
+refusal answers `bad_request` with a reason that says what to do instead: the
+ticket is Done or Discarded; no question is pending; the ticket is waiting on an
+*approval* prompt (that one is `approve` or `discard`, never this); the batch does
+not name the pending questions exactly once; the session holding it is no longer
+live. An id that is not on the board is `not_found`, as on every other ticket
+endpoint. `internal` says the ticket event could not be written, so the answer was
+not sent. `unavailable` says the harness has no user-questions service mounted at
+all, which leaves no continued question answerable.
 
 **Read what it is waiting on (0.46.0).** `awaitingQuestion: true` on a `board`
 card or a `ticket` detail says a person is needed; `pendingQuestion` on the same

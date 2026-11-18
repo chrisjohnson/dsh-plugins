@@ -693,20 +693,57 @@ test('a fail is read as a pass-equivalent only when it proves every non-deferred
 // tolerant `ask_user_question` tool that shadows the preset's copy. Both are
 // pinned here because a session that silently lacks them behaves exactly like
 // the pre-0.18 board — which is the failure mode nobody would notice.
+//
+// KAN-103 split the answerer's job in two: deciding what the board may answer
+// itself (still gated by phase and mode), and holding an open ask so the HTTP
+// endpoint can answer it for a human. The second half is needed on *every*
+// workflow session — an approval-phase ask is exactly the one a person is asked
+// to answer — so the registration gate is gone, and the registry the listener
+// parks into is the driver's own.
 
 test('the question answerer is an agent-scoped waterfall listener on both session paths', async () => {
   const dispatch = (await sources())['dispatch.mjs']
-  assert.match(dispatch, /import \{ askUserToolDefinition, makeQuestionAnswerer, questionsFromCallArgs \} from '\.\/questions\.mjs'/)
+  assert.match(dispatch, /import \{ askUserToolDefinition, makeQuestionAnswerer, OpenQuestionRegistry, questionsFromCallArgs, settleOpenWait \} from '\.\/questions\.mjs'/)
   assert.match(
     dispatch,
-    /agentCtx\.on\('user-questions\/request', makeQuestionAnswerer\(\{ store: this\.store, log: this\.log \}\), \{ prepend: true \}\)/,
+    /makeQuestionAnswerer\(\{ store: this\.store, log: this\.log, openWaits: this\.openQuestions \}\)/,
+    'the listener parks an open ask in the driver’s own registry',
   )
+  assert.match(dispatch, /agentCtx\.on\(\s*'user-questions\/request',/, 'registered on the session scope')
+  assert.match(dispatch, /\{ prepend: true \}/, 'and prepended, so it runs before the human bridge')
   assert.equal((dispatch.match(/#registerQuestionAnswerer\(/g) || []).length, 3, 'one definition, two call sites')
-  // Plan and build sessions both get one; a verify session never does, so an
-  // approval-phase question stays the human's.
-  assert.match(dispatch, /if \(purpose === 'plan' \|\| purpose === 'build'\) \{\n\s*this\.#registerQuestionAnswerer\(agentCtx\);/)
-  assert.match(dispatch, /if \(purpose === 'plan' \|\| purpose === 'build'\) \{\n\s*this\.#registerQuestionAnswerer\(agent\.ctx\);/)
-  assert.equal(/purpose === 'verify'\) this\.#registerQuestionAnswerer/.test(dispatch), false, 'a verify session gets no answerer')
+  // Every purpose gets the listener, on the fresh-session path and the reattach
+  // one alike: the deferral half is not a decision about the ticket, it is the
+  // board staying reachable for a human who is not at the page.
+  assert.match(dispatch, /this\.#registerQuestionAnswerer\(agentCtx\);/)
+  assert.match(dispatch, /this\.#registerQuestionAnswerer\(agent\.ctx\);/)
+  assert.equal(
+    /if \(purpose === 'plan' \|\| purpose === 'build'\) \{\n\s*this\.#registerQuestionAnswerer/.test(dispatch),
+    false,
+    'the answerer is no longer gated to plan and build (KAN-103)',
+  )
+  // The tolerant tool keeps its gate: a verify session asks with core's own tool.
+  assert.match(dispatch, /liveRef\.questionDispose = this\.#registerTolerantAskTool\(agentCtx\)/)
+})
+
+test('the driver owns the open-ask registry and the answer seam into it', async () => {
+  const files = await sources()
+  const dispatch = files['dispatch.mjs']
+  assert.match(dispatch, /this\.openQuestions = new OpenQuestionRegistry\(\)/)
+  // The endpoint's open path is a thin delegation: the decision — event first,
+  // answer admitted only once the event took — lives in the pure module.
+  assert.match(dispatch, /settleOpenQuestion\(sessionId, callId, answers\) \{\n\s*return settleOpenWait\(\{ openWaits: this\.openQuestions, store: this\.store, log: this\.log \}, \{ sessionId, callId, answers \}\);/)
+  assert.match(dispatch, /this\.openQuestions\.dispose\(\)/, 'a parked wait dies with the driver')
+  const questions = files['questions.mjs']
+  assert.match(questions, /export class OpenQuestionRegistry/)
+  assert.match(questions, /export function settleOpenWait/)
+  // The audit event precedes the admission, and a failed write admits nothing.
+  const settler = questions.slice(questions.indexOf('export function settleOpenWait'))
+  assert.ok(
+    settler.indexOf("'question_answered_by_api'") < settler.indexOf('entry.settle(answers)'),
+    'the event is written before the answer is admitted to the race',
+  )
+  assert.match(settler, /return \{ ok: false, reason: 'not-recorded', error: reason \}/)
 })
 
 test('the tolerant ask_user_question is registered in the session scope and undone with it', async () => {
@@ -738,7 +775,11 @@ test('the questions module is a pure decision module like grants.mjs is', async 
   assert.match(questions, /'question_answered_autonomously'/)
   const body = questions.slice(questions.indexOf('export function makeQuestionAnswerer'))
   assert.ok(body.indexOf('appendEvent') < body.indexOf('return answer'), 'the event precedes the answer')
-  assert.match(body, /return next\(\);\n      \}\n      warn\(/, 'a failed event write falls through')
+  assert.match(body, /return deferToHuman\(agentId, ticketId\);\n        \}\n        warn\(/, 'a failed event write falls through to the human')
+  // KAN-103: `next()` is reached through one guarded call, because cordis throws
+  // on a second one and a listener that cheats turns a refused ask into a crash.
+  assert.match(body, /let nextCalled = false/)
+  assert.match(body, /if \(nextCalled\) throw error;/)
 })
 
 test('the build and review prompts carry the autonomous questions note', async () => {
@@ -947,7 +988,7 @@ test('message is the orchestrator kanban_message path, credited to the caller', 
   assert.match(body, /could not record note_sent/)
 })
 
-test('answerQuestion refuses everything it cannot honestly answer', async () => {
+test('answerQuestion answers an open ask, and refuses everything it cannot honestly answer', async () => {
   const host = (await sources())['host.mjs']
   const body = endpointCase(host, 'answerQuestion')
   assert.match(body, /requireTicket\(String\(p\.id\)\)/)
@@ -969,28 +1010,39 @@ test('answerQuestion refuses everything it cannot honestly answer', async () => 
   assert.match(body, /questionIdsFromCallArgs\(wait\.callArgs\)/)
   assert.match(body, /validateQuestionAnswers\(\{/)
   assert.match(body, /if \(!decision\.ok\) return fail\('bad_request', decision\.reason\)/)
-  // The session must still be here, and the service must be mounted, before
-  // anything is written down: a refusal must not leave an event claiming an
-  // answer that never happened.
+  // KAN-103: the open ask goes through the driver's parked waterfall, and it is
+  // tried FIRST — a session paused on a fresh ask is the common case, and core's
+  // `answer` cannot serve it at all.
+  assert.match(body, /driver\.settleOpenQuestion\(wait\.sessionId, wait\.id, decision\.answers\)/)
+  assert.ok(
+    body.indexOf('driver.settleOpenQuestion(') < body.indexOf('service.answer('),
+    'the open path is tried before the continued one',
+  )
+  assert.match(body, /if \(open\.reason === 'not-recorded'\)/)
+  assert.match(body, /the answer was not recorded, so it was not sent/)
+  // The continued path still needs the session and the service to be there, and
+  // still refuses a question that settled in the meantime.
   assert.match(body, /ctx\.get\('agents'\)\?\.get\?\.\(wait\.sessionId\)/)
   assert.match(body, /no longer live in this process/)
   assert.match(body, /ctx\.get\('userQuestions'\)/)
   assert.match(body, /user-questions service is not mounted/)
-  const order = [
-    body.indexOf("'question_answered_by_api'"),
-    body.indexOf('service.answer('),
-  ]
-  assert.ok(order[0] > 0 && order[1] > order[0], 'the answer is logged before the wait is claimed')
-  assert.match(body, /payload: \{ callId: wait\.id, answers: decision\.answers \}/)
-  assert.match(body, /the answer was not recorded, so it was not sent/)
-  // The claim is core's own service call, the one the UI card makes; its
-  // refusals come back as readable messages, and a question that settled in the
-  // meantime is not reported as answered.
   assert.match(body, /service\.answer\(agent, wait\.id, \{ answers: decision\.answers \}\)/)
-  assert.match(body, /!== true/)
+  assert.match(body, /claimed !== true/)
   assert.match(body, /the question is no longer pending/)
   assert.match(body, /REPLY_QUEUED/)
   assert.match(body, /BAD_ANSWER/)
+  // KAN-103: on the continued path the event follows the claim. The old order
+  // wrote `question_answered_by_api` and then refused, so the audit trail claimed
+  // an answer that had not happened.
+  const order = [
+    body.indexOf('service.answer(agent, wait.id'),
+    body.indexOf("'question_answered_by_api'"),
+  ]
+  assert.ok(order[0] > 0 && order[1] > order[0], 'the answer is claimed before it is logged')
+  assert.match(body, /payload: \{ callId: wait\.id, answers: decision\.answers \}/)
+  // A refused claim writes nothing, so the one success path that can still miss
+  // its event reports the gap rather than pretending the answer was not sent.
+  assert.match(body, /could not record question_answered_by_api/)
   assert.match(body, /return \{ ok: true, value: \{ answered: true, callId: wait\.id, sessionId: wait\.sessionId \} \}/)
 })
 

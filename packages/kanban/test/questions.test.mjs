@@ -13,10 +13,12 @@ import assert from 'node:assert/strict'
 import {
   askUserToolDefinition,
   makeQuestionAnswerer,
+  OpenQuestionRegistry,
   questionIdsFromCallArgs,
   questionsFromCallArgs,
   recommendedAnswer,
   sanitizeQuestions,
+  settleOpenWait,
   validateQuestionAnswers,
 } from '../src/questions.mjs'
 
@@ -601,4 +603,287 @@ test('the accepted answers are copies, so a caller cannot change the log after t
   assert.equal(out.ok, true)
   out.answers[0].selected.push('tampered')
   assert.deepEqual(answers[0].selected, ['Yes'])
+})
+
+// =========================================== the deferral half (KAN-103) ====
+//
+// An `ask_user_question` whose tool call is still in flight is not answerable
+// through `userQuestions.answer` — that method's first line looks the call up
+// among the session's *continued* questions, and an open call is not one. While
+// the call is open the only answer path core offers is the
+// `user-questions/request` waterfall the ask is itself waiting on, and the
+// browser card owns it. KAN-103 gives the board a second holder of that same
+// seam: the listener parks the open wait in an `OpenQuestionRegistry`, and
+// `POST /api/kanban/answerQuestion` settles it.
+//
+// The tests below drive a real waterfall chain — the same shape cordis runs:
+// listeners outermost-first, each handed a `next()` that throws if it is called
+// twice, and the innermost `next()` standing in for the browser card.
+
+/**
+ * A cordis-shaped waterfall over the given listeners, with `inner` as the
+ * innermost `next()` (the browser card's own answer path).
+ */
+function runWaterfall(listener, request, inner) {
+  const chain = [listener]
+  const dispatch = () => {
+    const callback = chain.shift()
+    if (callback === undefined) return inner()
+    let called = false
+    const next = () => {
+      if (called) throw new Error('next() called multiple times')
+      called = true
+      return dispatch()
+    }
+    return callback(request, next)
+  }
+  return dispatch()
+}
+
+function deferHarness({
+  ticket = { id: 't1', key: 'KAN-1', column: 'working', phase: 'verify', planQuestions: 'interactive' },
+  questions = [{ id: 'restart', question: 'Restart now?', options: [{ label: 'Yes (Recommended)' }, { label: 'No' }] }],
+  callId = 'call-1',
+  withRegistry = true,
+} = {}) {
+  const events = []
+  const warnings = []
+  const store = {
+    findSession: (sessionId) => (sessionId === 'session-1' ? { ticketId: 't1' } : undefined),
+    getTicket: (ticketId) => (ticketId === 't1' ? ticket : undefined),
+    appendEvent: (ticketId, kind, options) => {
+      events.push({ ticketId, kind, ...options })
+    },
+  }
+  const openWaits = withRegistry ? new OpenQuestionRegistry() : null
+  const listener = makeQuestionAnswerer({ store, log: { warn: (fmt, ...args) => warnings.push([fmt, ...args]) }, openWaits })
+  // The browser card: consulted through `next()`, and it answers whenever the
+  // person at the page decides — which may be after, or never.
+  let cardAnswer
+  let cardReject
+  let cardConsulted = 0
+  const card = () =>
+    new Promise((resolve, reject) => {
+      cardConsulted += 1
+      cardAnswer = resolve
+      cardReject = reject
+    })
+  const ask = () => runWaterfall(listener, { questions, agent: { id: 'session-1' }, wait: { callId } }, card)
+  const settle = (answers = [{ id: 'restart', selected: ['Yes (Recommended)'] }]) =>
+    settleOpenWait({ openWaits, store, log: { warn: (fmt, ...args) => warnings.push([fmt, ...args]) } }, { sessionId: 'session-1', callId, answers })
+  return {
+    ask,
+    settle,
+    store,
+    events,
+    warnings,
+    openWaits,
+    get cardConsulted() {
+      return cardConsulted
+    },
+    cardAnswer: (value) => cardAnswer?.(value),
+    cardReject: (error) => cardReject?.(error),
+  }
+}
+
+// ------------------------------------------------------- OpenQuestionRegistry --
+
+test('a registered wait settles exactly once, and a second settle is a no-op', async () => {
+  const registry = new OpenQuestionRegistry()
+  const entry = registry.register({ sessionId: 's', callId: 'c', ticketId: 't' })
+  assert.equal(entry.sessionId, 's')
+  assert.equal(entry.callId, 'c')
+  assert.equal(entry.ticketId, 't')
+  assert.equal(registry.get('s', 'c'), entry)
+  assert.equal(entry.settle([{ id: 'q', selected: ['A'] }]), true, 'the first settle admits the answer')
+  assert.equal(entry.settle([{ id: 'q', selected: ['B'] }]), false, 'a second answer is not admitted')
+  assert.deepEqual(await entry.answered, { answers: [{ id: 'q', selected: ['A'] }] }, 'the first answer is the one delivered')
+  assert.equal(registry.get('s', 'c'), null, 'settling releases the wait')
+})
+
+test('release stops a wait being answered at all, and dispose drops every one', () => {
+  const registry = new OpenQuestionRegistry()
+  const first = registry.register({ sessionId: 's', callId: 'c1', ticketId: 't' })
+  registry.register({ sessionId: 's', callId: 'c2', ticketId: 't' })
+  assert.equal(registry.size, 2)
+  assert.equal(registry.release(first.key), true)
+  assert.equal(registry.release(first.key), false, 'releasing twice is not a thing')
+  assert.equal(first.settle([]), true, 'a released entry can still be settled by whoever held it')
+  assert.equal(registry.get('s', 'c1'), null)
+  registry.dispose()
+  assert.equal(registry.size, 0)
+  assert.equal(registry.get('s', 'c2'), null)
+})
+
+test('two waits cannot collide: the key is the pair, not either half', () => {
+  const registry = new OpenQuestionRegistry()
+  const a = registry.register({ sessionId: 'a', callId: 'bc', ticketId: 't' })
+  const b = registry.register({ sessionId: 'ab', callId: 'c', ticketId: 't' })
+  assert.notEqual(a.key, b.key, 'a NUL separator keeps `a|bc` and `ab|c` apart')
+  assert.equal(registry.size, 2)
+})
+
+// ------------------------------------------------------- settleOpenWait order --
+
+test('the open answer is recorded before it is admitted, and the ask takes it', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  assert.equal(h.openWaits.size, 1, 'the ask is parked for a human')
+  assert.deepEqual(h.events, [], 'nothing is recorded until someone answers')
+
+  const out = h.settle()
+  assert.deepEqual(out, { ok: true })
+  assert.equal(h.events.length, 1, 'exactly one audit event')
+  assert.equal(h.events[0].kind, 'question_answered_by_api')
+  assert.equal(h.events[0].actor, 'api')
+  assert.equal(h.events[0].ticketId, 't1')
+  assert.equal(h.events[0].phaseFrom, 'verify', 'the ticket phase it was answered in')
+  assert.deepEqual(h.events[0].payload, {
+    callId: 'call-1',
+    answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }],
+  })
+  assert.deepEqual(await settled, { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] })
+})
+
+test('an event write that fails admits no answer, and leaves the ask answerable', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  h.store.appendEvent = () => {
+    throw new Error('db gone')
+  }
+  const out = h.settle()
+  assert.equal(out.ok, false)
+  assert.equal(out.reason, 'not-recorded')
+  assert.match(out.error, /db gone/)
+  assert.equal(h.events.length, 0, 'a refusal records nothing')
+  assert.equal(h.openWaits.size, 1, 'the ask stays parked: the card can still answer it')
+  assert.equal(h.settle().ok, false, 'and a retry is refused for the same reason, not silently admitted')
+
+  h.cardAnswer({ answers: [{ id: 'restart', selected: ['No'] }] })
+  assert.deepEqual(await settled, { answers: [{ id: 'restart', selected: ['No'] }] }, 'the ask itself is unharmed')
+})
+
+test('settling a wait that is not open says so and writes nothing', () => {
+  const h = deferHarness()
+  const out = h.settle()
+  assert.deepEqual(out, { ok: false, reason: 'not-open' })
+  assert.equal(h.events.length, 0)
+})
+
+// ------------------------------------------------------------- the race -------
+
+test('an open ask in the approval phase is answered over HTTP, and the card loses', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  assert.equal(h.cardConsulted, 1, 'the browser card is still reached, exactly as before')
+  assert.equal(h.settle().ok, true)
+  assert.deepEqual(await settled, { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] })
+  assert.equal(h.openWaits.size, 0, 'the wait is gone the moment anyone answers')
+})
+
+test('the browser card answering first wins, and the API answer is then refused', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  h.cardAnswer({ answers: [{ id: 'restart', selected: ['No'] }] })
+  assert.deepEqual(await settled, { answers: [{ id: 'restart', selected: ['No'] }] })
+  assert.equal(h.events.length, 0, 'an answer the board did not deliver is not the board’s event to write')
+  assert.equal(h.openWaits.size, 0, 'the parked wait is released either way')
+  assert.deepEqual(h.settle(), { ok: false, reason: 'not-open' }, 'the second answerer sees a question that is no longer pending')
+  assert.equal(h.events.length, 0, 'and that refusal still writes nothing')
+})
+
+test('a downstream rejection is the ask’s own outcome, not a swallowed one', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  const abort = new Error('ask_user_question was aborted before the user answered')
+  h.cardReject(abort)
+  await assert.rejects(() => settled, /aborted before the user answered/)
+  assert.equal(h.openWaits.size, 0, 'a dead ask stops being answerable from the board too')
+  assert.deepEqual(h.settle(), { ok: false, reason: 'not-open' })
+  assert.equal(h.events.length, 0)
+})
+
+test('a card that rejects after the board answered does not surface as a failure', async () => {
+  const h = deferHarness()
+  const settled = h.ask()
+  assert.equal(h.settle().ok, true)
+  h.cardReject(new Error('the foreground question wait ended'))
+  assert.deepEqual(await settled, { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] })
+})
+
+// ------------------------------------------------------- what still falls through --
+
+test('the auto-answer decision wins over the deferral: nothing is parked', async () => {
+  const h = deferHarness({ ticket: { id: 't1', key: 'KAN-1', column: 'working', phase: 'implement', planQuestions: 'autonomous' } })
+  const out = h.ask()
+  assert.deepEqual(out, { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] }, 'the board decided it, so no human is waited on')
+  assert.equal(h.cardConsulted, 0, 'the card was never reached')
+  assert.equal(h.openWaits.size, 0, 'and nothing is parked')
+  assert.equal(h.events[0].kind, 'question_answered_autonomously')
+  assert.deepEqual(h.settle(), { ok: false, reason: 'not-open' }, 'there is no open ask to answer')
+  assert.equal(h.events.length, 1, 'the refused settle wrote no second event')
+})
+
+test('an optionless question in a tabled phase is parked for a human, not answered', async () => {
+  const h = deferHarness({
+    ticket: { id: 't1', key: 'KAN-1', column: 'working', phase: 'implement', planQuestions: 'autonomous' },
+    questions: [{ id: 'name', question: 'What should the file be called?' }],
+  })
+  const settled = h.ask()
+  assert.equal(h.openWaits.size, 1)
+  assert.equal(h.settle([{ id: 'name', selected: [], custom: 'questions.mjs' }]).ok, true)
+  assert.deepEqual(await settled, { answers: [{ id: 'name', selected: [], custom: 'questions.mjs' }] })
+})
+
+test('a request with no agent id or no call id falls through with no entry', () => {
+  const events = []
+  const store = {
+    findSession: (sessionId) => (sessionId === 'session-1' ? { ticketId: 't1' } : undefined),
+    getTicket: () => ({ id: 't1', column: 'working', phase: 'verify' }),
+    appendEvent: (ticketId, kind, options) => events.push({ kind, ...options }),
+  }
+  const openWaits = new OpenQuestionRegistry()
+  const answerer = makeQuestionAnswerer({ store, log: { warn() {} }, openWaits })
+  const fell = Symbol('fell-through-to-human')
+  assert.equal(answerer({ questions: [], agent: {}, wait: { callId: 'c' } }, () => fell), fell)
+  assert.equal(answerer({ questions: [], agent: { id: '' }, wait: { callId: 'c' } }, () => fell), fell)
+  assert.equal(answerer({ questions: [], agent: { id: 'session-1' } }, () => fell), fell, 'no wait, so no call id to key on')
+  assert.equal(answerer({ questions: [], agent: { id: 'session-1' }, wait: { callId: '' } }, () => fell), fell)
+  assert.equal(answerer({ questions: [], agent: { id: 'other' }, wait: { callId: 'c' } }, () => fell), fell, 'a session of no ticket')
+  assert.equal(openWaits.size, 0, 'none of them parked anything')
+  assert.equal(events.length, 0)
+})
+
+test('without a registry the listener is exactly the pre-KAN-103 answerer', async () => {
+  const h = deferHarness({ withRegistry: false })
+  const out = h.ask()
+  assert.equal(h.cardConsulted, 1, 'the card is reached and owns the answer')
+  assert.equal(h.openWaits, null, 'there is nowhere to park a wait')
+  assert.equal(h.events.length, 0)
+  h.cardAnswer({ answers: [{ id: 'restart', selected: ['No'] }] })
+  assert.deepEqual(await out, { answers: [{ id: 'restart', selected: ['No'] }] }, "the card's answer is the whole outcome")
+})
+
+test('next() is never called twice, on any path, because cordis forbids it', async () => {
+  // The waterfall above throws `next() called multiple times` if a listener
+  // cheats, so reaching a settled answer on each exit is the assertion. Each
+  // case takes a different way out of the listener.
+  const apiFirst = deferHarness()
+  const first = apiFirst.ask()
+  assert.equal(apiFirst.settle().ok, true)
+  assert.deepEqual(await first, { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] })
+
+  const cardFirst = deferHarness()
+  const second = cardFirst.ask()
+  cardFirst.cardAnswer({ answers: [{ id: 'restart', selected: ['No'] }] })
+  assert.deepEqual(await second, { answers: [{ id: 'restart', selected: ['No'] }] })
+
+  const refused = deferHarness()
+  const third = refused.ask()
+  refused.cardReject(new Error('no user-questions answerer accepted the request'))
+  await assert.rejects(() => third, /no user-questions answerer/)
+
+  const decided = deferHarness({ ticket: { id: 't1', key: 'KAN-1', column: 'working', phase: 'plan', planQuestions: 'interactive' } })
+  assert.deepEqual(await decided.ask(), { answers: [{ id: 'restart', selected: ['Yes (Recommended)'] }] })
+  assert.equal(decided.cardConsulted, 0, 'an auto-answer never reaches the card at all')
 })

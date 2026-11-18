@@ -851,6 +851,17 @@ export default async function kanban(ctx, config = {}) {
             // the answer goes through the same core service the browser card
             // calls — so this is the card's answer, not a second mechanism that
             // can drift from it.
+            //
+            // KAN-103: there are two kinds of pending ask, and core only has one
+            // method for one of them. While the `ask_user_question` call is
+            // still open, `userQuestions.answer` refuses it — its first line
+            // looks the call up among the session's *continued* questions, and
+            // an in-flight call is not one; while the call is open the only
+            // answer path core offers is the waterfall request the ask is
+            // itself waiting on. So the open case goes through the driver's
+            // parked wait (`settleOpenQuestion`), and the continued case keeps
+            // using the service. Whichever answers first wins; the other finds
+            // the question no longer pending.
             const ticket = requireTicket(String(p.id));
             if (ticket.column === 'done' || ticket.column === 'discarded') {
               return fail('bad_request', `${ticket.key} is ${ticket.column}; a closed ticket has nothing to answer`);
@@ -871,6 +882,20 @@ export default async function kanban(ctx, config = {}) {
               answers: p.answers,
             });
             if (!decision.ok) return fail('bad_request', decision.reason);
+            // The open case first, because it is the common one: a session
+            // paused on a fresh ask. The event is written inside the driver,
+            // before the answer is admitted, so a refusal here costs nothing.
+            const open = driver.settleOpenQuestion(wait.sessionId, wait.id, decision.answers);
+            if (open.ok) {
+              boardFeedRef.current?.notify();
+              return { ok: true, value: { answered: true, callId: wait.id, sessionId: wait.sessionId } };
+            }
+            if (open.reason === 'not-recorded') {
+              return fail('internal', `the answer was not recorded, so it was not sent: ${open.error ?? 'the ticket event failed'}`);
+            }
+            // Not open, so it is continued: the tool call returned pending (the
+            // unattended foreground timeout) or the process that owned it ended,
+            // and the reply is steered into the agent as a message.
             const agent = ctx.get('agents')?.get?.(wait.sessionId);
             if (agent === undefined || agent === null) {
               return fail('bad_request', `the session holding the question (${wait.sessionId}) is no longer live in this process`);
@@ -879,26 +904,13 @@ export default async function kanban(ctx, config = {}) {
             if (typeof service?.answer !== 'function') {
               return fail('unavailable', 'the user-questions service is not mounted, so a pending question cannot be answered over HTTP');
             }
-            // The audit trail is written before the wait is claimed, exactly as
-            // the auto-answer path does it: an unlogged answer is an answer
-            // nobody can review. What it cannot undo is a claim the service then
-            // refuses — a reply already queued, or a question the session has
-            // settled in the meantime — and that event stands as the record of
-            // the attempt.
+            // KAN-103: the event follows the claim, it does not precede it. The
+            // old order wrote `question_answered_by_api` and then refused with
+            // "the question is no longer pending", so the audit trail claimed an
+            // answer that had not happened. A refusal now records nothing.
+            let claimed;
             try {
-              store.appendEvent(ticket.id, 'question_answered_by_api', {
-                actor: 'api',
-                phaseFrom: ticket.phase,
-                phaseTo: ticket.phase,
-                payload: { callId: wait.id, answers: decision.answers },
-              });
-            } catch (error) {
-              return fail('internal', `the answer was not recorded, so it was not sent: ${message(error)}`);
-            }
-            try {
-              if (service.answer(agent, wait.id, { answers: decision.answers }) !== true) {
-                return fail('bad_request', 'the question is no longer pending');
-              }
+              claimed = service.answer(agent, wait.id, { answers: decision.answers });
             } catch (error) {
               const code = error?.code;
               if (code === 'REPLY_QUEUED') {
@@ -908,6 +920,22 @@ export default async function kanban(ctx, config = {}) {
                 return fail('bad_request', `the answer does not match the pending question: ${message(error)}`);
               }
               return fail('bad_request', message(error));
+            }
+            if (claimed !== true) {
+              return fail('bad_request', 'the question is no longer pending');
+            }
+            try {
+              store.appendEvent(ticket.id, 'question_answered_by_api', {
+                actor: 'api',
+                phaseFrom: ticket.phase,
+                phaseTo: ticket.phase,
+                payload: { callId: wait.id, answers: decision.answers },
+              });
+            } catch (error) {
+              // The reply is already queued in the session; refusing the call
+              // would only invite a resend that fails with REPLY_QUEUED. The gap
+              // in the log is reported, as the `message` endpoint reports its own.
+              log.warn('kanban answerQuestion: could not record question_answered_by_api for %s: %s', ticket.id, message(error));
             }
             boardFeedRef.current?.notify();
             return { ok: true, value: { answered: true, callId: wait.id, sessionId: wait.sessionId } };
