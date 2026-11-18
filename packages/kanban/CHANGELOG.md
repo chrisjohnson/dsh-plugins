@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+## 0.46.1
+
 ### Fixed
 
 - **`answerQuestion` now answers an ask that is still open (KAN-103).** The
