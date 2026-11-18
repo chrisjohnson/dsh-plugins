@@ -3,6 +3,43 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **`answerQuestion` now answers an ask that is still open (KAN-103).** The
+  endpoint (0.45.0) called `userQuestions.answer`, whose first line looks the
+  call up among the session's *continued* questions — a call is continued only
+  after its foreground wait returned pending or the process that owned it ended.
+  So the common case failed: a build or approval session paused on a fresh ask,
+  which the board shows as `awaitingQuestion` with `pendingQuestion.source:
+  'live'`, was refused with `bad_request: the question is no longer pending`
+  while the question sat visibly pending. Reproduced on KAN-75 eleven seconds
+  after the ask was raised; the unit and contract tests passed because the fake
+  service always answered.
+  - An open ask is now settled through the seam core actually offers for one: the
+    `user-questions/request` waterfall the ask is itself waiting on. The board's
+    listener parks the open wait in a driver-owned registry and waits on
+    `Promise.race([next(), entry.answered])`, so the browser card is still
+    reached and still wins whenever a person at the page is first. The endpoint
+    tries that path first and falls back to `userQuestions.answer` for a
+    continued ask. Whichever settles first is the answer; the other sees a
+    question that is no longer pending.
+  - `question_answered_by_api` is written only when the answer was delivered:
+    before the answer is admitted on the open path (a failed write admits
+    nothing and leaves the ask answerable), after a successful claim on the
+    continued path. Every refusal writes no event, so the audit trail no longer
+    claims answers that did not happen.
+  - The listener is registered on every workflow session, verify included, on
+    the fresh-session and reattach paths alike. Auto-answering is unchanged: the
+    phase and mode gate in `src/questions.mjs` still decides what the board may
+    answer itself, and an approval-phase ask is still never decided for a human.
+  - The README states which states are answerable. Tests: the registry, the
+    race and the audit ordering in `test/questions.test.mjs` against a
+    cordis-shaped waterfall; `test/dispatch-question-defer.test.mjs` drives a
+    real driver against a faithful service fake that distinguishes an open call
+    (`answer` returns false) from a continued one (true, then `REPLY_QUEUED`).
+
 ## 0.46.0
 
 ### Added
