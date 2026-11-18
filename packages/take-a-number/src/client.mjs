@@ -234,11 +234,19 @@ window.__ModuleLoader__.load({
 			}, function () { return "Could not reach the Host."; });
 		}
 
-		function QueueBadge(queue) {
-			var demand = queue.active.length + queue.waiters.length;
-			var state = queue.waiters.length > 0 ? "waiting" : (!queue.unlimited && demand >= queue.limit ? "full" : "ok");
+		// React calls a component with its props object, so the queue arrives as
+		// props.queue — reading queue.active off the first argument reads props and
+		// throws (KAN-105: the whole sidebar.panellist entry crashed, so the Activity
+		// row never rendered). Guard the arrays too: one malformed queue must not
+		// take the nav entry down again.
+		function QueueBadge(props) {
+			var queue = (props && props.queue) || {};
+			var active = Array.isArray(queue.active) ? queue.active : [];
+			var waiters = Array.isArray(queue.waiters) ? queue.waiters : [];
+			var demand = active.length + waiters.length;
+			var state = waiters.length > 0 ? "waiting" : (!queue.unlimited && demand >= queue.limit ? "full" : "ok");
 			var label = demand + "/" + (queue.unlimited ? "∞" : queue.limit);
-			return h("span", { className: "tn-badge " + state, title: queue.id + ": " + label + " · " + queue.active.length + " active · " + queue.waiters.length + " queued" }, label);
+			return h("span", { className: "tn-badge " + state, title: queue.id + ": " + label + " · " + active.length + " active · " + waiters.length + " queued" }, label);
 		}
 
 		function TakeANumberIcon(props) {

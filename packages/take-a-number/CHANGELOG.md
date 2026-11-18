@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-11-18
+
+### Fixed
+
+- The sidebar "Activity" row rendered again. `QueueBadge` is a React component,
+  so it receives its props object — the queue arrives as `props.queue`. The
+  released half read `queue.active`/`queue.waiters` off the first argument
+  (i.e. `props.active`, undefined) and threw
+  `Cannot read properties of undefined (reading 'length')`, which crashed the
+  whole `sidebar.panellist` slot so the Activity entry never appeared (KAN-105).
+  `QueueBadge` now reads `props.queue` and guards the `active`/`waiters` arrays,
+  so one malformed queue can no longer take the nav entry down. Client-half
+  regression test added.
+
 ## [0.1.8] - 2026-11-16
 
 ### Fixed
